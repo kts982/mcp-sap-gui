@@ -60,6 +60,9 @@ cd mcp-sap-gui
 # Install dependencies
 pip install -e .
 
+# With screenshot optimization (recommended - reduces screenshot size by 70-90%)
+pip install -e ".[screenshots]"
+
 # Or install from requirements
 pip install -r requirements.txt
 ```
@@ -252,7 +255,7 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 | Tool | Description |
 |------|-------------|
 | `sap_get_screen_elements` | List all elements on current screen |
-| `sap_screenshot` | Capture screenshot of SAP window |
+| `sap_screenshot` | Capture screenshot of SAP window (auto-detects popups) |
 
 ## Security Considerations
 
@@ -265,7 +268,7 @@ This server provides powerful automation capabilities. **Use responsibly.**
    - `PFCG` (Role administration)
    - `SE16N` (Direct table access)
 
-2. **Read-Only Mode** - `--read-only` flag disables all write operations
+2. **Read-Only Mode** - `--read-only` flag disables all mutating operations (field writes, button presses, transaction execution, key sends, tree/table interactions)
 
 3. **Transaction Whitelist** - `--allowed-transactions` limits to specific t-codes
 
@@ -332,7 +335,8 @@ mcp-sap-gui/
 │       ├── server.py         # MCP server implementation
 │       └── sap_controller.py # SAP GUI COM wrapper
 ├── tests/
-│   └── ...
+│   ├── test_sap_controller.py  # Controller unit tests
+│   └── test_server.py          # Server security & routing tests
 ├── examples/
 │   └── ...
 ├── .mcp.json                  # MCP server config (auto-detected by Claude Code)
@@ -364,7 +368,7 @@ mcp-sap-gui/
 
 ```bash
 # Install dev dependencies
-pip install -e ".[dev]"
+pip install -e ".[dev,screenshots]"
 
 # Run tests
 pytest

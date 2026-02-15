@@ -15,6 +15,7 @@ Security Note:
 """
 
 import asyncio
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, List
@@ -26,8 +27,6 @@ from mcp.types import (
     Tool,
     TextContent,
     ImageContent,
-    Resource,
-    Prompt,
 )
 
 from .sap_controller import (
@@ -71,7 +70,7 @@ class MCPSAPGUIServer:
     allowing AI assistants to interact with SAP systems.
     """
 
-    def __init__(self, config: ServerConfig = None):
+    def __init__(self, config: Optional[ServerConfig] = None):
         """Initialize the MCP server."""
         self.config = config or ServerConfig()
         self.controller = SAPGUIController()
@@ -465,10 +464,16 @@ class MCPSAPGUIServer:
                 ),
             ]
 
-            # Filter out write tools if read-only mode
+            # Filter out write/mutating tools if read-only mode
             if self.config.read_only:
-                write_tools = {"sap_set_field", "sap_press_button", "sap_select_table_row",
-                               "sap_double_click_cell"}
+                write_tools = {
+                    "sap_set_field", "sap_press_button", "sap_select_checkbox",
+                    "sap_select_table_row", "sap_double_click_cell",
+                    "sap_execute_transaction", "sap_send_key",
+                    "sap_press_alv_toolbar_button", "sap_select_alv_context_menu_item",
+                    "sap_expand_tree_node", "sap_collapse_tree_node",
+                    "sap_select_tree_node", "sap_double_click_tree_node",
+                }
                 tools = [t for t in tools if t.name not in write_tools]
 
             return tools
@@ -490,24 +495,30 @@ class MCPSAPGUIServer:
                     ]
 
                 # Return JSON for all other tools
-                import json
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             except Exception as e:
-                logger.error(f"Tool {name} failed: {e}")
-                import json
+                logger.error("Tool %s failed: %s", name, e)
                 return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
     async def _handle_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Route tool calls to appropriate handlers."""
 
         # Run synchronous SAP operations in thread pool
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # Connection tools
         if name == "sap_connect":
+            # Extract args explicitly to avoid passing unexpected keys
+            # and to prevent password from leaking into logs/tracebacks
+            connect_args = {
+                "system_description": arguments["system_description"],
+            }
+            for key in ("client", "user", "password", "language"):
+                if key in arguments:
+                    connect_args[key] = arguments[key]
             info = await loop.run_in_executor(
-                self._com_executor, lambda: self.controller.connect(**arguments)
+                self._com_executor, lambda: self.controller.connect(**connect_args)
             )
             return info.__dict__ if hasattr(info, '__dict__') else info
 
@@ -534,6 +545,8 @@ class MCPSAPGUIServer:
 
         # Navigation tools
         elif name == "sap_execute_transaction":
+            if self.config.read_only:
+                return {"error": "Write operations disabled in read-only mode"}
             tcode = arguments["tcode"]
             if self._is_transaction_blocked(tcode):
                 return {"error": f"Transaction {tcode} is blocked by security policy"}
@@ -542,6 +555,8 @@ class MCPSAPGUIServer:
             )
 
         elif name == "sap_send_key":
+            if self.config.read_only:
+                return {"error": "Write operations disabled in read-only mode"}
             vkey = self._parse_key(arguments["key"])
             return await loop.run_in_executor(
                 self._com_executor, lambda: self.controller.send_vkey(vkey)
@@ -622,6 +637,8 @@ class MCPSAPGUIServer:
             )
 
         elif name == "sap_select_table_row":
+            if self.config.read_only:
+                return {"error": "Write operations disabled in read-only mode"}
             return await loop.run_in_executor(
                 self._com_executor, lambda: self.controller.select_table_row(
                     arguments["table_id"], arguments["row"]
@@ -629,6 +646,8 @@ class MCPSAPGUIServer:
             )
 
         elif name == "sap_double_click_cell":
+            if self.config.read_only:
+                return {"error": "Write operations disabled in read-only mode"}
             return await loop.run_in_executor(
                 self._com_executor, lambda: self.controller.double_click_table_cell(
                     arguments["table_id"], arguments["row"], arguments["column"]
@@ -648,6 +667,8 @@ class MCPSAPGUIServer:
             )
 
         elif name == "sap_expand_tree_node":
+            if self.config.read_only:
+                return {"error": "Write operations disabled in read-only mode"}
             return await loop.run_in_executor(
                 self._com_executor, lambda: self.controller.expand_tree_node(
                     arguments["tree_id"], arguments["node_key"]
@@ -655,6 +676,8 @@ class MCPSAPGUIServer:
             )
 
         elif name == "sap_collapse_tree_node":
+            if self.config.read_only:
+                return {"error": "Write operations disabled in read-only mode"}
             return await loop.run_in_executor(
                 self._com_executor, lambda: self.controller.collapse_tree_node(
                     arguments["tree_id"], arguments["node_key"]
@@ -662,6 +685,8 @@ class MCPSAPGUIServer:
             )
 
         elif name == "sap_select_tree_node":
+            if self.config.read_only:
+                return {"error": "Write operations disabled in read-only mode"}
             return await loop.run_in_executor(
                 self._com_executor, lambda: self.controller.select_tree_node(
                     arguments["tree_id"], arguments["node_key"]
@@ -669,6 +694,8 @@ class MCPSAPGUIServer:
             )
 
         elif name == "sap_double_click_tree_node":
+            if self.config.read_only:
+                return {"error": "Write operations disabled in read-only mode"}
             return await loop.run_in_executor(
                 self._com_executor, lambda: self.controller.double_click_tree_node(
                     arguments["tree_id"], arguments["node_key"]
@@ -697,7 +724,7 @@ class MCPSAPGUIServer:
 
     def _is_transaction_blocked(self, tcode: str) -> bool:
         """Check if a transaction is blocked."""
-        tcode_upper = tcode.upper().lstrip("/N").lstrip("/O")
+        tcode_upper = tcode.upper().removeprefix("/N").removeprefix("/O")
 
         # Check blocklist
         if tcode_upper in self.config.blocked_transactions:
@@ -731,12 +758,19 @@ class MCPSAPGUIServer:
             "F12": VKey.F12,
             "Cancel": VKey.F12,
         }
-        return key_map.get(key, VKey.ENTER)
+        if key not in key_map:
+            raise ValueError(f"Unknown key: '{key}'. Valid keys: {', '.join(key_map.keys())}")
+        return key_map[key]
 
     async def run(self):
         """Run the MCP server."""
-        async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(read_stream, write_stream, self.server.create_initialization_options())
+        try:
+            async with stdio_server() as (read_stream, write_stream):
+                await self.server.run(
+                    read_stream, write_stream, self.server.create_initialization_options()
+                )
+        finally:
+            self._com_executor.shutdown(wait=False)
 
 
 def main():

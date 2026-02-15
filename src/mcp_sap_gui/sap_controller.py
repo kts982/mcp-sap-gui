@@ -207,7 +207,7 @@ class SAPGUIController:
         try:
             app = self._get_application()
 
-            logger.info(f"Opening connection to: {system_description}")
+            logger.info("Opening connection to: %s", system_description)
             self._connection = app.OpenConnection(system_description, True)
 
             if self._connection is None:
@@ -229,10 +229,12 @@ class SAPGUIController:
                 self._safe_set_field("wnd[0]/usr/txtRSYST-LANGU", language)
 
             # Press Enter to login if credentials were provided
-            if password:
+            has_credentials = password is not None
+            if has_credentials:
                 self.send_vkey(VKey.ENTER)
 
-            logger.info("Connected successfully")
+            logger.info("Connected successfully to %s as %s",
+                         system_description, user or "(existing credentials)")
             return self.get_session_info()
 
         except SAPGUIError:
@@ -384,7 +386,7 @@ class SAPGUIController:
         self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
 
         return {
-            "transaction": tcode.lstrip("/n").lstrip("/o"),
+            "transaction": tcode.removeprefix("/n").removeprefix("/o"),
             "screen": self.get_screen_info(),
         }
 
@@ -1078,6 +1080,21 @@ class SAPGUIController:
     # Screenshot & Visual
     # =========================================================================
 
+    def _find_topmost_window(self) -> str:
+        """Find the topmost SAP GUI window (highest wnd index that exists).
+
+        Popups appear as wnd[1], wnd[2], etc. This returns the topmost
+        window so screenshots and screen reads capture what the user sees.
+        """
+        topmost = "wnd[0]"
+        for i in range(1, 10):
+            try:
+                self._session.findById(f"wnd[{i}]")
+                topmost = f"wnd[{i}]"
+            except Exception:
+                break
+        return topmost
+
     def take_screenshot(self, filepath: str = None) -> Dict[str, Any]:
         """
         Take a screenshot of the current SAP window.
@@ -1100,8 +1117,13 @@ class SAPGUIController:
             else:
                 return_base64 = False
 
-            window = self._session.findById("wnd[0]")
+            # Find the topmost window (popups are wnd[1], wnd[2], etc.)
+            window_id = self._find_topmost_window()
+            window = self._session.findById(window_id)
             window.HardCopy(filepath, "PNG")
+
+            # Optimize image size with Pillow if available
+            self._optimize_screenshot(filepath)
 
             if return_base64:
                 import base64
@@ -1111,13 +1133,49 @@ class SAPGUIController:
                 return {
                     "format": "png",
                     "encoding": "base64",
+                    "window": window_id,
                     "data": data,
                 }
             else:
                 return {
                     "format": "png",
                     "filepath": filepath,
+                    "window": window_id,
                 }
 
         except Exception as e:
             return {"error": str(e)}
+
+    def _optimize_screenshot(self, filepath: str) -> None:
+        """
+        Optimize screenshot file size using Pillow if available.
+
+        Resizes large images and applies PNG optimization to significantly
+        reduce file size (typically 70-90% reduction).
+        """
+        try:
+            from PIL import Image
+        except ImportError:
+            logger.debug("Pillow not installed, skipping screenshot optimization")
+            return
+
+        try:
+            img = Image.open(filepath)
+
+            # Downscale if image is very large (> 1920px wide)
+            max_width = 1920
+            if img.width > max_width:
+                ratio = max_width / img.width
+                new_size = (max_width, int(img.height * ratio))
+                img = img.resize(new_size, Image.LANCZOS)
+
+            # Convert RGBA to RGB if no transparency (smaller file)
+            if img.mode == "RGBA":
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                background.paste(img, mask=img.split()[3])
+                img = background
+
+            # Save with optimization
+            img.save(filepath, "PNG", optimize=True)
+        except Exception as e:
+            logger.debug(f"Screenshot optimization failed (using original): {e}")

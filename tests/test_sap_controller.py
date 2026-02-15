@@ -20,22 +20,20 @@ class TestSAPGUIController:
 
     def test_is_connected_false_by_default(self):
         """Test that is_connected returns False initially."""
-        with patch('win32com.client'):
-            from mcp_sap_gui.sap_controller import SAPGUIController
-            controller = SAPGUIController()
-            assert controller.is_connected is False
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        assert controller.is_connected is False
 
     def test_require_session_raises_when_not_connected(self):
         """Test that operations fail when not connected."""
-        with patch('win32com.client'):
-            from mcp_sap_gui.sap_controller import (
-                SAPGUIController,
-                SAPGUINotConnectedError
-            )
-            controller = SAPGUIController()
+        from mcp_sap_gui.sap_controller import (
+            SAPGUIController,
+            SAPGUINotConnectedError
+        )
+        controller = SAPGUIController()
 
-            with pytest.raises(SAPGUINotConnectedError):
-                controller.get_session_info()
+        with pytest.raises(SAPGUINotConnectedError):
+            controller.get_session_info()
 
 
 class TestVKey:
