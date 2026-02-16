@@ -46,9 +46,9 @@ dev = [
 mcp-sap-gui = "mcp_sap_gui.server:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/mcp-sap-gui"
-Repository = "https://github.com/yourusername/mcp-sap-gui"
-Issues = "https://github.com/yourusername/mcp-sap-gui/issues"
+Homepage = "https://git.tsioumpris.de/Kostas/mcp-sap-gui"
+Repository = "https://git.tsioumpris.de/Kostas/mcp-sap-gui"
+Issues = "https://git.tsioumpris.de/Kostas/mcp-sap-gui/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_sap_gui"]

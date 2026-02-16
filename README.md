@@ -36,6 +36,7 @@ in the DEV system."
 - **SAP Logon Pad** running (for COM connections)
 - **SAP GUI Scripting enabled** on your SAP systems
 - **Python 3.10+**
+- **[uv](https://docs.astral.sh/uv/)** (recommended Python package manager)
 
 ### Enabling SAP GUI Scripting
 
@@ -54,17 +55,20 @@ SAP GUI Scripting must be enabled both client-side and server-side:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/mcp-sap-gui.git
+git clone ssh://git@git.tsioumpris.de:2222/Kostas/mcp-sap-gui.git
 cd mcp-sap-gui
 
-# Install dependencies
-pip install -e .
+# Install uv (if not already installed)
+pip install uv
+
+# Install all dependencies (creates .venv automatically)
+uv sync
 
 # With screenshot optimization (recommended - reduces screenshot size by 70-90%)
-pip install -e ".[screenshots]"
+uv sync --extra screenshots
 
-# Or install from requirements
-pip install -r requirements.txt
+# With dev dependencies (for testing, linting, type checking)
+uv sync --extra dev --extra screenshots
 ```
 
 ## Usage
@@ -73,16 +77,16 @@ pip install -r requirements.txt
 
 ```bash
 # Standard mode
-python -m mcp_sap_gui.server
+uv run python -m mcp_sap_gui.server
 
 # Read-only mode (safer for exploration)
-python -m mcp_sap_gui.server --read-only
+uv run python -m mcp_sap_gui.server --read-only
 
 # With transaction whitelist
-python -m mcp_sap_gui.server --allowed-transactions MM03 VA03 ME23N
+uv run python -m mcp_sap_gui.server --allowed-transactions MM03 VA03 ME23N
 
 # Debug mode
-python -m mcp_sap_gui.server --debug
+uv run python -m mcp_sap_gui.server --debug
 ```
 
 ### MCP Setup
@@ -113,8 +117,8 @@ If you want to configure it globally for Claude Code (available in any project),
   "mcpServers": {
     "sap-gui": {
       "type": "stdio",
-      "command": "python",
-      "args": ["-m", "mcp_sap_gui.server"],
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp_sap_gui.server"],
       "cwd": "D:\\mcp-sap-gui"
     }
   }
@@ -136,8 +140,8 @@ Add to your Claude Desktop config file:
 {
   "mcpServers": {
     "sap-gui": {
-      "command": "python",
-      "args": ["-m", "mcp_sap_gui.server"],
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp_sap_gui.server"],
       "cwd": "D:\\mcp-sap-gui"
     }
   }
@@ -150,8 +154,8 @@ Add to your Claude Desktop config file:
 {
   "mcpServers": {
     "sap-gui": {
-      "command": "python",
-      "args": ["-m", "mcp_sap_gui.server", "--read-only"],
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp_sap_gui.server", "--read-only"],
       "cwd": "D:\\mcp-sap-gui"
     }
   }
@@ -164,9 +168,9 @@ Add to your Claude Desktop config file:
 {
   "mcpServers": {
     "sap-gui": {
-      "command": "python",
+      "command": "uv",
       "args": [
-        "-m", "mcp_sap_gui.server",
+        "run", "python", "-m", "mcp_sap_gui.server",
         "--allowed-transactions", "MM03", "VA03", "ME23N"
       ],
       "cwd": "D:\\mcp-sap-gui"
@@ -184,12 +188,12 @@ After editing the config, restart Claude Desktop for changes to take effect.
 The server uses stdio transport. Point any MCP client at:
 
 ```
-Command:   python -m mcp_sap_gui.server
+Command:   uv run python -m mcp_sap_gui.server
 Arguments: [--read-only] [--debug] [--allowed-transactions T1 T2 ...]
 Transport: stdio
 ```
 
-Ensure the working directory is set to the project root (where `src/` lives), or that the package is installed in the Python environment being used.
+Ensure the working directory is set to the project root (where `pyproject.toml` lives).
 
 ---
 
@@ -341,7 +345,7 @@ mcp-sap-gui/
 │   └── ...
 ├── .mcp.json                  # MCP server config (auto-detected by Claude Code)
 ├── pyproject.toml
-├── requirements.txt
+├── uv.lock                    # Dependency lock file (managed by uv)
 ├── README.md
 └── CLAUDE.md                  # Development context for Claude Code
 ```
@@ -361,23 +365,23 @@ mcp-sap-gui/
 - Field IDs vary between SAP systems due to customization
 
 ### COM errors on startup
-- Ensure `pywin32` is installed: `pip install pywin32`
-- Run `python -m win32com.client.makepy` if COM registration issues occur
+- Ensure dependencies are installed: `uv sync`
+- Run `uv run python -m win32com.client.makepy` if COM registration issues occur
 
 ## Development
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev,screenshots]"
+# Install all dependencies (dev + screenshots)
+uv sync --extra dev --extra screenshots
 
 # Run tests
-pytest
+uv run pytest
 
 # Type checking
-mypy src/
+uv run mypy src/
 
 # Linting
-ruff check src/
+uv run ruff check src/
 ```
 
 ## Related Projects

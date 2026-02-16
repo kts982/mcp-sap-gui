@@ -95,20 +95,23 @@ Common virtual key codes for `sendVKey()`:
 ## Development Commands
 
 ```bash
+# Install dependencies
+uv sync --extra dev --extra screenshots
+
 # Run server
-python -m mcp_sap_gui.server
+uv run python -m mcp_sap_gui.server
 
 # Run with debug logging
-python -m mcp_sap_gui.server --debug
+uv run python -m mcp_sap_gui.server --debug
 
 # Run tests
-pytest tests/
+uv run pytest tests/
 
 # Type checking
-mypy src/mcp_sap_gui/
+uv run mypy src/mcp_sap_gui/
 
 # Linting
-ruff check src/
+uv run ruff check src/
 ```
 
 ## Testing Strategy

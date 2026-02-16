@@ -2,8 +2,8 @@
   "mcpServers": {
     "sap-gui": {
       "type": "stdio",
-      "command": "python",
-      "args": ["-m", "mcp_sap_gui.server"],
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp_sap_gui.server"],
       "cwd": "${workspaceFolder}"
     }
   }
