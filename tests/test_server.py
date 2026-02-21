@@ -1,12 +1,11 @@
 """Tests for MCP SAP GUI Server - security logic, routing, and configuration."""
 
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-import asyncio
+from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
-# Helpers to import server components with mocked win32com
+# Helpers to import server module with mocked win32com
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -18,31 +17,30 @@ def mock_win32com():
 
 
 @pytest.fixture
-def server_config(mock_win32com):
-    """Create a ServerConfig with defaults."""
-    from mcp_sap_gui.server import ServerConfig
-    return ServerConfig()
+def srv(mock_win32com):
+    """Import and configure the server module with a fresh controller."""
+    import importlib
+    import mcp_sap_gui.server as _srv
+    # Reload to pick up mocked win32com
+    importlib.reload(_srv)
+
+    from mcp_sap_gui.sap_controller import SAPGUIController
+    _srv.controller = SAPGUIController()
+    _srv.config = _srv.ServerConfig()
+    yield _srv
 
 
 @pytest.fixture
-def readonly_config(mock_win32com):
-    """Create a read-only ServerConfig."""
-    from mcp_sap_gui.server import ServerConfig
-    return ServerConfig(read_only=True)
+def readonly_srv(mock_win32com):
+    """Import and configure the server module in read-only mode."""
+    import importlib
+    import mcp_sap_gui.server as _srv
+    importlib.reload(_srv)
 
-
-@pytest.fixture
-def server(mock_win32com):
-    """Create a MCPSAPGUIServer with default config."""
-    from mcp_sap_gui.server import MCPSAPGUIServer
-    return MCPSAPGUIServer()
-
-
-@pytest.fixture
-def readonly_server(mock_win32com):
-    """Create a MCPSAPGUIServer in read-only mode."""
-    from mcp_sap_gui.server import MCPSAPGUIServer, ServerConfig
-    return MCPSAPGUIServer(config=ServerConfig(read_only=True))
+    from mcp_sap_gui.sap_controller import SAPGUIController
+    _srv.controller = SAPGUIController()
+    _srv.config = _srv.ServerConfig(read_only=True)
+    yield _srv
 
 
 # ===========================================================================
@@ -52,69 +50,71 @@ def readonly_server(mock_win32com):
 class TestTransactionBlocking:
     """Tests for _is_transaction_blocked with removeprefix fix."""
 
-    def test_blocked_transaction_direct(self, server):
+    def test_blocked_transaction_direct(self, srv):
         """Default blocklist blocks SU01."""
-        assert server._is_transaction_blocked("SU01") is True
+        assert srv._is_transaction_blocked("SU01") is True
 
-    def test_blocked_transaction_case_insensitive(self, server):
+    def test_blocked_transaction_case_insensitive(self, srv):
         """Blocklist check is case-insensitive."""
-        assert server._is_transaction_blocked("su01") is True
-        assert server._is_transaction_blocked("Su01") is True
+        assert srv._is_transaction_blocked("su01") is True
+        assert srv._is_transaction_blocked("Su01") is True
 
-    def test_blocked_with_n_prefix(self, server):
+    def test_blocked_with_n_prefix(self, srv):
         """Stripping /N prefix still detects blocked transaction."""
-        assert server._is_transaction_blocked("/NSU01") is True
-        assert server._is_transaction_blocked("/nSU01") is True
+        assert srv._is_transaction_blocked("/NSU01") is True
+        assert srv._is_transaction_blocked("/nSU01") is True
 
-    def test_blocked_with_o_prefix(self, server):
+    def test_blocked_with_o_prefix(self, srv):
         """Stripping /O prefix still detects blocked transaction."""
-        assert server._is_transaction_blocked("/OSU01") is True
-        assert server._is_transaction_blocked("/oSU01") is True
+        assert srv._is_transaction_blocked("/OSU01") is True
+        assert srv._is_transaction_blocked("/oSU01") is True
 
-    def test_allowed_transaction(self, server):
+    def test_allowed_transaction(self, srv):
         """Non-blocked transactions are allowed."""
-        assert server._is_transaction_blocked("MM03") is False
-        assert server._is_transaction_blocked("VA01") is False
+        assert srv._is_transaction_blocked("MM03") is False
+        assert srv._is_transaction_blocked("VA01") is False
 
-    def test_removeprefix_does_not_corrupt_tcode(self, server):
+    def test_removeprefix_does_not_corrupt_tcode(self, srv):
         """Verify removeprefix doesn't strip characters from transaction codes.
 
         The old lstrip("/N") would turn "NOTIF" into "OTIF" because lstrip
         strips individual characters, not the substring.
         """
-        assert server._is_transaction_blocked("NOTIF") is False
-        assert server._is_transaction_blocked("NOOP") is False
+        assert srv._is_transaction_blocked("NOTIF") is False
+        assert srv._is_transaction_blocked("NOOP") is False
         # SE16N IS in the blocklist - verify it's still correctly blocked
-        assert server._is_transaction_blocked("SE16N") is True
+        assert srv._is_transaction_blocked("SE16N") is True
         # SE16 (without N suffix) is NOT in the blocklist
-        assert server._is_transaction_blocked("SE16") is False
+        assert srv._is_transaction_blocked("SE16") is False
 
-    def test_all_default_blocked(self, server):
+    def test_all_default_blocked(self, srv):
         """All default blocked transactions are correctly blocked."""
         blocked = ["SU01", "SU10", "SU01D", "PFCG", "SU53", "SM21", "ST22", "SE16N"]
         for tcode in blocked:
-            assert server._is_transaction_blocked(tcode) is True, f"{tcode} should be blocked"
+            assert srv._is_transaction_blocked(tcode) is True, f"{tcode} should be blocked"
 
     def test_allowlist_mode(self, mock_win32com):
         """When allowed_transactions is set, only those are allowed."""
-        from mcp_sap_gui.server import MCPSAPGUIServer, ServerConfig
-        config = ServerConfig(allowed_transactions=["MM03", "VA03"])
-        srv = MCPSAPGUIServer(config=config)
+        import importlib
+        import mcp_sap_gui.server as _srv
+        importlib.reload(_srv)
+        _srv.config = _srv.ServerConfig(allowed_transactions=["MM03", "VA03"])
 
-        assert srv._is_transaction_blocked("MM03") is False
-        assert srv._is_transaction_blocked("VA03") is False
-        assert srv._is_transaction_blocked("VA01") is True
-        assert srv._is_transaction_blocked("SE80") is True
+        assert _srv._is_transaction_blocked("MM03") is False
+        assert _srv._is_transaction_blocked("VA03") is False
+        assert _srv._is_transaction_blocked("VA01") is True
+        assert _srv._is_transaction_blocked("SE80") is True
 
     def test_allowlist_with_prefix(self, mock_win32com):
         """Allowlist works with /N and /O prefixes."""
-        from mcp_sap_gui.server import MCPSAPGUIServer, ServerConfig
-        config = ServerConfig(allowed_transactions=["MM03"])
-        srv = MCPSAPGUIServer(config=config)
+        import importlib
+        import mcp_sap_gui.server as _srv
+        importlib.reload(_srv)
+        _srv.config = _srv.ServerConfig(allowed_transactions=["MM03"])
 
-        assert srv._is_transaction_blocked("/NMM03") is False
-        assert srv._is_transaction_blocked("/OMM03") is False
-        assert srv._is_transaction_blocked("/NVA01") is True
+        assert _srv._is_transaction_blocked("/NMM03") is False
+        assert _srv._is_transaction_blocked("/OMM03") is False
+        assert _srv._is_transaction_blocked("/NVA01") is True
 
 
 # ===========================================================================
@@ -122,170 +122,144 @@ class TestTransactionBlocking:
 # ===========================================================================
 
 class TestReadOnlyMode:
-    """Tests for read-only mode enforcement."""
+    """Tests for read-only mode enforcement via _check_write()."""
 
-    def test_readonly_filters_write_tools(self, readonly_server):
-        """Read-only mode should filter all mutating tools from list_tools."""
-        from mcp.types import ListToolsRequest
-        req = ListToolsRequest(method="tools/list")
-        handler = readonly_server.server.request_handlers[ListToolsRequest]
-        result = asyncio.new_event_loop().run_until_complete(handler(req))
-        tool_names = {t.name for t in result.root.tools}
+    def test_check_write_raises_in_readonly(self, readonly_srv):
+        """_check_write raises ValueError when read_only is True."""
+        with pytest.raises(ValueError, match="read-only"):
+            readonly_srv._check_write()
 
-        # These should all be filtered out
-        write_tools = {
-            "sap_set_field", "sap_press_button", "sap_select_checkbox",
-            "sap_select_table_row", "sap_double_click_cell",
-            "sap_execute_transaction", "sap_send_key",
-            "sap_press_alv_toolbar_button", "sap_select_alv_context_menu_item",
-            "sap_expand_tree_node", "sap_collapse_tree_node",
-            "sap_select_tree_node", "sap_double_click_tree_node",
-        }
-
-        for tool in write_tools:
-            assert tool not in tool_names, f"{tool} should be filtered in read-only mode"
-
-    def test_readonly_keeps_read_tools(self, readonly_server):
-        """Read-only mode should keep read-only tools available."""
-        from mcp.types import ListToolsRequest
-        req = ListToolsRequest(method="tools/list")
-        handler = readonly_server.server.request_handlers[ListToolsRequest]
-        result = asyncio.new_event_loop().run_until_complete(handler(req))
-        tool_names = {t.name for t in result.root.tools}
-
-        read_tools = {
-            "sap_connect", "sap_connect_existing", "sap_list_connections",
-            "sap_get_session_info", "sap_get_screen_info",
-            "sap_read_field", "sap_read_table", "sap_get_alv_toolbar",
-            "sap_read_tree", "sap_get_screen_elements", "sap_screenshot",
-        }
-
-        for tool in read_tools:
-            assert tool in tool_names, f"{tool} should be available in read-only mode"
+    def test_check_write_passes_in_normal_mode(self, srv):
+        """_check_write does not raise when read_only is False."""
+        srv._check_write()  # Should not raise
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_set_field(self, readonly_server):
-        """sap_set_field returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_set_field", {"field_id": "wnd[0]/usr/txt", "value": "test"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_set_field(self, readonly_srv):
+        """sap_set_field raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_set_field("wnd[0]/usr/txt", "test")
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_press_button(self, readonly_server):
-        """sap_press_button returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_press_button", {"button_id": "wnd[0]/tbar[1]/btn[8]"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_press_button(self, readonly_srv):
+        """sap_press_button raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_press_button("wnd[0]/tbar[1]/btn[8]")
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_select_checkbox(self, readonly_server):
-        """sap_select_checkbox returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_select_checkbox", {"checkbox_id": "wnd[0]/usr/chk", "selected": True}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_select_checkbox(self, readonly_srv):
+        """sap_select_checkbox raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_checkbox("wnd[0]/usr/chk", True)
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_execute_transaction(self, readonly_server):
-        """sap_execute_transaction returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_execute_transaction", {"tcode": "MM03"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_execute_transaction(self, readonly_srv):
+        """sap_execute_transaction raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_execute_transaction("MM03")
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_send_key(self, readonly_server):
-        """sap_send_key returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_send_key", {"key": "Enter"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_send_key(self, readonly_srv):
+        """sap_send_key raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_send_key("Enter")
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_select_table_row(self, readonly_server):
-        """sap_select_table_row returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_select_table_row", {"table_id": "wnd[0]/usr/tbl", "row": 0}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_select_table_row(self, readonly_srv):
+        """sap_select_table_row raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_table_row("wnd[0]/usr/tbl", 0)
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_double_click_cell(self, readonly_server):
-        """sap_double_click_cell returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_double_click_cell",
-            {"table_id": "wnd[0]/usr/tbl", "row": 0, "column": "COL1"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_double_click_cell(self, readonly_srv):
+        """sap_double_click_cell raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_double_click_cell("wnd[0]/usr/tbl", 0, "COL1")
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_alv_toolbar_button(self, readonly_server):
-        """sap_press_alv_toolbar_button returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_press_alv_toolbar_button",
-            {"grid_id": "wnd[0]/usr/grid", "button_id": "SORT"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_alv_toolbar_button(self, readonly_srv):
+        """sap_press_alv_toolbar_button raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_press_alv_toolbar_button("wnd[0]/usr/grid", "SORT")
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_alv_context_menu(self, readonly_server):
-        """sap_select_alv_context_menu_item returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_select_alv_context_menu_item",
-            {"grid_id": "wnd[0]/usr/grid", "menu_item_id": "ITEM1"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_alv_context_menu(self, readonly_srv):
+        """sap_select_alv_context_menu_item raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_alv_context_menu_item(
+                "wnd[0]/usr/grid", "ITEM1"
+            )
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_tree_expand(self, readonly_server):
-        """sap_expand_tree_node returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_expand_tree_node",
-            {"tree_id": "wnd[0]/usr/tree", "node_key": "1"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_tree_expand(self, readonly_srv):
+        """sap_expand_tree_node raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_expand_tree_node("wnd[0]/usr/tree", "1")
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_tree_collapse(self, readonly_server):
-        """sap_collapse_tree_node returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_collapse_tree_node",
-            {"tree_id": "wnd[0]/usr/tree", "node_key": "1"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_tree_collapse(self, readonly_srv):
+        """sap_collapse_tree_node raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_collapse_tree_node("wnd[0]/usr/tree", "1")
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_tree_select(self, readonly_server):
-        """sap_select_tree_node returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_select_tree_node",
-            {"tree_id": "wnd[0]/usr/tree", "node_key": "1"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_tree_select(self, readonly_srv):
+        """sap_select_tree_node raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_tree_node("wnd[0]/usr/tree", "1")
 
     @pytest.mark.asyncio
-    async def test_readonly_blocks_tree_double_click(self, readonly_server):
-        """sap_double_click_tree_node returns error in read-only mode."""
-        result = await readonly_server._handle_tool(
-            "sap_double_click_tree_node",
-            {"tree_id": "wnd[0]/usr/tree", "node_key": "1"}
-        )
-        assert "error" in result
-        assert "read-only" in result["error"].lower()
+    async def test_readonly_blocks_tree_double_click(self, readonly_srv):
+        """sap_double_click_tree_node raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_double_click_tree_node("wnd[0]/usr/tree", "1")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_select_menu(self, readonly_srv):
+        """sap_select_menu raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_menu("wnd[0]/mbar/menu[0]/menu[0]")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_radio_button(self, readonly_srv):
+        """sap_select_radio_button raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_radio_button("wnd[0]/usr/radOPT1")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_combobox(self, readonly_srv):
+        """sap_select_combobox_entry raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_combobox_entry("wnd[0]/usr/cmb", "EN")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_tab(self, readonly_srv):
+        """sap_select_tab raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_tab("wnd[0]/usr/tabsTAB/tabpTAB1")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_modify_cell(self, readonly_srv):
+        """sap_modify_cell raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_modify_cell("wnd[0]/usr/grid", 0, "COL", "val")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_set_current_cell(self, readonly_srv):
+        """sap_set_current_cell raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_set_current_cell("wnd[0]/usr/grid", 0, "COL")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_double_click_tree_item(self, readonly_srv):
+        """sap_double_click_tree_item raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_double_click_tree_item("wnd[0]/usr/tree", "1", "COL")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_click_tree_link(self, readonly_srv):
+        """sap_click_tree_link raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_click_tree_link("wnd[0]/usr/tree", "1", "LINK")
 
 
 # ===========================================================================
@@ -293,57 +267,102 @@ class TestReadOnlyMode:
 # ===========================================================================
 
 class TestParseKey:
-    """Tests for _parse_key method."""
+    """Tests for _parse_key function."""
 
-    def test_valid_keys(self, server):
+    def test_valid_keys(self, srv):
         """All valid key names parse correctly."""
         from mcp_sap_gui.sap_controller import VKey
 
-        assert server._parse_key("Enter") == VKey.ENTER
-        assert server._parse_key("F1") == VKey.F1
-        assert server._parse_key("F3") == VKey.F3
-        assert server._parse_key("Back") == VKey.F3
-        assert server._parse_key("F8") == VKey.F8
-        assert server._parse_key("Execute") == VKey.F8
-        assert server._parse_key("F11") == VKey.F11
-        assert server._parse_key("Save") == VKey.F11
-        assert server._parse_key("F12") == VKey.F12
-        assert server._parse_key("Cancel") == VKey.F12
-        assert server._parse_key("F5") == VKey.F5
-        assert server._parse_key("Refresh") == VKey.F5
+        assert srv._parse_key("Enter") == VKey.ENTER
+        assert srv._parse_key("F1") == VKey.F1
+        assert srv._parse_key("F3") == VKey.F3
+        assert srv._parse_key("Back") == VKey.F3
+        assert srv._parse_key("F8") == VKey.F8
+        assert srv._parse_key("Execute") == VKey.F8
+        assert srv._parse_key("F11") == VKey.F11
+        assert srv._parse_key("Save") == VKey.F11
+        assert srv._parse_key("F12") == VKey.F12
+        assert srv._parse_key("Cancel") == VKey.F12
+        assert srv._parse_key("F5") == VKey.F5
+        assert srv._parse_key("Refresh") == VKey.F5
 
-    def test_unknown_key_raises_error(self, server):
+    def test_unknown_key_raises_error(self, srv):
         """Unknown key names raise ValueError instead of silently defaulting."""
         with pytest.raises(ValueError, match="Unknown key"):
-            server._parse_key("InvalidKey")
+            srv._parse_key("InvalidKey")
 
         with pytest.raises(ValueError, match="Unknown key"):
-            server._parse_key("")
+            srv._parse_key("")
 
         with pytest.raises(ValueError, match="Unknown key"):
-            server._parse_key("f1")  # case-sensitive
+            srv._parse_key("f1")  # case-sensitive
 
-    def test_error_message_lists_valid_keys(self, server):
+    def test_error_message_lists_valid_keys(self, srv):
         """Error message for unknown key includes list of valid keys."""
         with pytest.raises(ValueError, match="Enter") as exc_info:
-            server._parse_key("BadKey")
+            srv._parse_key("BadKey")
         assert "F1" in str(exc_info.value)
         assert "F12" in str(exc_info.value)
 
 
 # ===========================================================================
-# Unknown Tool Tests
+# Tool Registration Tests
 # ===========================================================================
 
-class TestUnknownTool:
-    """Tests for unknown tool handling."""
+class TestToolRegistration:
+    """Tests that all expected tools are registered with FastMCP."""
 
-    @pytest.mark.asyncio
-    async def test_unknown_tool_returns_error(self, server):
-        """Calling an unknown tool returns an error dict."""
-        result = await server._handle_tool("sap_nonexistent", {})
-        assert "error" in result
-        assert "Unknown tool" in result["error"]
+    def test_all_tools_registered(self, srv):
+        """All tools are registered."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tool_names = {t.name for t in tools}
+
+        expected = {
+            # Connection
+            "sap_connect", "sap_connect_existing", "sap_list_connections",
+            "sap_get_session_info",
+            # Navigation
+            "sap_execute_transaction", "sap_send_key", "sap_get_screen_info",
+            # Field
+            "sap_read_field", "sap_set_field", "sap_press_button",
+            "sap_select_menu", "sap_select_checkbox", "sap_select_radio_button",
+            "sap_select_combobox_entry", "sap_select_tab",
+            # Table
+            "sap_read_table", "sap_get_alv_toolbar",
+            "sap_press_alv_toolbar_button", "sap_select_alv_context_menu_item",
+            "sap_select_table_row", "sap_double_click_cell",
+            "sap_modify_cell", "sap_set_current_cell", "sap_get_column_info",
+            # Tree
+            "sap_read_tree", "sap_expand_tree_node", "sap_collapse_tree_node",
+            "sap_select_tree_node", "sap_double_click_tree_node",
+            "sap_double_click_tree_item", "sap_click_tree_link",
+            "sap_find_tree_node_by_path",
+            # Discovery
+            "sap_get_screen_elements", "sap_screenshot",
+        }
+
+        assert tool_names == expected
+
+    def test_send_key_has_enum(self, srv):
+        """sap_send_key has enum constraint on key parameter."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        send_key = next(t for t in tools if t.name == "sap_send_key")
+        key_schema = send_key.inputSchema["properties"]["key"]
+
+        assert "enum" in key_schema
+        assert "Enter" in key_schema["enum"]
+        assert "F8" in key_schema["enum"]
+        assert len(key_schema["enum"]) == 18
 
 
 # ===========================================================================
@@ -381,9 +400,6 @@ class TestScreenshotOptimization:
         with patch.dict("sys.modules", {"PIL": MagicMock(), "PIL.Image": mock_image_module}):
             with patch("mcp_sap_gui.sap_controller.Image", mock_image_module, create=True):
                 # Patch the import inside the method
-                import importlib
-                from mcp_sap_gui import sap_controller
-
                 original_optimize = controller._optimize_screenshot.__func__
 
                 def patched_optimize(self_arg, fp):

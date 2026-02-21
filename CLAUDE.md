@@ -71,8 +71,9 @@ SAPGUI (ROT object)
 | `GuiRadioButton` | Radio button | `wnd[0]/usr/radOPT1` |
 | `GuiComboBox` | Dropdown list | `wnd[0]/usr/cmbLANGU` |
 | `GuiTab` | Tab strip tab | `wnd[0]/usr/tabsTAB/tabpTAB1` |
+| `GuiMenu` | Menu bar item | `wnd[0]/mbar/menu[0]/menu[1]` |
 | `GuiGridView` | ALV Grid | `wnd[0]/usr/cntlGRID1/shellcont/shell` |
-| `GuiTableControl` | Classic table | `wnd[0]/usr/tblSAPMV45A` |
+| `GuiTableControl` | Classic table (customizing) | `wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS` |
 | `GuiTree` | Tree control | `wnd[0]/usr/cntlTREE/shellcont/shell` |
 | `GuiStatusbar` | Status bar | `wnd[0]/sbar` |
 | `GuiOkCodeField` | Command field | `wnd[0]/tbar[0]/okcd` |
@@ -144,11 +145,11 @@ blocked_transactions = [
 
 ### Read-Only Mode
 
-When `config.read_only = True`:
-- `sap_set_field` → returns error
-- `sap_press_button` → returns error
-- `sap_select_table_row` → returns error
-- Only read/navigation operations allowed
+When `config.read_only = True`, all write tools raise `ValueError`. Each write tool calls `_check_write()` at the start. The tools are always visible but return an error if invoked in read-only mode.
+
+**Write tools** (blocked in read-only): `sap_execute_transaction`, `sap_send_key`, `sap_set_field`, `sap_press_button`, `sap_select_menu`, `sap_select_checkbox`, `sap_select_radio_button`, `sap_select_combobox_entry`, `sap_select_tab`, `sap_select_table_row`, `sap_double_click_cell`, `sap_modify_cell`, `sap_set_current_cell`, `sap_press_alv_toolbar_button`, `sap_select_alv_context_menu_item`, `sap_expand_tree_node`, `sap_collapse_tree_node`, `sap_select_tree_node`, `sap_double_click_tree_node`, `sap_double_click_tree_item`, `sap_click_tree_link`
+
+**Read tools** (always allowed): `sap_connect`, `sap_connect_existing`, `sap_list_connections`, `sap_get_session_info`, `sap_get_screen_info`, `sap_read_field`, `sap_read_table`, `sap_get_alv_toolbar`, `sap_get_column_info`, `sap_read_tree`, `sap_find_tree_node_by_path`, `sap_get_screen_elements`, `sap_screenshot`
 
 ### Adding New Blocked Transactions
 
@@ -156,36 +157,29 @@ Edit `ServerConfig.blocked_transactions` in `server.py`.
 
 ## Adding New Tools
 
-1. Add tool definition in `list_tools()`:
-```python
-Tool(
-    name="sap_new_tool",
-    description="Description for Claude",
-    inputSchema={
-        "type": "object",
-        "properties": {
-            "param1": {"type": "string", "description": "..."}
-        },
-        "required": ["param1"]
-    }
-)
-```
+The server uses **FastMCP** (`@mcp.tool()` decorators). Adding a new tool is two steps:
 
-2. Add handler in `_handle_tool()`:
-```python
-elif name == "sap_new_tool":
-    return await loop.run_in_executor(
-        None, lambda: self.controller.new_method(arguments["param1"])
-    )
-```
-
-3. Implement method in `sap_controller.py`:
+1. Add the controller method in `sap_controller.py`:
 ```python
 def new_method(self, param1: str) -> Dict[str, Any]:
     self._require_session()
-    # Implementation
+    # Implementation using self._session.findById(...)
     return {"result": "..."}
 ```
+
+2. Add the MCP tool in `server.py` (schema auto-generated from type hints):
+```python
+@mcp.tool()
+async def sap_new_tool(param1: str) -> dict:
+    """Description shown to Claude."""
+    _check_write()  # Add this for write operations
+    return await _com(lambda: controller.new_method(param1))
+```
+
+3. Update tests:
+   - Add read-only test in `test_server.py` if it's a write operation
+   - Add the tool name to the `test_all_tools_registered` set
+   - Add controller unit tests in `test_sap_controller.py`
 
 ## Common Patterns
 
@@ -221,6 +215,22 @@ def get_status():
         "type": sbar.MessageType,  # S=Success, E=Error, W=Warning, I=Info
     }
 ```
+
+## GuiGridView (ALV) vs GuiTableControl
+
+Both are supported by `sap_read_table` and other table tools — auto-detected via `Type` property.
+
+| | GuiGridView (ALV) | GuiTableControl |
+|---|---|---|
+| **Type prefix** | `shell` (inside `shellcont`) | `tbl` |
+| **Example ID** | `wnd[0]/usr/cntlGRID/shellcont/shell` | `wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS` |
+| **Common in** | Reports, list displays | SPRO/customizing, SM30 table maintenance |
+| **Cell access** | `GetCellValue(row, colName)` | `GetCell(visRow, colIdx)` → `.Text` |
+| **Column names** | `ColumnOrder(i)` collection | From `GetCell(0, i).Name` (NOT from Columns collection) |
+| **Scrolling** | Internal (all rows accessible) | Manual via `VerticalScrollbar.Position` |
+| **Toolbar** | Built-in ALV toolbar | Standard `tbar[1]` buttons + menu bar |
+
+**Important**: GuiTableColumn objects "do not support properties like id or name" per the API docs. Accessing `col.Name` can crash SAP GUI. Column names must be read from cell objects instead.
 
 ## Known Limitations
 

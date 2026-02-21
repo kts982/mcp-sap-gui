@@ -94,6 +94,17 @@ class SAPGUINotConnectedError(SAPGUIError):
     pass
 
 
+# GetToolbarButtonType() returns strings per SAP GUI Scripting API v8.00,
+# but some SAP GUI versions may return numeric values. Handle both.
+_TOOLBAR_BUTTON_TYPES = {
+    0: "Button", 1: "ButtonAndMenu", 2: "Menu",
+    3: "Separator", 4: "CheckBox", 5: "Group",
+    "Button": "Button", "ButtonAndMenu": "ButtonAndMenu",
+    "Menu": "Menu", "Separator": "Separator",
+    "CheckBox": "CheckBox", "Group": "Group",
+}
+
+
 class SAPGUIController:
     """
     Controller for SAP GUI Scripting API via COM automation.
@@ -170,11 +181,19 @@ class SAPGUIController:
         return self._application
 
     def _require_session(self):
-        """Ensure we have an active session."""
+        """Ensure we have an active session that is not busy."""
         if not self.is_connected:
             raise SAPGUINotConnectedError(
                 "Not connected to SAP. Call connect() first."
             )
+        try:
+            if self._session.Busy:
+                raise SAPGUIError(
+                    "SAP session is busy processing a previous request. "
+                    "Wait for it to complete before sending another command."
+                )
+        except AttributeError:
+            pass  # Busy property not available on this version
 
     # =========================================================================
     # Connection Management
@@ -367,6 +386,9 @@ class SAPGUIController:
         """
         Execute a transaction code.
 
+        Uses Session.StartTransaction() when possible (cleaner API),
+        falls back to okcd + sendVKey for /o (new window) prefix.
+
         Args:
             tcode: Transaction code (e.g., "MM03", "VA01", "SE80")
                    Can include /n prefix for new session or /o for new window
@@ -382,8 +404,19 @@ class SAPGUIController:
 
         logger.info(f"Executing transaction: {tcode}")
 
-        self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
-        self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
+        # /o prefix opens a new window - must use okcd approach
+        if tcode.upper().startswith("/O"):
+            self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
+            self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
+        else:
+            # Use StartTransaction for /n prefix (preferred API)
+            plain_tcode = tcode.removeprefix("/n").removeprefix("/N")
+            try:
+                self._session.StartTransaction(plain_tcode)
+            except Exception:
+                # Fallback to okcd approach
+                self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
+                self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
 
         return {
             "transaction": tcode.removeprefix("/n").removeprefix("/o"),
@@ -541,6 +574,29 @@ class SAPGUIController:
         except Exception as e:
             return {"button_id": button_id, "error": str(e)}
 
+    def select_menu(self, menu_id: str) -> Dict[str, Any]:
+        """
+        Select a menu item from the menu bar or a submenu.
+
+        Args:
+            menu_id: SAP GUI menu ID (e.g., 'wnd[0]/mbar/menu[3]/menu[0]')
+
+        Returns:
+            Dict with screen info after menu selection
+        """
+        self._require_session()
+
+        try:
+            self._session.findById(menu_id).Select()
+
+            return {
+                "menu_id": menu_id,
+                "status": "selected",
+                "screen": self.get_screen_info(),
+            }
+        except Exception as e:
+            return {"menu_id": menu_id, "error": str(e)}
+
     def select_checkbox(self, checkbox_id: str, selected: bool = True) -> Dict[str, Any]:
         """
         Select or deselect a checkbox.
@@ -563,13 +619,217 @@ class SAPGUIController:
         except Exception as e:
             return {"checkbox_id": checkbox_id, "error": str(e)}
 
+    def select_radio_button(self, radio_id: str) -> Dict[str, Any]:
+        """
+        Select a radio button.
+
+        Args:
+            radio_id: SAP GUI radio button ID (e.g., 'wnd[0]/usr/radOPT1')
+
+        Returns:
+            Dict with result status
+        """
+        self._require_session()
+
+        try:
+            element = self._session.findById(radio_id)
+            element.Select()
+
+            return {
+                "radio_id": radio_id,
+                "status": "success",
+            }
+        except Exception as e:
+            return {"radio_id": radio_id, "error": str(e)}
+
+    def select_combobox_entry(self, combobox_id: str, key_or_value: str) -> Dict[str, Any]:
+        """
+        Select an entry in a combobox/dropdown.
+
+        First tries to set the key directly. If that fails, searches the
+        Entries collection by value text.
+
+        Args:
+            combobox_id: SAP GUI combobox ID (e.g., 'wnd[0]/usr/cmbLANGU')
+            key_or_value: Key or display value text of the entry to select
+
+        Returns:
+            Dict with result status and selected key/value
+        """
+        self._require_session()
+
+        try:
+            combobox = self._session.findById(combobox_id)
+
+            # Try setting key directly first
+            try:
+                combobox.Key = key_or_value
+                return {
+                    "combobox_id": combobox_id,
+                    "key": key_or_value,
+                    "status": "success",
+                }
+            except Exception:
+                pass
+
+            # Fallback: search Entries by value text
+            entries = combobox.Entries
+            for i in range(entries.Count):
+                entry = entries(i)
+                if entry.Value == key_or_value or entry.Key == key_or_value:
+                    combobox.Key = entry.Key
+                    return {
+                        "combobox_id": combobox_id,
+                        "key": entry.Key,
+                        "value": entry.Value,
+                        "status": "success",
+                    }
+
+            return {
+                "combobox_id": combobox_id,
+                "error": f"Entry '{key_or_value}' not found in combobox",
+            }
+        except Exception as e:
+            return {"combobox_id": combobox_id, "error": str(e)}
+
+    def select_tab(self, tab_id: str) -> Dict[str, Any]:
+        """
+        Select a tab in a tab strip.
+
+        Args:
+            tab_id: SAP GUI tab ID (e.g., 'wnd[0]/usr/tabsTAB/tabpTAB1')
+
+        Returns:
+            Dict with result status and screen info after selection
+        """
+        self._require_session()
+
+        try:
+            tab = self._session.findById(tab_id)
+            tab.Select()
+
+            return {
+                "tab_id": tab_id,
+                "status": "success",
+                "screen": self.get_screen_info(),
+            }
+        except Exception as e:
+            return {"tab_id": tab_id, "error": str(e)}
+
     # =========================================================================
     # Table/Grid Operations
     # =========================================================================
 
+    # ---- GuiTableControl helpers ----
+
+    def _get_table_control_columns(self, table) -> list:
+        """Get column metadata from a GuiTableControl's Columns collection.
+
+        Each column entry has: index, name, title, tooltip.
+
+        Note: The SAP GUI Scripting API docs state that GuiTableColumn members
+        in the Columns collection "do not support properties like id or name".
+        Column names are therefore extracted from the first row's cell Name
+        property, with Title as fallback.
+        """
+        columns = []
+        col_count = table.Columns.Count
+
+        # Get column names from first row's cells (safer than col.Name
+        # which is documented as unsupported on GuiTableColumn)
+        cell_names = []
+        for i in range(col_count):
+            name = None
+            try:
+                cell = table.GetCell(0, i)
+                name = getattr(cell, 'Name', None)
+            except Exception:
+                pass
+            cell_names.append(name)
+
+        # Get column titles and tooltips from the Columns collection
+        for i in range(col_count):
+            info = {"index": i}
+            try:
+                col = table.Columns(i)
+                try:
+                    info["title"] = col.Title
+                except Exception:
+                    info["title"] = ""
+                try:
+                    info["tooltip"] = col.Tooltip
+                except Exception:
+                    info["tooltip"] = ""
+            except Exception:
+                info["title"] = ""
+                info["tooltip"] = ""
+
+            info["name"] = cell_names[i] or info.get("title") or f"col_{i}"
+            columns.append(info)
+        return columns
+
+    def _read_cell_value(self, cell):
+        """Read a cell value, handling different element types."""
+        try:
+            cell_type = getattr(cell, 'Type', '')
+            if cell_type == "GuiCheckBox":
+                return bool(cell.Selected)
+            elif cell_type == "GuiComboBox":
+                return getattr(cell, 'Key', cell.Text)
+            else:
+                return cell.Text
+        except Exception:
+            return None
+
+    def _scroll_table_control_to_row(self, table, abs_row: int) -> int:
+        """Scroll a GuiTableControl so abs_row is visible. Returns visible row index."""
+        visible = table.VisibleRowCount
+        scrollbar = table.VerticalScrollbar
+        current_top = scrollbar.Position
+
+        # Check if row is already visible
+        if current_top <= abs_row < current_top + visible:
+            return abs_row - current_top
+
+        # Scroll to make the row visible at top
+        new_pos = max(scrollbar.Minimum, min(abs_row, scrollbar.Maximum))
+        scrollbar.Position = new_pos
+        return abs_row - new_pos
+
+    def _resolve_table_control_column(self, table, column) -> int:
+        """Resolve a column name/index to a numeric column index for GuiTableControl."""
+        if isinstance(column, int):
+            return column
+        if isinstance(column, str) and column.isdigit():
+            return int(column)
+
+        # Search by cell Name (from first row) and column Title
+        for i in range(table.Columns.Count):
+            # Try cell Name first
+            try:
+                cell = table.GetCell(0, i)
+                if getattr(cell, 'Name', None) == column:
+                    return i
+            except Exception:
+                pass
+            # Try column Title
+            try:
+                col = table.Columns(i)
+                if col.Title == column:
+                    return i
+            except Exception:
+                pass
+
+        raise ValueError(f"Column '{column}' not found in table")
+
+    # ---- Table reading ----
+
     def read_table(self, table_id: str, max_rows: int = 100) -> Dict[str, Any]:
         """
         Read data from an ALV grid or table control.
+
+        Automatically detects GuiGridView (ALV) vs GuiTableControl and
+        uses the appropriate API for each.
 
         Args:
             table_id: SAP GUI table/grid ID
@@ -581,35 +841,99 @@ class SAPGUIController:
         self._require_session()
 
         try:
-            grid = self._session.findById(table_id)
-
-            # Get column information
-            columns = []
-            for i in range(grid.ColumnCount):
-                columns.append(grid.ColumnOrder(i))
-
-            # Read data
-            row_count = min(grid.RowCount, max_rows)
-            data = []
-
-            for row in range(row_count):
-                row_data = {}
-                for col in columns:
-                    try:
-                        row_data[col] = grid.GetCellValue(row, col)
-                    except Exception:
-                        row_data[col] = None
-                data.append(row_data)
-
-            return {
-                "table_id": table_id,
-                "total_rows": grid.RowCount,
-                "rows_returned": len(data),
-                "columns": columns,
-                "data": data,
-            }
+            table = self._session.findById(table_id)
+            if getattr(table, 'Type', '') == "GuiTableControl":
+                return self._read_table_control(table, table_id, max_rows)
+            return self._read_alv_grid(table, table_id, max_rows)
         except Exception as e:
             return {"table_id": table_id, "error": str(e)}
+
+    def _read_alv_grid(self, grid, table_id: str, max_rows: int) -> Dict[str, Any]:
+        """Read data from an ALV grid (GuiGridView)."""
+        columns = []
+        for i in range(grid.ColumnCount):
+            columns.append(grid.ColumnOrder(i))
+
+        column_info = []
+        for col in columns:
+            info = {"name": col}
+            try:
+                info["tooltip"] = grid.GetColumnTooltip(col)
+            except Exception:
+                info["tooltip"] = ""
+            try:
+                info["title"] = grid.GetDisplayedColumnTitle(col)
+            except Exception:
+                info["title"] = col
+            column_info.append(info)
+
+        row_count = min(grid.RowCount, max_rows)
+        data = []
+        for row in range(row_count):
+            row_data = {}
+            for col in columns:
+                try:
+                    row_data[col] = grid.GetCellValue(row, col)
+                except Exception:
+                    row_data[col] = None
+            data.append(row_data)
+
+        return {
+            "table_id": table_id,
+            "table_type": "GuiGridView",
+            "total_rows": grid.RowCount,
+            "rows_returned": len(data),
+            "columns": columns,
+            "column_info": column_info,
+            "data": data,
+        }
+
+    def _read_table_control(self, table, table_id: str, max_rows: int) -> Dict[str, Any]:
+        """Read data from a GuiTableControl with scrolling support."""
+        columns_info = self._get_table_control_columns(table)
+        column_names = [c["name"] for c in columns_info]
+        col_count = len(columns_info)
+
+        total_rows = table.RowCount
+        visible_rows = table.VisibleRowCount
+        rows_to_read = min(total_rows, max_rows)
+
+        data = []
+        if rows_to_read > 0 and col_count > 0:
+            scrollbar = table.VerticalScrollbar
+            abs_row = 0
+
+            while abs_row < rows_to_read:
+                # Scroll so abs_row is visible (clamp to Maximum)
+                scroll_pos = min(abs_row, scrollbar.Maximum)
+                scrollbar.Position = scroll_pos
+
+                # Determine the visible index range to read
+                start_vis = abs_row - scroll_pos
+                end_vis = min(visible_rows, start_vis + rows_to_read - abs_row)
+
+                for vis_idx in range(start_vis, end_vis):
+                    row_data = {}
+                    for col_idx in range(col_count):
+                        try:
+                            cell = table.GetCell(vis_idx, col_idx)
+                            row_data[column_names[col_idx]] = self._read_cell_value(cell)
+                        except Exception:
+                            row_data[column_names[col_idx]] = None
+                    data.append(row_data)
+                    abs_row += 1
+
+        return {
+            "table_id": table_id,
+            "table_type": "GuiTableControl",
+            "table_field_name": getattr(table, 'TableFieldName', ''),
+            "total_rows": total_rows,
+            "visible_rows": visible_rows,
+            "rows_returned": len(data),
+            "columns": column_names,
+            "column_info": columns_info,
+            "data": data,
+        }
 
     def get_alv_toolbar(self, grid_id: str) -> Dict[str, Any]:
         """
@@ -633,21 +957,26 @@ class SAPGUIController:
                 btn_text = grid.GetToolbarButtonText(i)
                 btn_type = grid.GetToolbarButtonType(i)
 
-                # Skip separators (type 3)
-                type_names = {
-                    0: "Button",
-                    1: "ButtonAndMenu",
-                    2: "Menu",
-                    3: "Separator",
-                    4: "CheckBox",
-                }
-
-                buttons.append({
+                btn_info = {
                     "index": i,
                     "id": btn_id,
                     "text": btn_text,
-                    "type": type_names.get(btn_type, str(btn_type)),
-                })
+                    "type": _TOOLBAR_BUTTON_TYPES.get(btn_type, str(btn_type)),
+                }
+
+                # Add tooltip if available
+                try:
+                    btn_info["tooltip"] = grid.GetToolbarButtonTooltip(i)
+                except Exception:
+                    btn_info["tooltip"] = ""
+
+                # Add enabled state if available
+                try:
+                    btn_info["enabled"] = bool(grid.GetToolbarButtonEnabled(i))
+                except Exception:
+                    btn_info["enabled"] = True
+
+                buttons.append(btn_info)
 
             return {
                 "grid_id": grid_id,
@@ -681,23 +1010,9 @@ class SAPGUIController:
             # Try PressToolbarContextButton first (works for Menu/ButtonAndMenu)
             # Fall back to PressToolbarButton for regular buttons
             menu_opened = False
-            menu_items = []
             try:
                 grid.PressToolbarContextButton(button_id)
                 menu_opened = True
-
-                # Try to read the context menu items
-                try:
-                    ctx_menu = grid.ContextMenu
-                    for i in range(ctx_menu.Count):
-                        item = ctx_menu.Item(i)
-                        menu_items.append({
-                            "id": item.FunctionCode,
-                            "text": item.Text,
-                        })
-                except Exception:
-                    pass
-
             except Exception:
                 # Not a menu button, use regular press
                 grid.PressToolbarButton(button_id)
@@ -707,7 +1022,7 @@ class SAPGUIController:
                     "grid_id": grid_id,
                     "button_id": button_id,
                     "status": "menu_opened",
-                    "menu_items": menu_items,
+                    "hint": "Use select_alv_context_menu_item with SelectToolbarMenuItem to pick an item",
                     "screen": self.get_screen_info(),
                 }
             else:
@@ -745,16 +1060,17 @@ class SAPGUIController:
             if toolbar_button_id:
                 grid.PressToolbarContextButton(toolbar_button_id)
 
-            # Detect if menu_item_id looks like a function code or visible text
-            # Function codes are typically UPPERCASE_WITH_UNDERSCORES
-            # Visible text contains spaces and mixed case
+            # Use SelectToolbarMenuItem (for toolbar context menus opened
+            # via PressToolbarContextButton). Falls back to
+            # SelectContextMenuItemByText for visible-text matching.
             if ' ' in menu_item_id:
                 # Looks like visible text, use SelectContextMenuItemByText
                 grid.SelectContextMenuItemByText(menu_item_id)
             else:
-                # Looks like a function code, try by code first then by text
+                # Looks like a function code — use SelectToolbarMenuItem
+                # (the correct API for toolbar menus), with fallback
                 try:
-                    grid.SelectContextMenuItem(menu_item_id)
+                    grid.SelectToolbarMenuItem(menu_item_id)
                 except Exception:
                     grid.SelectContextMenuItemByText(menu_item_id)
 
@@ -772,8 +1088,14 @@ class SAPGUIController:
         self._require_session()
 
         try:
-            grid = self._session.findById(table_id)
-            grid.selectedRows = str(row)
+            table = self._session.findById(table_id)
+
+            if getattr(table, 'Type', '') == "GuiTableControl":
+                visible_row = self._scroll_table_control_to_row(table, row)
+                cell = table.GetCell(visible_row, 0)
+                cell.SetFocus()
+            else:
+                table.selectedRows = str(row)
 
             return {
                 "table_id": table_id,
@@ -788,8 +1110,16 @@ class SAPGUIController:
         self._require_session()
 
         try:
-            grid = self._session.findById(table_id)
-            grid.doubleClickCell(row, column)
+            table = self._session.findById(table_id)
+
+            if getattr(table, 'Type', '') == "GuiTableControl":
+                col_idx = self._resolve_table_control_column(table, column)
+                visible_row = self._scroll_table_control_to_row(table, row)
+                cell = table.GetCell(visible_row, col_idx)
+                cell.SetFocus()
+                self._session.findById("wnd[0]").sendVKey(VKey.F2)
+            else:
+                table.DoubleClick(row, column)
 
             return {
                 "table_id": table_id,
@@ -801,9 +1131,214 @@ class SAPGUIController:
         except Exception as e:
             return {"table_id": table_id, "error": str(e)}
 
+    def modify_cell(self, grid_id: str, row: int, column: str, value: str) -> Dict[str, Any]:
+        """
+        Modify the value of a cell in an ALV grid or table control.
+
+        Args:
+            grid_id: SAP GUI grid/table ID
+            row: Row index (0-based)
+            column: Column name (ALV) or column name/index (table control)
+            value: New cell value
+
+        Returns:
+            Dict with result status
+        """
+        self._require_session()
+
+        try:
+            table = self._session.findById(grid_id)
+
+            if getattr(table, 'Type', '') == "GuiTableControl":
+                col_idx = self._resolve_table_control_column(table, column)
+                visible_row = self._scroll_table_control_to_row(table, row)
+                cell = table.GetCell(visible_row, col_idx)
+                cell.Text = value
+            else:
+                table.ModifyCell(row, column, value)
+
+            return {
+                "grid_id": grid_id,
+                "row": row,
+                "column": column,
+                "value": value,
+                "status": "success",
+            }
+        except Exception as e:
+            return {"grid_id": grid_id, "row": row, "column": column, "error": str(e)}
+
+    def set_current_cell(self, grid_id: str, row: int, column: str) -> Dict[str, Any]:
+        """
+        Set the current (focused) cell in an ALV grid or table control.
+
+        Args:
+            grid_id: SAP GUI grid/table ID
+            row: Row index (0-based)
+            column: Column name (ALV) or column name/index (table control)
+
+        Returns:
+            Dict with result status
+        """
+        self._require_session()
+
+        try:
+            table = self._session.findById(grid_id)
+
+            if getattr(table, 'Type', '') == "GuiTableControl":
+                col_idx = self._resolve_table_control_column(table, column)
+                visible_row = self._scroll_table_control_to_row(table, row)
+                cell = table.GetCell(visible_row, col_idx)
+                cell.SetFocus()
+            else:
+                table.SetCurrentCell(row, column)
+
+            return {
+                "grid_id": grid_id,
+                "row": row,
+                "column": column,
+                "status": "success",
+            }
+        except Exception as e:
+            return {"grid_id": grid_id, "row": row, "column": column, "error": str(e)}
+
+    def get_column_info(self, grid_id: str) -> Dict[str, Any]:
+        """
+        Get detailed column information from an ALV grid or table control.
+
+        Returns column names, displayed titles, tooltips for each column.
+
+        Args:
+            grid_id: SAP GUI grid/table ID
+
+        Returns:
+            Dict with column details
+        """
+        self._require_session()
+
+        try:
+            table = self._session.findById(grid_id)
+
+            if getattr(table, 'Type', '') == "GuiTableControl":
+                columns = self._get_table_control_columns(table)
+                return {
+                    "grid_id": grid_id,
+                    "table_type": "GuiTableControl",
+                    "column_count": len(columns),
+                    "columns": columns,
+                }
+
+            # ALV grid
+            columns = []
+            for i in range(table.ColumnCount):
+                col_name = table.ColumnOrder(i)
+                col_info = {"name": col_name, "index": i}
+
+                try:
+                    col_info["title"] = table.GetDisplayedColumnTitle(col_name)
+                except Exception:
+                    col_info["title"] = col_name
+
+                try:
+                    col_info["tooltip"] = table.GetColumnTooltip(col_name)
+                except Exception:
+                    col_info["tooltip"] = ""
+
+                columns.append(col_info)
+
+            return {
+                "grid_id": grid_id,
+                "column_count": len(columns),
+                "columns": columns,
+            }
+        except Exception as e:
+            return {"grid_id": grid_id, "error": str(e)}
+
     # =========================================================================
     # Tree Control Operations
     # =========================================================================
+
+    def _get_tree_column_info(self, tree) -> tuple:
+        """
+        Get column names and titles from a tree control.
+
+        Uses the official SAP GUI Scripting API methods:
+        - GetColumnNames() → GuiCollection of internal column names
+        - GetColumnHeaders() → GuiCollection of display titles
+        - GetColumnTitleFromName(name) → title for a specific column
+        - ColumnOrder property → column sequence (Column Tree only)
+
+        Tree types (GetTreeType): 0=Simple, 1=List, 2=Column
+
+        Returns:
+            Tuple of (column_names: list, column_titles: list)
+        """
+        column_names = []
+        column_titles = []
+
+        # Detect tree type
+        tree_type_num = -1
+        try:
+            tree_type_num = tree.GetTreeType()
+            logger.debug("Tree type number: %s", tree_type_num)
+        except Exception as e:
+            logger.debug("GetTreeType failed: %s", e)
+
+        # Simple trees (type 0) have no columns
+        if tree_type_num == 0:
+            return column_names, column_titles
+
+        # Strategy 1: GetColumnNames() — returns a GuiCollection (works for List & Column trees)
+        try:
+            names_col = tree.GetColumnNames()
+            if hasattr(names_col, 'Count'):
+                for i in range(names_col.Count):
+                    column_names.append(str(names_col(i)))
+            elif hasattr(names_col, 'Length'):
+                for i in range(names_col.Length):
+                    column_names.append(str(names_col(i)))
+            elif hasattr(names_col, '__iter__'):
+                column_names = [str(n) for n in names_col]
+            logger.debug("Got column names via GetColumnNames: %s", column_names)
+        except Exception as e:
+            logger.debug("GetColumnNames failed: %s", e)
+
+        # Strategy 2: ColumnOrder property (Column Tree type 2 only)
+        if not column_names and tree_type_num == 2:
+            try:
+                col_order = tree.ColumnOrder
+                if hasattr(col_order, 'Count'):
+                    for i in range(col_order.Count):
+                        column_names.append(str(col_order(i)))
+                elif hasattr(col_order, '__iter__'):
+                    column_names = [str(n) for n in col_order]
+                logger.debug("Got column names via ColumnOrder: %s", column_names)
+            except Exception as e:
+                logger.debug("ColumnOrder failed: %s", e)
+
+        # Get column titles
+        if column_names:
+            # Try GetColumnTitleFromName for each column
+            for name in column_names:
+                try:
+                    column_titles.append(tree.GetColumnTitleFromName(name))
+                except Exception:
+                    column_titles.append(name)
+
+            # If all titles are empty, try GetColumnHeaders as fallback
+            if all(not t for t in column_titles):
+                try:
+                    headers_col = tree.GetColumnHeaders()
+                    fallback_titles = []
+                    if hasattr(headers_col, 'Count'):
+                        for i in range(headers_col.Count):
+                            fallback_titles.append(str(headers_col(i)))
+                    if fallback_titles:
+                        column_titles = fallback_titles
+                        logger.debug("Got titles via GetColumnHeaders: %s", column_titles)
+                except Exception as e:
+                    logger.debug("GetColumnHeaders fallback failed: %s", e)
+
+        return column_names, column_titles
 
     def read_tree(self, tree_id: str, max_nodes: int = 200) -> Dict[str, Any]:
         """
@@ -821,22 +1356,35 @@ class SAPGUIController:
         try:
             tree = self._session.findById(tree_id)
 
-            # Get column names if available (TableTree / ColumnTree)
-            columns = []
+            # Detect tree type (0=Simple, 1=List, 2=Column)
+            tree_type = ""
+            tree_type_num = -1
             try:
-                col_count = tree.ColumnCount
-                for i in range(col_count):
-                    columns.append(tree.GetColumnTitleByNumber(i))
+                tree_type_num = tree.GetTreeType()
+                tree_type_names = {0: "Simple", 1: "List", 2: "Column"}
+                tree_type = tree_type_names.get(tree_type_num, f"Unknown({tree_type_num})")
+            except Exception:
+                # Fallback to SubType / Text for display
+                try:
+                    tree_type = tree.SubType if hasattr(tree, 'SubType') else ""
+                except Exception:
+                    pass
+                if not tree_type:
+                    try:
+                        tree_type = tree.Text
+                    except Exception:
+                        pass
+            logger.debug("Tree type: %s (num=%s)", tree_type, tree_type_num)
+
+            # Get hierarchy title if available (List/Column trees)
+            hierarchy_title = ""
+            try:
+                hierarchy_title = tree.GetHierarchyTitle()
             except Exception:
                 pass
 
-            column_names = []
-            try:
-                col_count = tree.ColumnCount
-                for i in range(col_count):
-                    column_names.append(tree.GetColumnNameByNumber(i))
-            except Exception:
-                pass
+            # Get column info using fallback chain
+            column_names, column_titles = self._get_tree_column_info(tree)
 
             # Get all visible node keys
             node_keys = []
@@ -858,17 +1406,20 @@ class SAPGUIController:
             for key in node_keys:
                 node = {"key": key}
 
-                # Node text
+                # Node text (works for SimpleTree; empty for TableTree/ColumnTree)
                 try:
                     node["text"] = tree.GetNodeTextByKey(key)
                 except Exception:
                     node["text"] = ""
 
-                # Parent key
+                # Parent key - API documents GetParent(), fall back to GetParentNodeKey()
                 try:
-                    node["parent_key"] = tree.GetParentNodeKey(key)
+                    node["parent_key"] = tree.GetParent(key)
                 except Exception:
-                    node["parent_key"] = None
+                    try:
+                        node["parent_key"] = tree.GetParentNodeKey(key)
+                    except Exception:
+                        node["parent_key"] = None
 
                 # Children count
                 try:
@@ -887,6 +1438,12 @@ class SAPGUIController:
                 except Exception:
                     node["is_expanded"] = False
 
+                # Hierarchy level
+                try:
+                    node["hierarchy_level"] = tree.GetHierarchyLevel(key)
+                except Exception:
+                    node["hierarchy_level"] = None
+
                 # Column values (for TableTree / ColumnTree)
                 if column_names:
                     col_values = {}
@@ -897,12 +1454,22 @@ class SAPGUIController:
                             col_values[col_name] = None
                     node["columns"] = col_values
 
+                    # If node text is empty, use first non-empty column value
+                    if not node["text"]:
+                        for col_name in column_names:
+                            val = col_values.get(col_name)
+                            if val:
+                                node["text"] = val
+                                break
+
                 nodes.append(node)
 
             return {
                 "tree_id": tree_id,
+                "tree_type": tree_type,
+                "hierarchy_title": hierarchy_title,
                 "total_nodes": len(node_keys),
-                "column_titles": columns,
+                "column_titles": column_titles,
                 "column_names": column_names,
                 "nodes": nodes,
             }
@@ -1014,6 +1581,102 @@ class SAPGUIController:
         except Exception as e:
             return {"tree_id": tree_id, "node_key": node_key, "error": str(e)}
 
+    def double_click_tree_item(self, tree_id: str, node_key: str,
+                               item_name: str) -> Dict[str, Any]:
+        """
+        Double-click a specific item (column cell) in a tree node.
+
+        Unlike DoubleClickNode which clicks the node itself, this clicks
+        on a specific column cell within the node row.
+
+        Args:
+            tree_id: SAP GUI tree ID
+            node_key: The key of the node
+            item_name: Column name / item name to double-click
+
+        Returns:
+            Dict with result status and screen info
+        """
+        self._require_session()
+
+        try:
+            tree = self._session.findById(tree_id)
+            tree.DoubleClickItem(node_key, item_name)
+
+            return {
+                "tree_id": tree_id,
+                "node_key": node_key,
+                "item_name": item_name,
+                "status": "double_clicked",
+                "screen": self.get_screen_info(),
+            }
+        except Exception as e:
+            return {
+                "tree_id": tree_id, "node_key": node_key,
+                "item_name": item_name, "error": str(e),
+            }
+
+    def click_tree_link(self, tree_id: str, node_key: str,
+                        item_name: str) -> Dict[str, Any]:
+        """
+        Click a hyperlink in a tree node item.
+
+        Args:
+            tree_id: SAP GUI tree ID
+            node_key: The key of the node
+            item_name: Column name / item name containing the link
+
+        Returns:
+            Dict with result status and screen info
+        """
+        self._require_session()
+
+        try:
+            tree = self._session.findById(tree_id)
+            tree.ClickLink(node_key, item_name)
+
+            return {
+                "tree_id": tree_id,
+                "node_key": node_key,
+                "item_name": item_name,
+                "status": "clicked",
+                "screen": self.get_screen_info(),
+            }
+        except Exception as e:
+            return {
+                "tree_id": tree_id, "node_key": node_key,
+                "item_name": item_name, "error": str(e),
+            }
+
+    def find_tree_node_by_path(self, tree_id: str, path: str) -> Dict[str, Any]:
+        """
+        Find a node key by its path in the tree hierarchy.
+
+        The path is a backslash-separated string of child indices,
+        e.g. "2\\1\\2" means: 2nd child of root, then 1st child, then 2nd child.
+
+        Args:
+            tree_id: SAP GUI tree ID
+            path: Path string (e.g., "2\\1\\2")
+
+        Returns:
+            Dict with the found node key
+        """
+        self._require_session()
+
+        try:
+            tree = self._session.findById(tree_id)
+            node_key = tree.FindNodeKeyByPath(path)
+
+            return {
+                "tree_id": tree_id,
+                "path": path,
+                "node_key": node_key,
+                "status": "found",
+            }
+        except Exception as e:
+            return {"tree_id": tree_id, "path": path, "error": str(e)}
+
     # =========================================================================
     # Screen Element Discovery
     # =========================================================================
@@ -1085,7 +1748,16 @@ class SAPGUIController:
 
         Popups appear as wnd[1], wnd[2], etc. This returns the topmost
         window so screenshots and screen reads capture what the user sees.
+
+        Tries Session.ActiveWindow first (faster), falls back to loop.
         """
+        try:
+            active = self._session.ActiveWindow
+            if active is not None:
+                return active.Id
+        except Exception:
+            pass
+
         topmost = "wnd[0]"
         for i in range(1, 10):
             try:

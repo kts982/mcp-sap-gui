@@ -7,11 +7,12 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 This server allows Claude to:
 - Connect to SAP systems (like double-clicking in SAP Logon Pad)
 - Execute transactions (MM03, VA01, SE80, etc.)
-- Read and write screen fields, checkboxes, and buttons
-- Navigate through SAP screens
-- Extract data from ALV grids and tables
-- Read and interact with tree controls (TableTree, ColumnTree)
-- Use ALV toolbar buttons and context menus (e.g., monitor methods)
+- Read and write screen fields, checkboxes, radio buttons, comboboxes, and tabs
+- Select menu items from the menu bar (Table View, Edit, Selection, etc.)
+- Navigate through SAP screens using keyboard keys and buttons
+- Extract data from ALV grids (GuiGridView) and classic table controls (GuiTableControl)
+- Interact with ALV toolbar buttons and context menus
+- Read and interact with tree controls (TableTree, ColumnTree, SimpleTree)
 - Take screenshots of SAP windows
 - Discover screen elements for automation
 
@@ -211,7 +212,7 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 "Connect to my open SAP session and tell me what system I'm on"
 ```
 
-## Available Tools
+## Available Tools (34 total)
 
 ### Connection Tools
 | Tool | Description |
@@ -228,20 +229,29 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 | `sap_send_key` | Send keyboard keys (Enter, F1-F12, Back, Save, etc.) |
 | `sap_get_screen_info` | Get current screen information |
 
-### Field Tools
+### Field & UI Element Tools
 | Tool | Description |
 |------|-------------|
 | `sap_read_field` | Read a field value |
 | `sap_set_field` | Set a field value |
 | `sap_press_button` | Press a button |
+| `sap_select_menu` | Select a menu item from the menu bar |
 | `sap_select_checkbox` | Select or deselect a checkbox |
+| `sap_select_radio_button` | Select a radio button |
+| `sap_select_combobox_entry` | Select a combobox/dropdown entry by key or value |
+| `sap_select_tab` | Select a tab in a tab strip |
 
 ### Table/Grid Tools
+Supports both **ALV grids** (GuiGridView) and **classic table controls** (GuiTableControl) — auto-detected.
+
 | Tool | Description |
 |------|-------------|
-| `sap_read_table` | Read data from ALV grid/table |
+| `sap_read_table` | Read data from ALV grid or table control (with scrolling) |
 | `sap_select_table_row` | Select a table row |
-| `sap_double_click_cell` | Double-click a table cell |
+| `sap_double_click_cell` | Double-click a table cell (often opens details) |
+| `sap_modify_cell` | Modify an editable cell value |
+| `sap_set_current_cell` | Set focus to a specific cell |
+| `sap_get_column_info` | Get column names, titles, and tooltips |
 | `sap_get_alv_toolbar` | List all toolbar buttons on an ALV grid |
 | `sap_press_alv_toolbar_button` | Press an ALV toolbar button (auto-detects menu types) |
 | `sap_select_alv_context_menu_item` | Select from ALV context menu (supports atomic open+select) |
@@ -254,12 +264,15 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 | `sap_collapse_tree_node` | Collapse a tree folder node |
 | `sap_select_tree_node` | Select a tree node |
 | `sap_double_click_tree_node` | Double-click a tree node (drill down) |
+| `sap_double_click_tree_item` | Double-click a specific column cell in a tree row |
+| `sap_click_tree_link` | Click a hyperlink in a tree node |
+| `sap_find_tree_node_by_path` | Find a node key by path (e.g., '2\\1\\2') |
 
 ### Discovery Tools
 | Tool | Description |
 |------|-------------|
-| `sap_get_screen_elements` | List all elements on current screen |
-| `sap_screenshot` | Capture screenshot of SAP window (auto-detects popups) |
+| `sap_get_screen_elements` | List all elements on current screen (or a container) |
+| `sap_screenshot` | Capture screenshot of SAP window |
 
 ## Security Considerations
 
@@ -329,6 +342,21 @@ sap_press_button("wnd[0]/usr/tabsTAXI_TABSTRIP.../tabpT\\01")
 items = sap_read_table("wnd[0]/usr/.../cntlGRID1/shellcont/shell")
 ```
 
+### Filter Customizing Table (GuiTableControl)
+
+```python
+# In SPRO or SM30 table maintenance view
+# Use Selection -> By Contents to filter
+sap_select_menu("wnd[0]/mbar/menu[3]/menu[0]")    # Selection > By Contents
+# Select the field to filter on, enter value
+sap_select_table_row("wnd[1]/usr/tblSAPLSVIXTCTRL_SEL_FLDS", 0)
+sap_send_key("Enter")
+sap_set_field("wnd[1]/usr/.../txtQUERY_TAB-BUFFER[3,0]", "OUTRIDER")
+sap_send_key("Execute")
+# Read the filtered table
+data = sap_read_table("wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS")
+```
+
 ## Project Structure
 
 ```
@@ -384,10 +412,10 @@ uv run mypy src/
 uv run ruff check src/
 ```
 
-## Related Projects
+## Related
 
-- [ZSAPConnect Manager](../sapgui-manager) - SAP connection & credential manager
 - [SAP GUI Scripting API Documentation](https://help.sap.com/docs/sap_gui_for_windows)
+- [MCP Specification](https://modelcontextprotocol.io/docs)
 
 ## License
 
