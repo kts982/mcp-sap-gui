@@ -412,6 +412,10 @@ uv run mypy src/
 uv run ruff check src/
 ```
 
+## Overview & Vision
+
+For a high-level overview of capabilities, use cases, and roadmap — see **[docs/OVERVIEW.md](docs/OVERVIEW.md)**.
+
 ## Related
 
 - [SAP GUI Scripting API Documentation](https://help.sap.com/docs/sap_gui_for_windows)
