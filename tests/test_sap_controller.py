@@ -796,7 +796,7 @@ class TestGuiTableControl:
         return controller
 
     def _make_table_control(self, columns, rows_data, total_rows=None,
-                            visible_rows=None):
+                            visible_rows=None, initial_scroll_position=0):
         """Create a mock GuiTableControl with columns and data.
 
         Args:
@@ -804,6 +804,7 @@ class TestGuiTableControl:
             rows_data: list of lists (outer=rows, inner=cell values)
             total_rows: total row count (default len(rows_data))
             visible_rows: visible rows at once (default len(rows_data))
+            initial_scroll_position: starting scroll position (default 0)
         """
         if total_rows is None:
             total_rows = len(rows_data)
@@ -837,7 +838,7 @@ class TestGuiTableControl:
         scrollbar = MagicMock()
         scrollbar.Minimum = 0
         scrollbar.Maximum = max(0, total_rows - visible_rows)
-        scrollbar.Position = 0
+        scrollbar.Position = initial_scroll_position
         scrollbar.PageSize = visible_rows
         mock_table.VerticalScrollbar = scrollbar
 
@@ -887,6 +888,7 @@ class TestGuiTableControl:
         assert result["table_type"] == "GuiTableControl"
         assert result["table_field_name"] == "TEST_TABLE"
         assert result["total_rows"] == 2
+        assert result["first_visible_row"] == 0
         assert result["rows_returned"] == 2
         assert result["columns"] == ["LGNUM", "LGTYPGRP"]
         assert len(result["column_info"]) == 2
@@ -895,8 +897,8 @@ class TestGuiTableControl:
         assert result["data"][0]["LGNUM"] == "WH01"
         assert result["data"][1]["LGTYPGRP"] == "GRP2"
 
-    def test_read_table_control_with_scrolling(self):
-        """read_table scrolls through all rows when total > visible."""
+    def test_read_table_control_capped_at_visible_rows(self):
+        """read_table returns at most VisibleRowCount rows (no scrolling)."""
         controller = self._make_controller_with_session()
         columns = [{"name": "COL_A", "title": "A"}]
         # 10 rows total but only 3 visible at a time
@@ -908,26 +910,121 @@ class TestGuiTableControl:
         result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
 
         assert result["total_rows"] == 10
+        assert result["first_visible_row"] == 0
         assert result["visible_rows"] == 3
-        assert result["rows_returned"] == 10
-        # Verify data integrity across scroll batches
+        # Capped at visible rows - no scrolling
+        assert result["rows_returned"] == 3
         assert result["data"][0]["COL_A"] == "val_0"
-        assert result["data"][3]["COL_A"] == "val_3"
-        assert result["data"][9]["COL_A"] == "val_9"
+        assert result["data"][2]["COL_A"] == "val_2"
 
     def test_read_table_control_respects_max_rows(self):
-        """read_table stops after max_rows even with more data."""
+        """read_table stops after max_rows even with more visible data."""
         controller = self._make_controller_with_session()
         columns = [{"name": "COL", "title": "Col"}]
         rows = [[f"v{i}"] for i in range(20)]
         mock_table = self._make_table_control(columns, rows,
-                                               total_rows=20, visible_rows=5)
+                                               total_rows=20, visible_rows=10)
         controller._session.findById.return_value = mock_table
 
-        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=8)
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=5)
 
-        assert result["rows_returned"] == 8
+        assert result["rows_returned"] == 5
+        assert result["first_visible_row"] == 0
         assert result["total_rows"] == 20
+
+    def test_read_table_control_from_scrolled_position(self):
+        """Reading from a scrolled position returns data from that position onward."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "LGNUM", "title": "WhN"}]
+        # 1705 rows total, 20 visible, user navigated to position 500
+        rows = [[f"WH{i:04d}"] for i in range(1705)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=1705, visible_rows=20,
+            initial_scroll_position=500,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["first_visible_row"] == 500
+        # Capped at 20 visible rows (no scrolling)
+        assert result["rows_returned"] == 20
+        assert result["total_rows"] == 1705
+        # Data starts from row 500, not row 0
+        assert result["data"][0]["LGNUM"] == "WH0500"
+        assert result["data"][19]["LGNUM"] == "WH0519"
+
+    def test_read_table_control_near_end_with_padding(self):
+        """Reading near end excludes padding rows from the visible window.
+
+        RowCount includes padding rows (empty rows filling the visible area).
+        At scroll position 95 in a 100-entry table with 10 visible rows,
+        only 5 rows have real data — the other 5 visible rows are padding.
+        """
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL", "title": "Col"}]
+        real_entries = 100
+        visible = 10
+        padded_total = real_entries + visible - 1  # 109
+        rows = [[f"v{i}"] for i in range(real_entries)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=padded_total, visible_rows=visible,
+            initial_scroll_position=95,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["first_visible_row"] == 95
+        assert result["rows_returned"] == 5  # only rows 95-99 are real
+        assert result["data"][0]["COL"] == "v95"
+        assert result["data"][4]["COL"] == "v99"
+
+    def test_read_table_control_padding_detection(self):
+        """Padding rows (empty rows beyond real data) are excluded from results.
+
+        This simulates a table with 57 real entries but RowCount=73 (16
+        padding rows).  After Position... to entry 52 (position 51), 17 rows
+        are visible but only 6 contain data — the rest are padding.
+        """
+        controller = self._make_controller_with_session()
+        columns = [{"name": "LGNUM", "title": "WhN"},
+                    {"name": "LNUMT", "title": "Desc"}]
+        real_entries = 57
+        visible = 17
+        padded_total = real_entries + visible - 1  # 73
+        rows = [[f"WH{i:03d}", f"Warehouse {i}"] for i in range(real_entries)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=padded_total, visible_rows=visible,
+            initial_scroll_position=51,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["first_visible_row"] == 51
+        # Only 6 real rows visible (51-56), padding rows excluded
+        assert result["rows_returned"] == 6
+        assert result["data"][0]["LGNUM"] == "WH051"
+        assert result["data"][5]["LGNUM"] == "WH056"
+
+    def test_read_table_control_max_rows_from_scrolled_position(self):
+        """max_rows cap still applies when reading from a scrolled position."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL", "title": "Col"}]
+        rows = [[f"v{i}"] for i in range(500)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=500, visible_rows=20,
+            initial_scroll_position=200,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=10)
+
+        assert result["first_visible_row"] == 200
+        assert result["rows_returned"] == 10
+        assert result["data"][0]["COL"] == "v200"
+        assert result["data"][9]["COL"] == "v209"
 
     def test_read_table_control_checkbox_cells(self):
         """Checkbox cells return boolean values."""
@@ -1012,7 +1109,7 @@ class TestGuiTableControl:
         assert result["columns"] == ["My Title"]
 
     def test_select_table_row_guitablecontrol(self):
-        """select_table_row uses SetFocus on cell for GuiTableControl."""
+        """select_table_row uses GetAbsoluteRow().Selected for GuiTableControl."""
         controller = self._make_controller_with_session()
         columns = [{"name": "COL", "title": "Col"}]
         rows = [[f"v{i}"] for i in range(5)]
@@ -1023,8 +1120,9 @@ class TestGuiTableControl:
 
         assert result["status"] == "success"
         assert result["selected_row"] == 2
-        # Verify GetCell was called for row 2, col 0
-        mock_table.GetCell.assert_called_with(2, 0)
+        # Verify GetAbsoluteRow was called with absolute row index
+        mock_table.GetAbsoluteRow.assert_called_with(2)
+        assert mock_table.GetAbsoluteRow(2).Selected is True
 
     def test_double_click_table_cell_guitablecontrol(self):
         """double_click_table_cell uses SetFocus + F2 for GuiTableControl."""
@@ -1126,30 +1224,79 @@ class TestGuiTableControl:
         with pytest.raises(ValueError, match="not found"):
             controller._resolve_table_control_column(mock_table, "NONEXISTENT")
 
-    def test_scroll_to_row_already_visible(self):
-        """_scroll_table_control_to_row returns correct index when row is visible."""
-        controller = self._make_controller_with_session()
-        columns = [{"name": "C", "title": "C"}]
-        rows = [[f"v{i}"] for i in range(10)]
-        mock_table = self._make_table_control(columns, rows,
-                                               total_rows=10, visible_rows=5)
-        # Scrollbar starts at 0, so rows 0-4 are visible
-        result = controller._scroll_table_control_to_row(mock_table, 3)
+    # --- scroll + interaction tests ---
 
-        assert result == 3  # visible index
-        # Scrollbar should NOT have been moved
-        assert mock_table.VerticalScrollbar.Position == 0
+    def test_scroll_to_row_already_visible(self):
+        """_scroll_table_control_to_row returns visible offset when row is already visible."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL", "title": "Col"}]
+        rows = [[f"v{i}"] for i in range(50)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=50, visible_rows=10,
+            initial_scroll_position=20,
+        )
+
+        vis_offset = controller._scroll_table_control_to_row(mock_table, 25)
+
+        assert vis_offset == 5  # 25 - 20
+        # Scrollbar should NOT have been changed
+        assert mock_table.VerticalScrollbar.Position == 20
 
     def test_scroll_to_row_needs_scrolling(self):
-        """_scroll_table_control_to_row scrolls and returns correct visible index."""
+        """_scroll_table_control_to_row scrolls and returns visible offset."""
         controller = self._make_controller_with_session()
-        columns = [{"name": "C", "title": "C"}]
-        rows = [[f"v{i}"] for i in range(10)]
-        mock_table = self._make_table_control(columns, rows,
-                                               total_rows=10, visible_rows=5)
-        # Maximum is 10-5=5, so scrolling to row 7 clamps to pos=5
-        # Visible rows at pos=5 are 5,6,7,8,9 -> row 7 is at visible index 2
-        result = controller._scroll_table_control_to_row(mock_table, 7)
+        columns = [{"name": "COL", "title": "Col"}]
+        rows = [[f"v{i}"] for i in range(100)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=100, visible_rows=10,
+            initial_scroll_position=0,
+        )
 
-        assert result == 2  # Row 7 at visible index 2 (pos=5, 7-5=2)
-        assert mock_table.VerticalScrollbar.Position == 5  # Clamped to Maximum
+        vis_offset = controller._scroll_table_control_to_row(mock_table, 50)
+
+        assert vis_offset == 0  # 50 - 50 (scrollbar set to 50)
+        assert mock_table.VerticalScrollbar.Position == 50
+
+    def test_select_table_row_from_scrolled_position(self):
+        """select_table_row scrolls and selects the correct row."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "FIELD", "title": "Field"}]
+        rows = [[f"row_{i}"] for i in range(100)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=100, visible_rows=10,
+            initial_scroll_position=60,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.select_table_row("wnd[0]/usr/tblTEST", 75)
+
+        assert result["status"] == "success"
+        assert result["selected_row"] == 75
+        # Row 75 is at scroll position 60, visible offset = 75 - 60 = 15,
+        # but 15 >= 10 (visible), so it scrolls to 75, offset = 0
+        assert mock_table.VerticalScrollbar.Position == 75
+        # GetAbsoluteRow uses absolute row index
+        mock_table.GetAbsoluteRow.assert_called_with(75)
+        assert mock_table.GetAbsoluteRow(75).Selected is True
+
+    def test_double_click_cell_from_scrolled_position(self):
+        """double_click_table_cell scrolls and focuses the correct cell."""
+        from mcp_sap_gui.sap_controller import VKey
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL_A", "title": "A"},
+                    {"name": "COL_B", "title": "B"}]
+        rows = [[f"a{i}", f"b{i}"] for i in range(80)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=80, visible_rows=10,
+            initial_scroll_position=0,
+        )
+        controller._session.findById.return_value = mock_table
+        controller.get_screen_info = MagicMock(return_value={"transaction": "SM30"})
+
+        result = controller.double_click_table_cell("wnd[0]/usr/tblTEST", 40, "COL_B")
+
+        assert result["status"] == "double_clicked"
+        # Scrolled to position 40, visible offset = 0, column COL_B = index 1
+        assert mock_table.VerticalScrollbar.Position == 40
+        mock_table.GetCell.assert_called_with(0, 1)
+

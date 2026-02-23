@@ -782,16 +782,20 @@ class SAPGUIController:
             return None
 
     def _scroll_table_control_to_row(self, table, abs_row: int) -> int:
-        """Scroll a GuiTableControl so abs_row is visible. Returns visible row index."""
+        """Scroll a GuiTableControl so *abs_row* is visible.
+
+        Returns the **visible-row offset** to pass to ``GetCell()``.
+        ``GetCell`` uses visible-row indexing (0 = first visible row),
+        so callers must use the returned offset, not the original
+        *abs_row*.
+        """
         visible = table.VisibleRowCount
         scrollbar = table.VerticalScrollbar
         current_top = scrollbar.Position
 
-        # Check if row is already visible
         if current_top <= abs_row < current_top + visible:
-            return abs_row - current_top
+            return abs_row - current_top  # already visible
 
-        # Scroll to make the row visible at top
         new_pos = max(scrollbar.Minimum, min(abs_row, scrollbar.Maximum))
         scrollbar.Position = new_pos
         return abs_row - new_pos
@@ -889,45 +893,55 @@ class SAPGUIController:
         }
 
     def _read_table_control(self, table, table_id: str, max_rows: int) -> Dict[str, Any]:
-        """Read data from a GuiTableControl with scrolling support."""
+        """Read visible rows from a GuiTableControl.
+
+        Reads from the current scroll position without changing it.  This
+        preserves the user's navigated position (e.g. after "Position..." in
+        SPRO/SM30) and avoids crashing SAP GUI's COM server — programmatic
+        scrollbar.Position changes can destabilize certain table views.
+
+        The read is capped at VisibleRowCount.  GuiTableControl.RowCount often
+        includes padding rows (empty rows that fill the visible area beyond
+        the actual data), so reading stops early when an all-empty row is
+        encountered.
+        """
         columns_info = self._get_table_control_columns(table)
         column_names = [c["name"] for c in columns_info]
         col_count = len(columns_info)
 
         total_rows = table.RowCount
         visible_rows = table.VisibleRowCount
-        rows_to_read = min(total_rows, max_rows)
 
         data = []
-        if rows_to_read > 0 and col_count > 0:
+        if total_rows > 0 and col_count > 0:
             scrollbar = table.VerticalScrollbar
-            abs_row = 0
+            start_position = scrollbar.Position
+            rows_to_read = min(visible_rows, max_rows)
 
-            while abs_row < rows_to_read:
-                # Scroll so abs_row is visible (clamp to Maximum)
-                scroll_pos = min(abs_row, scrollbar.Maximum)
-                scrollbar.Position = scroll_pos
-
-                # Determine the visible index range to read
-                start_vis = abs_row - scroll_pos
-                end_vis = min(visible_rows, start_vis + rows_to_read - abs_row)
-
-                for vis_idx in range(start_vis, end_vis):
-                    row_data = {}
-                    for col_idx in range(col_count):
-                        try:
-                            cell = table.GetCell(vis_idx, col_idx)
-                            row_data[column_names[col_idx]] = self._read_cell_value(cell)
-                        except Exception:
-                            row_data[column_names[col_idx]] = None
-                    data.append(row_data)
-                    abs_row += 1
+            for vis_idx in range(rows_to_read):
+                row_data = {}
+                all_empty = True
+                for col_idx in range(col_count):
+                    try:
+                        cell = table.GetCell(vis_idx, col_idx)
+                        value = self._read_cell_value(cell)
+                    except Exception:
+                        value = None
+                    row_data[column_names[col_idx]] = value
+                    if value is not None and value != "":
+                        all_empty = False
+                if all_empty:
+                    break
+                data.append(row_data)
+        else:
+            start_position = 0
 
         return {
             "table_id": table_id,
             "table_type": "GuiTableControl",
             "table_field_name": getattr(table, 'TableFieldName', ''),
             "total_rows": total_rows,
+            "first_visible_row": start_position,
             "visible_rows": visible_rows,
             "rows_returned": len(data),
             "columns": column_names,
@@ -1084,16 +1098,26 @@ class SAPGUIController:
             return {"grid_id": grid_id, "menu_item_id": menu_item_id, "error": str(e)}
 
     def select_table_row(self, table_id: str, row: int) -> Dict[str, Any]:
-        """Select a row in a table/grid."""
+        """Select a row in a table/grid.
+
+        For GuiTableControl, ``row`` is an **absolute** row index.  The
+        table is scrolled if necessary to make the row visible, then
+        ``GetAbsoluteRow(row).Selected`` is set.
+
+        Per the SAP GUI Scripting API, ``GetAbsoluteRow`` uses absolute
+        indexing (independent of scroll position), unlike ``Rows()``
+        which resets after scrolling.  Confirmed via SAP GUI script
+        recording which produces ``getAbsoluteRow(N).selected = true``.
+        """
         self._require_session()
 
         try:
             table = self._session.findById(table_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
-                visible_row = self._scroll_table_control_to_row(table, row)
-                cell = table.GetCell(visible_row, 0)
-                cell.SetFocus()
+                self._scroll_table_control_to_row(table, row)
+                # GetAbsoluteRow: absolute indexing, not affected by scroll
+                table.GetAbsoluteRow(row).Selected = True
             else:
                 table.selectedRows = str(row)
 
@@ -1106,18 +1130,28 @@ class SAPGUIController:
             return {"table_id": table_id, "error": str(e)}
 
     def double_click_table_cell(self, table_id: str, row: int, column: str) -> Dict[str, Any]:
-        """Double-click a cell in a table/grid."""
+        """Double-click a cell in a table/grid.
+
+        For GuiTableControl, ``row`` is an **absolute** row index.  The
+        table is scrolled if necessary, the row is selected via
+        ``GetAbsoluteRow``, focus is set on the target cell via
+        ``GetCell`` (visible-row indexing), and F2 is sent to the
+        owning window.
+        """
         self._require_session()
 
         try:
             table = self._session.findById(table_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
+                vis_row = self._scroll_table_control_to_row(table, row)
                 col_idx = self._resolve_table_control_column(table, column)
-                visible_row = self._scroll_table_control_to_row(table, row)
-                cell = table.GetCell(visible_row, col_idx)
+                table.GetAbsoluteRow(row).Selected = True
+                cell = table.GetCell(vis_row, col_idx)
                 cell.SetFocus()
-                self._session.findById("wnd[0]").sendVKey(VKey.F2)
+                # Send F2 to the window that owns this table
+                wnd_id = table_id.split("/usr")[0]
+                self._session.findById(wnd_id).sendVKey(VKey.F2)
             else:
                 table.DoubleClick(row, column)
 
@@ -1150,9 +1184,9 @@ class SAPGUIController:
             table = self._session.findById(grid_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
+                vis_row = self._scroll_table_control_to_row(table, row)
                 col_idx = self._resolve_table_control_column(table, column)
-                visible_row = self._scroll_table_control_to_row(table, row)
-                cell = table.GetCell(visible_row, col_idx)
+                cell = table.GetCell(vis_row, col_idx)
                 cell.Text = value
             else:
                 table.ModifyCell(row, column, value)
@@ -1185,9 +1219,9 @@ class SAPGUIController:
             table = self._session.findById(grid_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
+                vis_row = self._scroll_table_control_to_row(table, row)
                 col_idx = self._resolve_table_control_column(table, column)
-                visible_row = self._scroll_table_control_to_row(table, row)
-                cell = table.GetCell(visible_row, col_idx)
+                cell = table.GetCell(vis_row, col_idx)
                 cell.SetFocus()
             else:
                 table.SetCurrentCell(row, column)

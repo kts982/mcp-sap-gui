@@ -226,9 +226,17 @@ Both are supported by `sap_read_table` and other table tools — auto-detected v
 | **Example ID** | `wnd[0]/usr/cntlGRID/shellcont/shell` | `wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS` |
 | **Common in** | Reports, list displays | SPRO/customizing, SM30 table maintenance |
 | **Cell access** | `GetCellValue(row, colName)` | `GetCell(visRow, colIdx)` → `.Text` |
+| **Row selection** | `selectedRows = "row"` | `GetAbsoluteRow(absRow).Selected = True` |
 | **Column names** | `ColumnOrder(i)` collection | From `GetCell(0, i).Name` (NOT from Columns collection) |
 | **Scrolling** | Internal (all rows accessible) | Manual via `VerticalScrollbar.Position` |
+| **Reading** | All rows accessible directly | Visible rows only (no scroll during read) |
 | **Toolbar** | Built-in ALV toolbar | Standard `tbar[1]` buttons + menu bar |
+
+**Important GuiTableControl indexing** (from SAP GUI Scripting API docs):
+- `GetCell(row, col)` uses **visible-row** indexing (0 = first visible row). Row must be visible or an exception is raised.
+- `GetAbsoluteRow(row)` uses **absolute** indexing (independent of scroll position). Has a `Selected` property for row selection.
+- `Rows(idx)` uses visible-row indexing (resets after scroll).
+- Rapid `VerticalScrollbar.Position` changes can crash the COM server. Read operations avoid scrolling; interaction operations perform a single scroll to make the target row visible.
 
 **Important**: GuiTableColumn objects "do not support properties like id or name" per the API docs. Accessing `col.Name` can crash SAP GUI. Column names must be read from cell objects instead.
 
