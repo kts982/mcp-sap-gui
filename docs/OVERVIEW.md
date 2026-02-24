@@ -19,15 +19,19 @@ A senior consultant's time is spent 60–70% on navigation and data entry, and 3
 
 ## The Solution
 
-Claude connects to SAP GUI through 34 specialized tools and can:
+Claude connects to SAP GUI through 50 specialized tools and can:
 
 | Capability | What It Means |
 |-----------|---------------|
-| **Read any screen** | Fields, tables, trees, status messages — structured data, not screenshots |
-| **Navigate freely** | Execute transactions, press buttons, use menus, handle popups |
-| **Work with tables** | Read ALV grids and classic tables, filter, sort, scroll through results |
+| **Read any screen** | Fields (with metadata), tables, trees, status messages — structured data, not screenshots |
+| **Navigate freely** | Execute transactions, press buttons, use menus, send function keys (F1-F12, Shift+F, Ctrl+) |
+| **Handle popups** | Detect modal dialogs, read their content and buttons, respond appropriately |
+| **Work with ALV grids** | Read data, get toolbar buttons, sort by column, inspect cell metadata, select rows |
+| **Work with TableControls** | Read data, scroll through pages, get row metadata, select rows |
 | **Work with trees** | Navigate SPRO-style tree structures, expand/collapse, drill into nodes |
-| **Interact with all UI elements** | Text fields, checkboxes, radio buttons, dropdowns, tabs |
+| **Interact with all UI elements** | Text fields, checkboxes, radio buttons, dropdowns, tabs, text editors, comboboxes |
+| **Discover screen layout** | Enumerate all elements, read toolbar buttons, identify input fields |
+| **Read shell content** | Extract HTML from embedded viewers and other GuiShell subtypes |
 | **Capture evidence** | Take screenshots at any point for documentation |
 | **Respect security** | Read-only mode, transaction blocklists, transaction whitelists |
 
@@ -47,7 +51,7 @@ Claude connects to SAP GUI through 34 specialized tools and can:
 └─────────────────────┘                    └──────────┬───────────┘
                                                       │
                                               MCP Protocol
-                                            (34 SAP tools)
+                                            (50 SAP tools)
                                                       │
                                            ┌──────────▼───────────┐
                                            │                      │
@@ -193,9 +197,28 @@ No SAP system modifications required. No ABAP development. No RFC connections. U
 
 ### Phase 1: MCP Server (Current)
 
-The foundation — 34 tools covering all SAP GUI interactions. Works with Claude Code (CLI) and Claude Desktop today.
+The foundation — 50 tools covering SAP GUI interactions including:
+- Full field, table, and tree support
+- Both ALV grid and TableControl parity
+- Popup detection and handling
+- Toolbar discovery
+- Shell content reading (HTMLViewer, etc.)
+- Extended keyboard support (Shift+F, Ctrl+ combos)
 
-**Status: Complete and tested against live SAP systems.**
+Works with Claude Code (CLI) and Claude Desktop today.
+
+**Status: Complete and tested (146 unit tests) against live SAP systems.**
+
+### Phase 1.5: Slash Commands (Current)
+
+Built-in workflow commands for common SAP tasks:
+- `/sap-explore` — Auto-discover and summarize the current SAP screen
+- `/sap-table-dump` — Read all rows from a table, handling pagination for both ALV and TableControl
+- `/sap-status` — Quick session status check with screenshot
+
+These are Claude Code custom commands that orchestrate multiple MCP tools into useful workflows.
+
+**Status: Available in `.claude/commands/`.**
 
 ### Phase 2: Real-World Consulting Use
 
