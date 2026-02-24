@@ -1,8 +1,8 @@
 """Tests for MCP SAP GUI Server - security logic, routing, and configuration."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers to import server module with mocked win32com
@@ -20,6 +20,7 @@ def mock_win32com():
 def srv(mock_win32com):
     """Import and configure the server module with a fresh controller."""
     import importlib
+
     import mcp_sap_gui.server as _srv
     # Reload to pick up mocked win32com
     importlib.reload(_srv)
@@ -34,6 +35,7 @@ def srv(mock_win32com):
 def readonly_srv(mock_win32com):
     """Import and configure the server module in read-only mode."""
     import importlib
+
     import mcp_sap_gui.server as _srv
     importlib.reload(_srv)
 
@@ -69,6 +71,17 @@ class TestTransactionBlocking:
         assert srv._is_transaction_blocked("/OSU01") is True
         assert srv._is_transaction_blocked("/oSU01") is True
 
+    def test_blocked_with_star_prefix(self, srv):
+        """Stripping /* prefix still detects blocked transaction."""
+        assert srv._is_transaction_blocked("/*SU01") is True
+        assert srv._is_transaction_blocked("/*SE16N") is True
+
+    def test_blocked_with_whitespace(self, srv):
+        """Leading/trailing whitespace is stripped before checking."""
+        assert srv._is_transaction_blocked("  SU01") is True
+        assert srv._is_transaction_blocked("SU01  ") is True
+        assert srv._is_transaction_blocked(" /NSU01 ") is True
+
     def test_allowed_transaction(self, srv):
         """Non-blocked transactions are allowed."""
         assert srv._is_transaction_blocked("MM03") is False
@@ -96,6 +109,7 @@ class TestTransactionBlocking:
     def test_allowlist_mode(self, mock_win32com):
         """When allowed_transactions is set, only those are allowed."""
         import importlib
+
         import mcp_sap_gui.server as _srv
         importlib.reload(_srv)
         _srv.config = _srv.ServerConfig(allowed_transactions=["MM03", "VA03"])
@@ -108,6 +122,7 @@ class TestTransactionBlocking:
     def test_allowlist_with_prefix(self, mock_win32com):
         """Allowlist works with /N and /O prefixes."""
         import importlib
+
         import mcp_sap_gui.server as _srv
         importlib.reload(_srv)
         _srv.config = _srv.ServerConfig(allowed_transactions=["MM03"])
@@ -115,6 +130,81 @@ class TestTransactionBlocking:
         assert _srv._is_transaction_blocked("/NMM03") is False
         assert _srv._is_transaction_blocked("/OMM03") is False
         assert _srv._is_transaction_blocked("/NVA01") is True
+
+    def test_allowlist_case_insensitive(self, mock_win32com):
+        """Allowlist is case-insensitive via __post_init__ normalization."""
+        import importlib
+
+        import mcp_sap_gui.server as _srv
+        importlib.reload(_srv)
+        _srv.config = _srv.ServerConfig(allowed_transactions=["mm03", "Va03"])
+
+        assert _srv._is_transaction_blocked("MM03") is False
+        assert _srv._is_transaction_blocked("VA03") is False
+        assert _srv._is_transaction_blocked("VA01") is True
+
+    def test_blocklist_case_insensitive_config(self, mock_win32com):
+        """Blocklist entries are uppercased by __post_init__."""
+        import importlib
+
+        import mcp_sap_gui.server as _srv
+        importlib.reload(_srv)
+        _srv.config = _srv.ServerConfig(blocked_transactions=["su01", "Se16n"])
+
+        assert _srv._is_transaction_blocked("SU01") is True
+        assert _srv._is_transaction_blocked("SE16N") is True
+
+    def test_blocked_transaction_raises_valueerror(self, srv):
+        """sap_execute_transaction raises ValueError (not returns dict) for blocked tcodes."""
+        with pytest.raises(ValueError, match="blocked by security policy"):
+            import asyncio
+            asyncio.new_event_loop().run_until_complete(
+                srv.sap_execute_transaction("SU01")
+            )
+
+
+# ===========================================================================
+# OK-Code Bypass Prevention Tests
+# ===========================================================================
+
+class TestOkCodeBypassPrevention:
+    """Tests for preventing transaction blocklist bypass via OK-code field."""
+
+    @pytest.mark.asyncio
+    async def test_set_field_blocks_su01_on_okcd(self, srv):
+        """sap_set_field blocks SU01 when targeting the OK-code field."""
+        with pytest.raises(ValueError, match="blocked by security policy"):
+            await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "/nSU01")
+
+    @pytest.mark.asyncio
+    async def test_set_field_blocks_okcd_case_insensitive(self, srv):
+        """OK-code bypass check is case-insensitive."""
+        with pytest.raises(ValueError, match="blocked by security policy"):
+            await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "su01")
+
+    @pytest.mark.asyncio
+    async def test_set_field_allows_mm03_on_okcd(self, srv):
+        """sap_set_field allows non-blocked transactions on OK-code field."""
+        # Should not raise - it will fail on the COM call, but not on security check
+        srv.controller = MagicMock()
+        srv.controller.set_field.return_value = {"status": "success"}
+        await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "MM03")
+
+    @pytest.mark.asyncio
+    async def test_set_field_allows_su01_on_non_okcd(self, srv):
+        """sap_set_field allows blocked tcode strings on regular fields."""
+        srv.controller = MagicMock()
+        srv.controller.set_field.return_value = {"status": "success"}
+        await srv.sap_set_field("wnd[0]/usr/txtFIELD", "SU01")
+
+    @pytest.mark.asyncio
+    async def test_batch_fields_blocks_okcd(self, srv):
+        """sap_set_batch_fields blocks blocked transactions on OK-code field."""
+        with pytest.raises(ValueError, match="blocked by security policy"):
+            await srv.sap_set_batch_fields({
+                "wnd[0]/usr/txtFIELD": "hello",
+                "wnd[0]/tbar[0]/okcd": "/NSU01",
+            })
 
 
 # ===========================================================================
@@ -440,6 +530,43 @@ class TestToolRegistration:
         assert "F8" in key_schema["enum"]
         assert len(key_schema["enum"]) == 30
 
+    def test_tool_annotations_present(self, srv):
+        """All tools have annotations with readOnlyHint set."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+
+        read_only_tools = {
+            "sap_connect", "sap_connect_existing", "sap_list_connections",
+            "sap_get_session_info", "sap_get_screen_info", "sap_read_field",
+            "sap_get_combobox_entries", "sap_read_textedit", "sap_read_table",
+            "sap_get_alv_toolbar", "sap_get_column_info", "sap_get_current_cell",
+            "sap_get_table_control_row_info", "sap_get_cell_info",
+            "sap_get_popup_window", "sap_get_toolbar_buttons",
+            "sap_read_shell_content", "sap_read_tree", "sap_find_tree_node_by_path",
+            "sap_get_screen_elements", "sap_screenshot",
+        }
+        destructive_tools = {"sap_execute_transaction"}
+
+        for tool in tools:
+            assert tool.annotations is not None, f"{tool.name} missing annotations"
+            if tool.name in read_only_tools:
+                assert tool.annotations.readOnlyHint is True, (
+                    f"{tool.name} should be readOnly"
+                )
+            elif tool.name in destructive_tools:
+                assert tool.annotations.destructiveHint is True, (
+                    f"{tool.name} should be destructive"
+                )
+            else:
+                # Write tools
+                assert tool.annotations.readOnlyHint is False, (
+                    f"{tool.name} should NOT be readOnly"
+                )
+
 
 # ===========================================================================
 # Screenshot Optimization Tests
@@ -476,8 +603,6 @@ class TestScreenshotOptimization:
         with patch.dict("sys.modules", {"PIL": MagicMock(), "PIL.Image": mock_image_module}):
             with patch("mcp_sap_gui.sap_controller.Image", mock_image_module, create=True):
                 # Patch the import inside the method
-                original_optimize = controller._optimize_screenshot.__func__
-
                 def patched_optimize(self_arg, fp):
                     img = mock_image_module.open(fp)
                     if img.width > 1920:
@@ -494,9 +619,6 @@ class TestScreenshotOptimization:
 
     def test_optimize_downscales_large_images(self, mock_win32com, tmp_path):
         """Images wider than 1920px are downscaled."""
-        from mcp_sap_gui.sap_controller import SAPGUIController
-        controller = SAPGUIController()
-
         mock_image = MagicMock()
         mock_image.width = 3840
         mock_image.height = 2160
@@ -512,8 +634,12 @@ class TestScreenshotOptimization:
 
         filepath = str(tmp_path / "large.png")
 
-        with patch("builtins.__import__", side_effect=lambda name, *args, **kwargs:
-                    mock_pil if name == "PIL.Image" else __builtins__.__import__(name, *args, **kwargs)):
+        def _import(name, *args, **kwargs):
+            if name == "PIL.Image":
+                return mock_pil
+            return __builtins__.__import__(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=_import):
             # Directly test the resize logic
             img = mock_pil.open(filepath)
             if img.width > 1920:

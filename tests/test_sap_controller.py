@@ -1,7 +1,8 @@
 """Tests for SAP GUI Controller."""
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 class TestSAPGUIController:
@@ -12,6 +13,7 @@ class TestSAPGUIController:
         with patch.dict('sys.modules', {'win32com': None, 'win32com.client': None}):
             # Force reimport
             import importlib
+
             from mcp_sap_gui import sap_controller
             importlib.reload(sap_controller)
 
@@ -26,10 +28,7 @@ class TestSAPGUIController:
 
     def test_require_session_raises_when_not_connected(self):
         """Test that operations fail when not connected."""
-        from mcp_sap_gui.sap_controller import (
-            SAPGUIController,
-            SAPGUINotConnectedError
-        )
+        from mcp_sap_gui.sap_controller import SAPGUIController, SAPGUINotConnectedError
         controller = SAPGUIController()
 
         with pytest.raises(SAPGUINotConnectedError):
@@ -466,6 +465,121 @@ class TestGridEnhancements:
         assert result["buttons"][0]["tooltip"] == ""
         assert result["buttons"][0]["enabled"] is True
 
+    def test_select_alv_context_menu_item_select_by_text(self):
+        """select_by='text' uses SelectContextMenuItemByText."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        controller._session.findById.return_value = mock_grid
+        controller.get_screen_info = MagicMock(return_value={"transaction": "/SCWM/MON"})
+
+        result = controller.select_alv_context_menu_item(
+            "wnd[0]/usr/grid",
+            "Confirm WT in Foreground",
+            select_by="text",
+        )
+
+        assert result["status"] == "selected"
+        mock_grid.SelectContextMenuItemByText.assert_called_once_with("Confirm WT in Foreground")
+
+    def test_select_alv_context_menu_item_select_by_position(self):
+        """select_by='position' uses SelectContextMenuItemByPosition."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        controller._session.findById.return_value = mock_grid
+        controller.get_screen_info = MagicMock(return_value={"transaction": "/SCWM/MON"})
+
+        result = controller.select_alv_context_menu_item(
+            "wnd[0]/usr/grid",
+            "2\\1",
+            select_by="position",
+        )
+
+        assert result["status"] == "selected"
+        mock_grid.SelectContextMenuItemByPosition.assert_called_once_with("2\\1")
+
+    def test_select_alv_context_menu_item_select_by_id_toolbar_menu(self):
+        """select_by='id' uses SelectToolbarMenuItem for toolbar menus."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        controller._session.findById.return_value = mock_grid
+        controller.get_screen_info = MagicMock(return_value={"transaction": "/SCWM/MON"})
+
+        result = controller.select_alv_context_menu_item(
+            "wnd[0]/usr/grid",
+            "@M00006",
+            toolbar_button_id="&MB_ACTIONS",
+            select_by="id",
+        )
+
+        assert result["status"] == "selected"
+        mock_grid.PressToolbarContextButton.assert_called_once_with("&MB_ACTIONS")
+        mock_grid.SelectToolbarMenuItem.assert_called_once_with("@M00006")
+
+    def test_select_alv_context_menu_item_select_by_auto_space_heuristic(self):
+        """select_by='auto' keeps space/text and function-code fallback behavior."""
+        controller = self._make_controller_with_session()
+        controller.get_screen_info = MagicMock(return_value={"transaction": "/SCWM/MON"})
+
+        # Space in menu_item_id -> treat as visible text directly.
+        text_grid = MagicMock()
+        controller._session.findById.return_value = text_grid
+        text_result = controller.select_alv_context_menu_item(
+            "wnd[0]/usr/grid",
+            "Confirm WT in Foreground",
+            select_by="auto",
+        )
+
+        assert text_result["status"] == "selected"
+        text_grid.SelectContextMenuItemByText.assert_called_once_with("Confirm WT in Foreground")
+
+        # No spaces -> try function-code APIs first, then fallback to text.
+        id_grid = MagicMock()
+        id_grid.SelectContextMenuItem.side_effect = Exception("Not a context-menu ID")
+        id_grid.SelectToolbarMenuItem.side_effect = Exception("Not a toolbar-menu ID")
+        controller._session.findById.return_value = id_grid
+        id_result = controller.select_alv_context_menu_item(
+            "wnd[0]/usr/grid",
+            "@M00006",
+            select_by="auto",
+        )
+
+        assert id_result["status"] == "selected"
+        id_grid.SelectContextMenuItem.assert_called_once_with("@M00006")
+        id_grid.SelectToolbarMenuItem.assert_called_once_with("@M00006")
+        id_grid.SelectContextMenuItemByText.assert_called_once_with("@M00006")
+
+    @pytest.mark.parametrize(
+        ("select_by", "menu_item_id", "expected_method"),
+        [
+            ("auto", "@M00006", "SelectToolbarMenuItem"),
+            ("id", "@M00006", "SelectToolbarMenuItem"),
+            ("text", "Confirm WT in Foreground", "SelectContextMenuItemByText"),
+            ("position", "2\\1", "SelectContextMenuItemByPosition"),
+        ],
+    )
+    def test_select_alv_context_menu_item_toolbar_button_all_modes(
+        self,
+        select_by,
+        menu_item_id,
+        expected_method,
+    ):
+        """toolbar_button_id should be honored for every select_by mode."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        controller._session.findById.return_value = mock_grid
+        controller.get_screen_info = MagicMock(return_value={"transaction": "/SCWM/MON"})
+
+        result = controller.select_alv_context_menu_item(
+            "wnd[0]/usr/grid",
+            menu_item_id,
+            toolbar_button_id="&MB_ACTIONS",
+            select_by=select_by,
+        )
+
+        assert result["status"] == "selected"
+        mock_grid.PressToolbarContextButton.assert_called_once_with("&MB_ACTIONS")
+        getattr(mock_grid, expected_method).assert_called_once_with(menu_item_id)
+
 
 class TestALVToolbarButtonType:
     """Tests for toolbar button type mapping fix."""
@@ -669,7 +783,9 @@ class TestExecuteTransactionImproved:
         controller._session.StartTransaction.side_effect = Exception("Not available")
         mock_okcd = MagicMock()
         mock_window = MagicMock()
-        controller._session.findById.side_effect = lambda id: mock_okcd if "okcd" in id else mock_window
+        controller._session.findById.side_effect = (
+            lambda id: mock_okcd if "okcd" in id else mock_window
+        )
         controller.get_screen_info = MagicMock(return_value={"transaction": "MM03"})
 
         result = controller.execute_transaction("MM03")
@@ -683,14 +799,47 @@ class TestExecuteTransactionImproved:
         controller = self._make_controller_with_session()
         mock_okcd = MagicMock()
         mock_window = MagicMock()
-        controller._session.findById.side_effect = lambda id: mock_okcd if "okcd" in id else mock_window
+        controller._session.findById.side_effect = (
+            lambda id: mock_okcd if "okcd" in id else mock_window
+        )
         controller.get_screen_info = MagicMock(return_value={"transaction": "MM03"})
 
-        result = controller.execute_transaction("/oMM03")
+        controller.execute_transaction("/oMM03")
 
         # StartTransaction should NOT be called for /o prefix
         controller._session.StartTransaction.assert_not_called()
         assert mock_okcd.text == "/oMM03"
+
+    def test_uppercase_n_prefix_stripped(self):
+        """Uppercase /N prefix is stripped from the returned transaction."""
+        controller = self._make_controller_with_session()
+        controller.get_screen_info = MagicMock(return_value={"transaction": "MM03"})
+
+        result = controller.execute_transaction("/NMM03")
+        assert result["transaction"] == "MM03"
+
+    def test_uppercase_o_prefix_stripped(self):
+        """Uppercase /O prefix is stripped from the returned transaction."""
+        controller = self._make_controller_with_session()
+        mock_okcd = MagicMock()
+        mock_window = MagicMock()
+        controller._session.findById.side_effect = (
+            lambda id: mock_okcd if "okcd" in id else mock_window
+        )
+        controller.get_screen_info = MagicMock(return_value={"transaction": "MM03"})
+
+        result = controller.execute_transaction("/OMM03")
+        assert result["transaction"] == "MM03"
+
+    def test_star_prefix_stripped(self):
+        """/* prefix is stripped from the returned transaction."""
+        controller = self._make_controller_with_session()
+        controller.get_screen_info = MagicMock(
+            return_value={"transaction": "MM03"}
+        )
+
+        result = controller.execute_transaction("/*MM03")
+        assert result["transaction"] == "MM03"
 
 
 class TestActiveWindowImproved:
@@ -1126,7 +1275,6 @@ class TestGuiTableControl:
 
     def test_double_click_table_cell_guitablecontrol(self):
         """double_click_table_cell uses SetFocus + F2 for GuiTableControl."""
-        from mcp_sap_gui.sap_controller import VKey
         controller = self._make_controller_with_session()
         columns = [{"name": "COL_A", "title": "A"},
                     {"name": "COL_B", "title": "B"}]
@@ -1166,8 +1314,6 @@ class TestGuiTableControl:
         result = controller.modify_cell("wnd[0]/usr/tblTEST", 0, "DESC", "New Value")
 
         assert result["status"] == "success"
-        # Verify the cell's Text was set
-        cell = mock_table.GetCell(0, 0)
         # GetCell returns a new mock each time due to side_effect,
         # so check the call was made
         mock_table.GetCell.assert_called_with(0, 0)
@@ -1281,7 +1427,6 @@ class TestGuiTableControl:
 
     def test_double_click_cell_from_scrolled_position(self):
         """double_click_table_cell scrolls and focuses the correct cell."""
-        from mcp_sap_gui.sap_controller import VKey
         controller = self._make_controller_with_session()
         columns = [{"name": "COL_A", "title": "A"},
                     {"name": "COL_B", "title": "B"}]
@@ -1542,7 +1687,10 @@ class TestTextedit:
         """set_textedit falls back to SetUnprotectedTextPart on Text failure."""
         controller = self._make_controller_with_session()
         mock_te = MagicMock()
-        type(mock_te).Text = property(lambda s: "", lambda s, v: (_ for _ in ()).throw(Exception("Protected")))
+        def _raise(s, v):
+            raise Exception("Protected")
+
+        type(mock_te).Text = property(lambda s: "", _raise)
         controller._session.findById.return_value = mock_te
 
         result = controller.set_textedit("wnd[0]/usr/txtEdit", "Fallback text")

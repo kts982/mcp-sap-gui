@@ -20,19 +20,18 @@ Security Note:
 import asyncio
 import base64
 import logging
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, List, Literal
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import List, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP, Image
+from mcp.types import ToolAnnotations
 
 from .sap_controller import (
     SAPGUIController,
-    SAPGUIError,
-    SAPGUINotAvailableError,
-    SAPGUINotConnectedError,
     VKey,
-    SessionInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,12 +61,47 @@ class ServerConfig:
     default_language: str = "EN"
     max_table_rows: int = 500
 
+    def __post_init__(self):
+        self.blocked_transactions = [t.upper() for t in self.blocked_transactions]
+        if self.allowed_transactions is not None:
+            self.allowed_transactions = [t.upper() for t in self.allowed_transactions]
+
+
+# ---------------------------------------------------------------------------
+# Tool annotation presets
+# ---------------------------------------------------------------------------
+
+_READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
+_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
+_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def _lifespan(server: FastMCP) -> AsyncIterator[None]:
+    """Create the thread pool on startup, clean up on shutdown."""
+    global _executor
+    _executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        yield
+    finally:
+        if controller is not None:
+            try:
+                _executor.submit(controller.disconnect).result(timeout=5)
+            except Exception:
+                pass
+        _executor.shutdown(wait=False)
+        _executor = None
+
 
 # ---------------------------------------------------------------------------
 # Module-level state
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP("mcp-sap-gui")
+mcp = FastMCP("mcp-sap-gui", lifespan=_lifespan)
 controller: Optional[SAPGUIController] = None
 config = ServerConfig()
 _executor: Optional[ThreadPoolExecutor] = None
@@ -91,9 +125,21 @@ def _check_write():
         raise ValueError("Write operations disabled in read-only mode")
 
 
+def _check_okcode_bypass(field_id: str, value: str):
+    """Block attempts to execute blocked transactions via the OK-code field."""
+    if field_id.endswith("/tbar[0]/okcd") and _is_transaction_blocked(value):
+        raise ValueError(
+            f"Transaction {value} is blocked by security policy "
+            f"(attempted via OK-code field)"
+        )
+
+
 def _is_transaction_blocked(tcode: str) -> bool:
     """Check if a transaction is blocked by security policy."""
-    tcode_upper = tcode.upper().removeprefix("/N").removeprefix("/O")
+    tcode_upper = (
+        tcode.strip().upper()
+        .removeprefix("/N").removeprefix("/O").removeprefix("/*")
+    )
 
     # Check blocklist
     if tcode_upper in config.blocked_transactions:
@@ -142,7 +188,7 @@ def _to_dict(obj):
 # Connection tools
 # ===========================================================================
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_connect(
     system_description: str,
     client: str | None = None,
@@ -150,7 +196,9 @@ async def sap_connect(
     password: str | None = None,
     language: str | None = None,
 ) -> dict:
-    """Connect to an SAP system by its name in SAP Logon Pad. Optionally provide credentials for automatic login."""
+    """Connect to an SAP system by its name in SAP Logon Pad.
+
+    Optionally provide credentials for automatic login."""
     kwargs: dict[str, str] = {"system_description": system_description}
     for key, val in [("client", client), ("user", user),
                      ("password", password), ("language", language)]:
@@ -159,7 +207,7 @@ async def sap_connect(
     return _to_dict(await _com(lambda: controller.connect(**kwargs)))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_connect_existing(
     connection_index: int = 0,
     session_index: int = 0,
@@ -170,13 +218,13 @@ async def sap_connect_existing(
     ))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_list_connections() -> dict:
     """List all open SAP connections and sessions"""
     return await _com(controller.list_connections)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_session_info() -> dict:
     """Get information about the current SAP session (system, client, user, transaction, screen)"""
     return _to_dict(await _com(controller.get_session_info))
@@ -186,16 +234,16 @@ async def sap_get_session_info() -> dict:
 # Navigation tools
 # ===========================================================================
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE)
 async def sap_execute_transaction(tcode: str) -> dict:
     """Execute an SAP transaction code (e.g., MM03, VA01, SE80)"""
     _check_write()
     if _is_transaction_blocked(tcode):
-        return {"error": f"Transaction {tcode} is blocked by security policy"}
+        raise ValueError(f"Transaction {tcode} is blocked by security policy")
     return await _com(lambda: controller.execute_transaction(tcode))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_send_key(
     key: Literal[
         "Enter", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8",
@@ -206,15 +254,19 @@ async def sap_send_key(
         "Ctrl+F", "Ctrl+G", "Ctrl+P",
     ],
 ) -> dict:
-    """Send a keyboard key. Common keys: Enter, F1 (Help), F3 (Back), F4 (Search help), F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel). Also supports Shift+F1..F9 and Ctrl+F (Find), Ctrl+G (Continue search), Ctrl+P (Print)."""
+    """Send a keyboard key.
+
+    Common keys: Enter, F1 (Help), F3 (Back), F4 (Search help),
+    F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel).
+    Also supports Shift+F1..F9 and Ctrl+F, Ctrl+G, Ctrl+P."""
     _check_write()
     vkey = _parse_key(key)
     return await _com(lambda: controller.send_vkey(vkey))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_screen_info() -> dict:
-    """Get information about the current SAP screen (transaction, program, screen number, title, status message).
+    """Get current SAP screen info (transaction, program, screen number, title, status).
 
     Reads from ``session.ActiveWindow`` so the response always reflects
     what the user sees.  The ``active_window`` field tells you which
@@ -231,88 +283,100 @@ async def sap_get_screen_info() -> dict:
 # Field tools
 # ===========================================================================
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_read_field(field_id: str) -> dict:
     """Read the value of a field on the current SAP screen"""
     return await _com(lambda: controller.read_field(field_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_set_field(field_id: str, value: str) -> dict:
     """Set a value in a field on the current SAP screen"""
     _check_write()
+    _check_okcode_bypass(field_id, value)
     return await _com(lambda: controller.set_field(field_id, value))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_press_button(button_id: str) -> dict:
     """Press a button on the current SAP screen"""
     _check_write()
     return await _com(lambda: controller.press_button(button_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_menu(menu_id: str) -> dict:
-    """Select a menu item from the menu bar (e.g., 'wnd[0]/mbar/menu[1]/menu[0]'). Use sap_get_screen_elements on 'wnd[0]/mbar' to discover available menus."""
+    """Select a menu item from the menu bar.
+
+    Example: 'wnd[0]/mbar/menu[1]/menu[0]'.
+    Use sap_get_screen_elements on 'wnd[0]/mbar' to discover menus."""
     _check_write()
     return await _com(lambda: controller.select_menu(menu_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_checkbox(checkbox_id: str, selected: bool = True) -> dict:
     """Select or deselect a checkbox on the current SAP screen"""
     _check_write()
     return await _com(lambda: controller.select_checkbox(checkbox_id, selected))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_radio_button(radio_id: str) -> dict:
     """Select a radio button on the current SAP screen"""
     _check_write()
     return await _com(lambda: controller.select_radio_button(radio_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_combobox_entry(combobox_id: str, key_or_value: str) -> dict:
     """Select an entry in a combobox/dropdown by its key or display value text"""
     _check_write()
     return await _com(lambda: controller.select_combobox_entry(combobox_id, key_or_value))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_tab(tab_id: str) -> dict:
     """Select a tab in a tab strip control"""
     _check_write()
     return await _com(lambda: controller.select_tab(tab_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_combobox_entries(combobox_id: str) -> dict:
-    """List all entries in a combobox/dropdown. Returns key-value pairs so you know which values are valid."""
+    """List all entries in a combobox/dropdown.
+
+    Returns key-value pairs so you know which values are valid."""
     return await _com(lambda: controller.get_combobox_entries(combobox_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_set_batch_fields(fields: dict) -> dict:
-    """Set multiple field values at once (dict of field_id → value). More efficient than repeated sap_set_field calls."""
+    """Set multiple field values at once (dict of field_id to value).
+
+    More efficient than repeated sap_set_field calls."""
     _check_write()
+    for fid, val in fields.items():
+        _check_okcode_bypass(fid, str(val))
     return await _com(lambda: controller.set_batch_fields(fields))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_read_textedit(textedit_id: str) -> dict:
-    """Read the content of a multiline text editor (GuiTextedit). Returns full text, line count, and individual lines."""
+    """Read the content of a multiline text editor (GuiTextedit).
+
+    Returns full text, line count, and individual lines."""
     return await _com(lambda: controller.read_textedit(textedit_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_set_textedit(textedit_id: str, text: str) -> dict:
     """Set the content of a multiline text editor (GuiTextedit)."""
     _check_write()
     return await _com(lambda: controller.set_textedit(textedit_id, text))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_set_focus(element_id: str) -> dict:
     """Set focus to any screen element by its ID."""
     _check_write()
@@ -323,7 +387,7 @@ async def sap_set_focus(element_id: str) -> dict:
 # Table tools
 # ===========================================================================
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_read_table(table_id: str, max_rows: int = 100) -> dict:
     """Read data from an ALV grid or table on the current screen.
 
@@ -335,42 +399,63 @@ async def sap_read_table(table_id: str, max_rows: int = 100) -> dict:
     return await _com(lambda: controller.read_table(table_id, capped))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_alv_toolbar(grid_id: str) -> dict:
-    """Get all toolbar buttons from an ALV grid. Returns button IDs, texts, and types. Use this to discover available actions."""
+    """Get all toolbar buttons from an ALV grid.
+
+    Returns button IDs, texts, and types. Use this to discover actions."""
     return await _com(lambda: controller.get_alv_toolbar(grid_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_press_alv_toolbar_button(grid_id: str, button_id: str) -> dict:
-    """Press a toolbar button on an ALV grid (e.g., sort, filter, export, custom actions). Use sap_get_alv_toolbar to find button IDs."""
+    """Press a toolbar button on an ALV grid (e.g., sort, filter, export).
+
+    Use sap_get_alv_toolbar to find button IDs."""
     _check_write()
     return await _com(lambda: controller.press_alv_toolbar_button(grid_id, button_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_alv_context_menu_item(
     grid_id: str,
     menu_item_id: str,
     toolbar_button_id: str | None = None,
+    select_by: Literal["auto", "id", "text", "position"] = "auto",
 ) -> dict:
-    """Select an item from an opened ALV context menu. First use sap_press_alv_toolbar_button on a Menu button to open the menu, then use this to select an item. Alternatively, pass toolbar_button_id to open the menu and select the item in one atomic call (recommended)."""
+    """Select an item from an opened ALV context menu.
+
+    First use sap_press_alv_toolbar_button on a Menu button to open it,
+    then use this to select an item. Alternatively, pass toolbar_button_id
+    to open the menu and select in one atomic call (recommended).
+
+    `menu_item_id` can be a technical function code (for example `@M00006`),
+    visible menu text (for example `Confirm WT in Foreground`), or a position
+    descriptor. You can pass human-readable menu text directly.
+    SAP GUI does not expose a way to enumerate GuiGridView context menu items.
+
+    `select_by` controls how selection is performed:
+    - `auto` (default): heuristic based on whether `menu_item_id` has spaces
+    - `id`: function code
+    - `text`: visible menu text
+    - `position`: position descriptor
+    """
     _check_write()
     return await _com(
         lambda: controller.select_alv_context_menu_item(
-            grid_id, menu_item_id, toolbar_button_id
+            grid_id, menu_item_id, toolbar_button_id, select_by
         )
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_table_row(table_id: str, row: int) -> dict:
     """Select a row in a table/grid"""
     _check_write()
     return await _com(lambda: controller.select_table_row(table_id, row))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_double_click_cell(table_id: str, row: int, column: str) -> dict:
     """Double-click a cell in a table/grid (often opens details)"""
     _check_write()
@@ -379,27 +464,27 @@ async def sap_double_click_cell(table_id: str, row: int, column: str) -> dict:
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_modify_cell(grid_id: str, row: int, column: str, value: str) -> dict:
     """Modify the value of a cell in an ALV grid or table control (e.g., for editable grids)"""
     _check_write()
     return await _com(lambda: controller.modify_cell(grid_id, row, column, value))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_set_current_cell(grid_id: str, row: int, column: str) -> dict:
     """Set the current (focused) cell in an ALV grid or table control"""
     _check_write()
     return await _com(lambda: controller.set_current_cell(grid_id, row, column))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_column_info(grid_id: str) -> dict:
-    """Get detailed column information from an ALV grid or table control (names, titles, tooltips)"""
+    """Get detailed column info from an ALV grid or table control."""
     return await _com(lambda: controller.get_column_info(grid_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_current_cell(table_id: str) -> dict:
     """Get the currently focused cell position in an ALV grid or table control."""
     return await _com(lambda: controller.get_current_cell(table_id))
@@ -407,23 +492,29 @@ async def sap_get_current_cell(table_id: str) -> dict:
 
 # ---- TableControl-specific tools ----
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_scroll_table_control(table_id: str, position: int) -> dict:
-    """Scroll a GuiTableControl to a specific row position. Use before sap_read_table to navigate to different sections. Does NOT work on ALV grids (they handle scrolling internally)."""
+    """Scroll a GuiTableControl to a specific row position.
+
+    Use before sap_read_table to navigate to different sections.
+    Does NOT work on ALV grids (they handle scrolling internally)."""
     _check_write()
     return await _com(lambda: controller.scroll_table_control(table_id, position))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_table_control_row_info(
     table_id: str,
     rows: list[int] | None = None,
 ) -> dict:
-    """Get row metadata (selectable, selected) from a GuiTableControl. If rows is omitted, queries all visible rows. Does NOT work on ALV grids."""
+    """Get row metadata (selectable, selected) from a GuiTableControl.
+
+    If rows is omitted, queries all visible rows.
+    Does NOT work on ALV grids."""
     return await _com(lambda: controller.get_table_control_row_info(table_id, rows))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_all_table_control_columns(
     table_id: str,
     select: bool = True,
@@ -435,54 +526,68 @@ async def sap_select_all_table_control_columns(
 
 # ---- ALV-specific tools ----
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_cell_info(grid_id: str, row: int, column: str) -> dict:
-    """Get detailed cell metadata from an ALV grid: value, changeable, color, tooltip, style, max_length. Does NOT work on GuiTableControl."""
+    """Get detailed cell metadata from an ALV grid.
+
+    Returns value, changeable, color, tooltip, style, max_length.
+    Does NOT work on GuiTableControl."""
     return await _com(lambda: controller.get_cell_info(grid_id, row, column))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_press_column_header(grid_id: str, column: str) -> dict:
     """Click a column header in an ALV grid (triggers sort). Does NOT work on GuiTableControl."""
     _check_write()
     return await _com(lambda: controller.press_column_header(grid_id, column))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_all_rows(grid_id: str) -> dict:
     """Select all rows in an ALV grid. Does NOT work on GuiTableControl."""
     _check_write()
     return await _com(lambda: controller.select_all_rows(grid_id))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_multiple_rows(table_id: str, rows: list[int]) -> dict:
-    """Select multiple rows at once in an ALV grid or table control. Pass a list of row indices (e.g., [0, 2, 5])."""
+    """Select multiple rows at once in an ALV grid or table control.
+
+    Pass a list of row indices (e.g., [0, 2, 5])."""
     _check_write()
     return await _com(lambda: controller.select_multiple_rows(table_id, rows))
 
 
 # ---- Popup & dialog tools ----
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_popup_window() -> dict:
-    """Check if a popup/modal dialog is open (wnd[1], wnd[2], etc.). Returns the popup's title, text content, and available buttons so you know how to respond. Returns {popup_exists: false} if no popup."""
+    """Check if a popup/modal dialog is open (wnd[1], wnd[2], etc.).
+
+    Returns the popup's title, text content, and available buttons so
+    you know how to respond. Returns {popup_exists: false} if no popup."""
     return await _com(controller.get_popup_window)
 
 
 # ---- Toolbar discovery ----
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_toolbar_buttons(window_id: str = "wnd[0]") -> dict:
-    """List all buttons on the system toolbar (tbar[0]) and application toolbar (tbar[1]). Returns button IDs, text, tooltip, and enabled state. Useful for discovering available actions on a screen. This is for standard SAP toolbars, NOT ALV toolbars (use sap_get_alv_toolbar for ALV)."""
+    """List all buttons on the system toolbar (tbar[0]) and app toolbar (tbar[1]).
+
+    Returns button IDs, text, tooltip, and enabled state. This is for
+    standard SAP toolbars, NOT ALV (use sap_get_alv_toolbar for ALV)."""
     return await _com(lambda: controller.get_toolbar_buttons(window_id))
 
 
 # ---- Shell content ----
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_read_shell_content(shell_id: str) -> dict:
-    """Read content from a GuiShell subtype (e.g., HTMLViewer). Extracts HTML, URL, or text depending on the shell type. Use sap_get_screen_elements first to find shell element IDs."""
+    """Read content from a GuiShell subtype (e.g., HTMLViewer).
+
+    Extracts HTML, URL, or text depending on the shell type.
+    Use sap_get_screen_elements first to find shell element IDs."""
     return await _com(lambda: controller.read_shell_content(shell_id))
 
 
@@ -490,42 +595,44 @@ async def sap_read_shell_content(shell_id: str) -> dict:
 # Tree tools
 # ===========================================================================
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_read_tree(tree_id: str, max_nodes: int = 200) -> dict:
-    """Read data from a tree control (SAP.TableTreeControl, SAP.ColumnTreeControl, etc.). Returns node hierarchy with texts and column values."""
+    """Read data from a tree control (TableTreeControl, ColumnTreeControl, etc.).
+
+    Returns node hierarchy with texts and column values."""
     capped = min(max_nodes, config.max_table_rows)
     return await _com(lambda: controller.read_tree(tree_id, capped))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_expand_tree_node(tree_id: str, node_key: str) -> dict:
     """Expand a folder node in a tree control to reveal its children"""
     _check_write()
     return await _com(lambda: controller.expand_tree_node(tree_id, node_key))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_collapse_tree_node(tree_id: str, node_key: str) -> dict:
     """Collapse a folder node in a tree control"""
     _check_write()
     return await _com(lambda: controller.collapse_tree_node(tree_id, node_key))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_select_tree_node(tree_id: str, node_key: str) -> dict:
     """Select a node in a tree control"""
     _check_write()
     return await _com(lambda: controller.select_tree_node(tree_id, node_key))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_double_click_tree_node(tree_id: str, node_key: str) -> dict:
     """Double-click a node in a tree control (often opens details or drills down)"""
     _check_write()
     return await _com(lambda: controller.double_click_tree_node(tree_id, node_key))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_double_click_tree_item(tree_id: str, node_key: str, item_name: str) -> dict:
     """Double-click a specific item (column cell) in a tree node row"""
     _check_write()
@@ -534,7 +641,7 @@ async def sap_double_click_tree_item(tree_id: str, node_key: str, item_name: str
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 async def sap_click_tree_link(tree_id: str, node_key: str, item_name: str) -> dict:
     """Click a hyperlink in a tree node item"""
     _check_write()
@@ -543,9 +650,11 @@ async def sap_click_tree_link(tree_id: str, node_key: str, item_name: str) -> di
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_find_tree_node_by_path(tree_id: str, path: str) -> dict:
-    """Find a tree node key by its path (e.g., '2\\1\\2' = 2nd child of root, then 1st child, then 2nd child)"""
+    """Find a tree node key by its path.
+
+    E.g., '2\\1\\2' = 2nd child of root, then 1st child, then 2nd."""
     return await _com(lambda: controller.find_tree_node_by_path(tree_id, path))
 
 
@@ -553,9 +662,11 @@ async def sap_find_tree_node_by_path(tree_id: str, path: str) -> dict:
 # Discovery tools
 # ===========================================================================
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_get_screen_elements(container_id: str = "wnd[0]/usr") -> dict:
-    """Discover all elements on the current SAP screen. Useful for finding field IDs when working with a new screen."""
+    """Discover all elements on the current SAP screen.
+
+    Useful for finding field IDs when working with a new screen."""
     elements = await _com(
         lambda: controller.get_screen_elements(container_id)
     )
@@ -565,7 +676,7 @@ async def sap_get_screen_elements(container_id: str = "wnd[0]/usr") -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def sap_screenshot() -> Image:
     """Take a screenshot of the current SAP window"""
     result = await _com(controller.take_screenshot)

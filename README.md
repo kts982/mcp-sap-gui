@@ -267,7 +267,7 @@ SAP has two different table types. **All table tools auto-detect the type**, and
 |------|-------------|
 | `sap_get_alv_toolbar` | List all toolbar buttons on an ALV grid |
 | `sap_press_alv_toolbar_button` | Press an ALV toolbar button |
-| `sap_select_alv_context_menu_item` | Select from ALV context menu |
+| `sap_select_alv_context_menu_item` | Select from ALV context menu (by function code, text, or position) |
 | `sap_get_cell_info` | Get detailed cell metadata (color, tooltip, style, max_length) |
 | `sap_press_column_header` | Click a column header (triggers sort) |
 | `sap_select_all_rows` | Select all rows |
@@ -342,10 +342,15 @@ This server provides powerful automation capabilities. **Use responsibly.**
    - `SU01`, `SU10`, `SU01D` (User administration)
    - `PFCG` (Role administration)
    - `SE16N` (Direct table access)
+   - Case-insensitive matching; handles `/n`, `/o`, `/*` prefixes and whitespace
 
-2. **Read-Only Mode** - `--read-only` flag disables all mutating operations (field writes, button presses, transaction execution, key sends, tree/table interactions)
+2. **OK-Code Bypass Prevention** - Setting the OK-code field (`tbar[0]/okcd`) to a blocked transaction is also blocked, preventing circumvention of the transaction blocklist
 
-3. **Transaction Whitelist** - `--allowed-transactions` limits to specific t-codes
+3. **Read-Only Mode** - `--read-only` flag disables all mutating operations (field writes, button presses, transaction execution, key sends, tree/table interactions)
+
+4. **Transaction Whitelist** - `--allowed-transactions` limits to specific t-codes
+
+5. **MCP Tool Annotations** - All 50 tools are annotated with `readOnlyHint`/`destructiveHint` per the MCP spec, so clients can display appropriate UI hints
 
 ### Recommendations for Production Use
 
@@ -421,12 +426,18 @@ data = sap_read_table("wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS")
 mcp-sap-gui/
 ├── src/
 │   └── mcp_sap_gui/
-│       ├── __init__.py
-│       ├── server.py         # MCP server implementation
-│       └── sap_controller.py # SAP GUI COM wrapper
+│       ├── __init__.py        # Package exports
+│       ├── server.py          # MCP server implementation (tool definitions)
+│       ├── sap_controller.py  # Facade class (composes all mixins)
+│       ├── models.py          # VKey enum, SessionInfo, exceptions
+│       ├── controller.py      # Base controller (connection, navigation, screen info)
+│       ├── fields.py          # FieldsMixin (read/write fields, buttons, combos)
+│       ├── tables.py          # TablesMixin (ALV grid + TableControl operations)
+│       ├── trees.py           # TreesMixin (tree read, expand, select, click)
+│       └── discovery.py       # DiscoveryMixin (popups, toolbars, screenshots)
 ├── tests/
-│   ├── test_sap_controller.py  # Controller unit tests
-│   └── test_server.py          # Server security & routing tests
+│   ├── test_sap_controller.py # Controller unit tests
+│   └── test_server.py         # Server security & routing tests
 ├── examples/
 │   └── ...
 ├── .mcp.json                  # MCP server config (auto-detected by Claude Code)
