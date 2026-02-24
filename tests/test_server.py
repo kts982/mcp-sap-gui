@@ -261,6 +261,48 @@ class TestReadOnlyMode:
         with pytest.raises(ValueError, match="read-only"):
             await readonly_srv.sap_click_tree_link("wnd[0]/usr/tree", "1", "LINK")
 
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_set_batch_fields(self, readonly_srv):
+        """sap_set_batch_fields raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_set_batch_fields({"wnd[0]/usr/txt": "v"})
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_set_textedit(self, readonly_srv):
+        """sap_set_textedit raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_set_textedit("wnd[0]/usr/txt", "text")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_set_focus(self, readonly_srv):
+        """sap_set_focus raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_set_focus("wnd[0]/usr/txt")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_scroll_table_control(self, readonly_srv):
+        """sap_scroll_table_control raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_scroll_table_control("wnd[0]/usr/tbl", 10)
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_select_all_table_control_columns(self, readonly_srv):
+        """sap_select_all_table_control_columns raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_all_table_control_columns("wnd[0]/usr/tbl", True)
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_press_column_header(self, readonly_srv):
+        """sap_press_column_header raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_press_column_header("wnd[0]/usr/grid", "COL")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_select_all_rows(self, readonly_srv):
+        """sap_select_all_rows raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_all_rows("wnd[0]/usr/grid")
+
 
 # ===========================================================================
 # _parse_key Tests
@@ -332,11 +374,20 @@ class TestToolRegistration:
             "sap_read_field", "sap_set_field", "sap_press_button",
             "sap_select_menu", "sap_select_checkbox", "sap_select_radio_button",
             "sap_select_combobox_entry", "sap_select_tab",
-            # Table
-            "sap_read_table", "sap_get_alv_toolbar",
-            "sap_press_alv_toolbar_button", "sap_select_alv_context_menu_item",
-            "sap_select_table_row", "sap_double_click_cell",
+            "sap_get_combobox_entries", "sap_set_batch_fields",
+            "sap_read_textedit", "sap_set_textedit", "sap_set_focus",
+            # Table (both types)
+            "sap_read_table", "sap_select_table_row", "sap_double_click_cell",
             "sap_modify_cell", "sap_set_current_cell", "sap_get_column_info",
+            "sap_get_current_cell",
+            # Table (ALV-specific)
+            "sap_get_alv_toolbar", "sap_press_alv_toolbar_button",
+            "sap_select_alv_context_menu_item",
+            "sap_get_cell_info", "sap_press_column_header",
+            "sap_select_all_rows",
+            # Table (TableControl-specific)
+            "sap_scroll_table_control", "sap_get_table_control_row_info",
+            "sap_select_all_table_control_columns",
             # Tree
             "sap_read_tree", "sap_expand_tree_node", "sap_collapse_tree_node",
             "sap_select_tree_node", "sap_double_click_tree_node",

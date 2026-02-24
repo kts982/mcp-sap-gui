@@ -147,9 +147,9 @@ blocked_transactions = [
 
 When `config.read_only = True`, all write tools raise `ValueError`. Each write tool calls `_check_write()` at the start. The tools are always visible but return an error if invoked in read-only mode.
 
-**Write tools** (blocked in read-only): `sap_execute_transaction`, `sap_send_key`, `sap_set_field`, `sap_press_button`, `sap_select_menu`, `sap_select_checkbox`, `sap_select_radio_button`, `sap_select_combobox_entry`, `sap_select_tab`, `sap_select_table_row`, `sap_double_click_cell`, `sap_modify_cell`, `sap_set_current_cell`, `sap_press_alv_toolbar_button`, `sap_select_alv_context_menu_item`, `sap_expand_tree_node`, `sap_collapse_tree_node`, `sap_select_tree_node`, `sap_double_click_tree_node`, `sap_double_click_tree_item`, `sap_click_tree_link`
+**Write tools** (blocked in read-only): `sap_execute_transaction`, `sap_send_key`, `sap_set_field`, `sap_press_button`, `sap_select_menu`, `sap_select_checkbox`, `sap_select_radio_button`, `sap_select_combobox_entry`, `sap_select_tab`, `sap_set_batch_fields`, `sap_set_textedit`, `sap_set_focus`, `sap_select_table_row`, `sap_double_click_cell`, `sap_modify_cell`, `sap_set_current_cell`, `sap_press_alv_toolbar_button`, `sap_select_alv_context_menu_item`, `sap_scroll_table_control`, `sap_select_all_table_control_columns`, `sap_press_column_header`, `sap_select_all_rows`, `sap_expand_tree_node`, `sap_collapse_tree_node`, `sap_select_tree_node`, `sap_double_click_tree_node`, `sap_double_click_tree_item`, `sap_click_tree_link`
 
-**Read tools** (always allowed): `sap_connect`, `sap_connect_existing`, `sap_list_connections`, `sap_get_session_info`, `sap_get_screen_info`, `sap_read_field`, `sap_read_table`, `sap_get_alv_toolbar`, `sap_get_column_info`, `sap_read_tree`, `sap_find_tree_node_by_path`, `sap_get_screen_elements`, `sap_screenshot`
+**Read tools** (always allowed): `sap_connect`, `sap_connect_existing`, `sap_list_connections`, `sap_get_session_info`, `sap_get_screen_info`, `sap_read_field`, `sap_get_combobox_entries`, `sap_read_textedit`, `sap_read_table`, `sap_get_alv_toolbar`, `sap_get_column_info`, `sap_get_current_cell`, `sap_get_table_control_row_info`, `sap_get_cell_info`, `sap_read_tree`, `sap_find_tree_node_by_path`, `sap_get_screen_elements`, `sap_screenshot`
 
 ### Adding New Blocked Transactions
 

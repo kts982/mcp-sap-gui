@@ -1300,3 +1300,555 @@ class TestGuiTableControl:
         assert mock_table.VerticalScrollbar.Position == 40
         mock_table.GetCell.assert_called_with(0, 1)
 
+
+class TestEnrichedStatusBar:
+    """Tests for enriched status bar in get_screen_info."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_status_bar_returns_message_type(self):
+        """get_screen_info includes message_type from status bar."""
+        controller = self._make_controller_with_session()
+        mock_window = MagicMock()
+        mock_window.Text = "Display Material"
+        mock_info = MagicMock()
+        mock_info.Transaction = "MM03"
+        mock_info.Program = "SAPLMGMM"
+        mock_info.ScreenNumber = 100
+        controller._session.Info = mock_info
+
+        mock_sbar = MagicMock()
+        mock_sbar.Text = "Material 100 displayed"
+        mock_sbar.MessageType = "S"
+        mock_sbar.MessageId = "MM"
+        mock_sbar.MessageNumber = "050"
+
+        def find_by_id(id):
+            if id == "wnd[0]/sbar":
+                return mock_sbar
+            return mock_window
+        controller._session.findById.side_effect = find_by_id
+
+        result = controller.get_screen_info()
+
+        assert result["message"] == "Material 100 displayed"
+        assert result["message_type"] == "S"
+        assert result["message_id"] == "MM"
+        assert result["message_number"] == "050"
+
+    def test_status_bar_info_with_parameters(self):
+        """_get_status_bar_info includes message parameters."""
+        controller = self._make_controller_with_session()
+        mock_sbar = MagicMock()
+        mock_sbar.Text = "Error in field"
+        mock_sbar.MessageType = "E"
+        mock_sbar.MessageId = "00"
+        mock_sbar.MessageNumber = "001"
+        mock_sbar.MessageParameter = "MATNR"
+        mock_sbar.MessageParameter1 = "100"
+        controller._session.findById.return_value = mock_sbar
+
+        result = controller._get_status_bar_info()
+
+        assert result["text"] == "Error in field"
+        assert result["message_type"] == "E"
+        assert "message_parameters" in result
+        assert "MATNR" in result["message_parameters"]
+
+
+class TestReadFieldMetadata:
+    """Tests for enriched read_field metadata."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_read_field_includes_required(self):
+        """read_field returns required flag for text fields."""
+        controller = self._make_controller_with_session()
+        mock_field = MagicMock()
+        mock_field.Text = "100"
+        mock_field.Type = "GuiTextField"
+        mock_field.Name = "MATNR"
+        mock_field.Changeable = True
+        mock_field.Required = True
+        mock_field.MaxLength = 18
+        mock_field.Numerical = False
+        mock_field.Highlighted = False
+        mock_label = MagicMock()
+        mock_label.Text = "Material"
+        mock_field.LeftLabel = mock_label
+        controller._session.findById.return_value = mock_field
+
+        result = controller.read_field("wnd[0]/usr/txtMATNR")
+
+        assert result["value"] == "100"
+        assert result["required"] is True
+        assert result["max_length"] == 18
+        assert result["numerical"] is False
+        assert result["left_label"] == "Material"
+
+    def test_read_field_without_metadata(self):
+        """read_field works for elements without extended metadata."""
+        controller = self._make_controller_with_session()
+        mock_field = MagicMock(spec=['Text', 'Type', 'Name', 'Changeable'])
+        mock_field.Text = "Hello"
+        mock_field.Type = "GuiLabel"
+        mock_field.Name = "LBL1"
+        mock_field.Changeable = False
+        controller._session.findById.return_value = mock_field
+
+        result = controller.read_field("wnd[0]/usr/lblLBL1")
+
+        assert result["value"] == "Hello"
+        assert result["type"] == "GuiLabel"
+        # No required/max_length for labels
+        assert "required" not in result
+        assert "max_length" not in result
+
+
+class TestGetComboboxEntries:
+    """Tests for get_combobox_entries."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_returns_all_entries(self):
+        """get_combobox_entries returns all key-value pairs."""
+        controller = self._make_controller_with_session()
+        mock_combo = MagicMock()
+        mock_combo.Key = "EN"
+
+        entry1 = MagicMock()
+        entry1.Key = "EN"
+        entry1.Value = "English"
+        entry2 = MagicMock()
+        entry2.Key = "DE"
+        entry2.Value = "German"
+
+        mock_entries = MagicMock()
+        mock_entries.Count = 2
+        mock_entries.side_effect = lambda i: [entry1, entry2][i]
+        mock_combo.Entries = mock_entries
+
+        controller._session.findById.return_value = mock_combo
+
+        result = controller.get_combobox_entries("wnd[0]/usr/cmbLANGU")
+
+        assert result["entry_count"] == 2
+        assert result["current_key"] == "EN"
+        assert result["entries"][0]["key"] == "EN"
+        assert result["entries"][0]["value"] == "English"
+        assert result["entries"][1]["key"] == "DE"
+        assert result["entries"][1]["value"] == "German"
+
+
+class TestSetBatchFields:
+    """Tests for set_batch_fields."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_sets_multiple_fields(self):
+        """set_batch_fields sets all provided fields."""
+        controller = self._make_controller_with_session()
+        mock_field1 = MagicMock()
+        mock_field2 = MagicMock()
+
+        def find_by_id(id):
+            return {"wnd[0]/usr/txtF1": mock_field1, "wnd[0]/usr/txtF2": mock_field2}[id]
+        controller._session.findById.side_effect = find_by_id
+
+        result = controller.set_batch_fields({
+            "wnd[0]/usr/txtF1": "val1",
+            "wnd[0]/usr/txtF2": "val2",
+        })
+
+        assert result["total"] == 2
+        assert result["succeeded"] == 2
+        assert result["failed"] == 0
+
+    def test_partial_failure(self):
+        """set_batch_fields reports partial failures."""
+        controller = self._make_controller_with_session()
+        mock_field1 = MagicMock()
+
+        def find_by_id(id):
+            if id == "wnd[0]/usr/txtBAD":
+                raise Exception("Not found")
+            return mock_field1
+        controller._session.findById.side_effect = find_by_id
+
+        result = controller.set_batch_fields({
+            "wnd[0]/usr/txtF1": "val1",
+            "wnd[0]/usr/txtBAD": "val2",
+        })
+
+        assert result["succeeded"] == 1
+        assert result["failed"] == 1
+        assert result["results"]["wnd[0]/usr/txtF1"] == "success"
+        assert "error" in result["results"]["wnd[0]/usr/txtBAD"]
+
+
+class TestTextedit:
+    """Tests for read_textedit and set_textedit."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_read_textedit(self):
+        """read_textedit returns lines and full text."""
+        controller = self._make_controller_with_session()
+        mock_te = MagicMock()
+        mock_te.LineCount = 3
+        mock_te.GetLineText.side_effect = ["Line 1", "Line 2", "Line 3"]
+        mock_te.Changeable = True
+        controller._session.findById.return_value = mock_te
+
+        result = controller.read_textedit("wnd[0]/usr/txtEdit")
+
+        assert result["line_count"] == 3
+        assert result["text"] == "Line 1\nLine 2\nLine 3"
+        assert result["lines"] == ["Line 1", "Line 2", "Line 3"]
+        assert result["changeable"] is True
+
+    def test_set_textedit(self):
+        """set_textedit sets the Text property."""
+        controller = self._make_controller_with_session()
+        mock_te = MagicMock()
+        controller._session.findById.return_value = mock_te
+
+        result = controller.set_textedit("wnd[0]/usr/txtEdit", "New text content")
+
+        assert result["status"] == "success"
+        assert mock_te.Text == "New text content"
+
+    def test_set_textedit_fallback_to_unprotected(self):
+        """set_textedit falls back to SetUnprotectedTextPart on Text failure."""
+        controller = self._make_controller_with_session()
+        mock_te = MagicMock()
+        type(mock_te).Text = property(lambda s: "", lambda s, v: (_ for _ in ()).throw(Exception("Protected")))
+        controller._session.findById.return_value = mock_te
+
+        result = controller.set_textedit("wnd[0]/usr/txtEdit", "Fallback text")
+
+        assert result["status"] == "success"
+        mock_te.SetUnprotectedTextPart.assert_called_once_with("Fallback text")
+
+
+class TestSetFocus:
+    """Tests for set_focus."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_set_focus(self):
+        """set_focus calls SetFocus on element."""
+        controller = self._make_controller_with_session()
+        mock_elem = MagicMock()
+        controller._session.findById.return_value = mock_elem
+
+        result = controller.set_focus("wnd[0]/usr/txtMATNR")
+
+        assert result["status"] == "success"
+        mock_elem.SetFocus.assert_called_once()
+
+
+class TestScrollTableControl:
+    """Tests for scroll_table_control."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_scroll_to_position(self):
+        """scroll_table_control sets scrollbar position."""
+        controller = self._make_controller_with_session()
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        mock_table.VisibleRowCount = 10
+        mock_table.RowCount = 100
+        scrollbar = MagicMock()
+        scrollbar.Minimum = 0
+        scrollbar.Maximum = 90
+        scrollbar.Position = 0
+        mock_table.VerticalScrollbar = scrollbar
+        controller._session.findById.return_value = mock_table
+
+        result = controller.scroll_table_control("wnd[0]/usr/tblTEST", 50)
+
+        assert result["status"] == "success"
+        assert result["position"] == 50
+        assert scrollbar.Position == 50
+
+    def test_scroll_clamps_to_max(self):
+        """scroll_table_control clamps position to scrollbar maximum."""
+        controller = self._make_controller_with_session()
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        mock_table.VisibleRowCount = 10
+        mock_table.RowCount = 50
+        scrollbar = MagicMock()
+        scrollbar.Minimum = 0
+        scrollbar.Maximum = 40
+        scrollbar.Position = 0
+        mock_table.VerticalScrollbar = scrollbar
+        controller._session.findById.return_value = mock_table
+
+        result = controller.scroll_table_control("wnd[0]/usr/tblTEST", 999)
+
+        assert result["position"] == 40  # Clamped to max
+
+    def test_scroll_rejects_non_tablecontrol(self):
+        """scroll_table_control rejects non-GuiTableControl elements."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.Type = "GuiGridView"
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.scroll_table_control("wnd[0]/usr/grid", 10)
+
+        assert "error" in result
+        assert "Not a GuiTableControl" in result["error"]
+
+
+class TestGetTableControlRowInfo:
+    """Tests for get_table_control_row_info."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_returns_row_metadata(self):
+        """get_table_control_row_info returns selectable/selected for each row."""
+        controller = self._make_controller_with_session()
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        mock_table.VisibleRowCount = 5
+        scrollbar = MagicMock()
+        scrollbar.Position = 0
+        mock_table.VerticalScrollbar = scrollbar
+
+        def get_abs_row(r):
+            row_mock = MagicMock()
+            row_mock.Selectable = True
+            row_mock.Selected = (r == 2)
+            return row_mock
+        mock_table.GetAbsoluteRow.side_effect = get_abs_row
+        controller._session.findById.return_value = mock_table
+
+        result = controller.get_table_control_row_info("wnd[0]/usr/tblTEST", rows=[0, 1, 2])
+
+        assert result["row_count"] == 3
+        assert result["rows"][0]["selected"] is False
+        assert result["rows"][2]["selected"] is True
+        assert result["rows"][0]["selectable"] is True
+
+    def test_defaults_to_visible_rows(self):
+        """get_table_control_row_info queries visible rows when rows=None."""
+        controller = self._make_controller_with_session()
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        mock_table.VisibleRowCount = 3
+        scrollbar = MagicMock()
+        scrollbar.Position = 10
+        mock_table.VerticalScrollbar = scrollbar
+
+        row_mock = MagicMock()
+        row_mock.Selectable = True
+        row_mock.Selected = False
+        mock_table.GetAbsoluteRow.return_value = row_mock
+        controller._session.findById.return_value = mock_table
+
+        result = controller.get_table_control_row_info("wnd[0]/usr/tblTEST")
+
+        assert result["row_count"] == 3
+        assert result["rows"][0]["row"] == 10
+        assert result["rows"][2]["row"] == 12
+
+
+class TestSelectAllTableControlColumns:
+    """Tests for select_all_table_control_columns."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_select_all(self):
+        """select_all_table_control_columns calls SelectAllColumns."""
+        controller = self._make_controller_with_session()
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        controller._session.findById.return_value = mock_table
+
+        result = controller.select_all_table_control_columns("wnd[0]/usr/tblTEST", True)
+
+        assert result["status"] == "all_selected"
+        mock_table.SelectAllColumns.assert_called_once()
+
+    def test_deselect_all(self):
+        """select_all_table_control_columns calls DeselectAllColumns."""
+        controller = self._make_controller_with_session()
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        controller._session.findById.return_value = mock_table
+
+        result = controller.select_all_table_control_columns("wnd[0]/usr/tblTEST", False)
+
+        assert result["status"] == "all_deselected"
+        mock_table.DeselectAllColumns.assert_called_once()
+
+
+class TestGetCellInfo:
+    """Tests for get_cell_info (ALV)."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_returns_cell_metadata(self):
+        """get_cell_info returns value and metadata."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.GetCellValue.return_value = "MAT-001"
+        mock_grid.GetCellChangeable.return_value = True
+        mock_grid.GetCellColor.return_value = 0
+        mock_grid.GetCellTooltip.return_value = "Material number"
+        mock_grid.GetCellStyle.return_value = 0
+        mock_grid.GetCellMaxLength.return_value = 18
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.get_cell_info("wnd[0]/usr/grid", 0, "MATNR")
+
+        assert result["value"] == "MAT-001"
+        assert result["changeable"] is True
+        assert result["tooltip"] == "Material number"
+        assert result["max_length"] == 18
+
+    def test_handles_missing_methods(self):
+        """get_cell_info handles grids where some methods fail."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.GetCellValue.return_value = "val"
+        mock_grid.GetCellChangeable.side_effect = Exception("Not supported")
+        mock_grid.GetCellColor.side_effect = Exception("Not supported")
+        mock_grid.GetCellTooltip.side_effect = Exception("Not supported")
+        mock_grid.GetCellStyle.side_effect = Exception("Not supported")
+        mock_grid.GetCellMaxLength.side_effect = Exception("Not supported")
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.get_cell_info("wnd[0]/usr/grid", 0, "COL")
+
+        assert result["value"] == "val"
+        assert "changeable" not in result
+        assert "error" not in result
+
+
+class TestPressColumnHeader:
+    """Tests for press_column_header (ALV)."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_press_column_header(self):
+        """press_column_header calls PressColumnHeader."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        controller._session.findById.return_value = mock_grid
+        controller.get_screen_info = MagicMock(return_value={"transaction": "MM03"})
+
+        result = controller.press_column_header("wnd[0]/usr/grid", "MATNR")
+
+        assert result["status"] == "pressed"
+        mock_grid.PressColumnHeader.assert_called_once_with("MATNR")
+
+
+class TestSelectAllRows:
+    """Tests for select_all_rows (ALV)."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_select_all_rows(self):
+        """select_all_rows calls SelectAll on grid."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.select_all_rows("wnd[0]/usr/grid")
+
+        assert result["status"] == "all_selected"
+        mock_grid.SelectAll.assert_called_once()
+
+
+class TestGetCurrentCell:
+    """Tests for get_current_cell (both table types)."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_alv_grid(self):
+        """get_current_cell returns ALV CurrentCellRow/Column."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.Type = "GuiGridView"
+        mock_grid.CurrentCellRow = 5
+        mock_grid.CurrentCellColumn = "MATNR"
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.get_current_cell("wnd[0]/usr/grid")
+
+        assert result["table_type"] == "GuiGridView"
+        assert result["current_row"] == 5
+        assert result["current_column"] == "MATNR"
+
+    def test_table_control(self):
+        """get_current_cell returns TableControl CurrentRow/Col."""
+        controller = self._make_controller_with_session()
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        mock_table.CurrentRow = 3
+        mock_table.CurrentCol = 2
+        controller._session.findById.return_value = mock_table
+
+        result = controller.get_current_cell("wnd[0]/usr/tblTEST")
+
+        assert result["table_type"] == "GuiTableControl"
+        assert result["current_row"] == 3
+        assert result["current_col"] == 2
+

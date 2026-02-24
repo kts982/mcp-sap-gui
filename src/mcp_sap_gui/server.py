@@ -266,13 +266,51 @@ async def sap_select_tab(tab_id: str) -> dict:
     return await _com(lambda: controller.select_tab(tab_id))
 
 
+@mcp.tool()
+async def sap_get_combobox_entries(combobox_id: str) -> dict:
+    """List all entries in a combobox/dropdown. Returns key-value pairs so you know which values are valid."""
+    return await _com(lambda: controller.get_combobox_entries(combobox_id))
+
+
+@mcp.tool()
+async def sap_set_batch_fields(fields: dict) -> dict:
+    """Set multiple field values at once (dict of field_id → value). More efficient than repeated sap_set_field calls."""
+    _check_write()
+    return await _com(lambda: controller.set_batch_fields(fields))
+
+
+@mcp.tool()
+async def sap_read_textedit(textedit_id: str) -> dict:
+    """Read the content of a multiline text editor (GuiTextedit). Returns full text, line count, and individual lines."""
+    return await _com(lambda: controller.read_textedit(textedit_id))
+
+
+@mcp.tool()
+async def sap_set_textedit(textedit_id: str, text: str) -> dict:
+    """Set the content of a multiline text editor (GuiTextedit)."""
+    _check_write()
+    return await _com(lambda: controller.set_textedit(textedit_id, text))
+
+
+@mcp.tool()
+async def sap_set_focus(element_id: str) -> dict:
+    """Set focus to any screen element by its ID."""
+    _check_write()
+    return await _com(lambda: controller.set_focus(element_id))
+
+
 # ===========================================================================
 # Table tools
 # ===========================================================================
 
 @mcp.tool()
 async def sap_read_table(table_id: str, max_rows: int = 100) -> dict:
-    """Read data from an ALV grid or table on the current screen"""
+    """Read data from an ALV grid or table on the current screen.
+
+    Auto-detects the table type. The response includes a 'table_type' field
+    ('GuiGridView' for ALV or 'GuiTableControl') so you know which
+    type-specific tools to use next (e.g., sap_get_alv_toolbar for ALV,
+    sap_scroll_table_control for TableControl)."""
     capped = min(max_rows, config.max_table_rows)
     return await _com(lambda: controller.read_table(table_id, capped))
 
@@ -323,22 +361,78 @@ async def sap_double_click_cell(table_id: str, row: int, column: str) -> dict:
 
 @mcp.tool()
 async def sap_modify_cell(grid_id: str, row: int, column: str, value: str) -> dict:
-    """Modify the value of a cell in an ALV grid (e.g., for editable grids)"""
+    """Modify the value of a cell in an ALV grid or table control (e.g., for editable grids)"""
     _check_write()
     return await _com(lambda: controller.modify_cell(grid_id, row, column, value))
 
 
 @mcp.tool()
 async def sap_set_current_cell(grid_id: str, row: int, column: str) -> dict:
-    """Set the current (focused) cell in an ALV grid"""
+    """Set the current (focused) cell in an ALV grid or table control"""
     _check_write()
     return await _com(lambda: controller.set_current_cell(grid_id, row, column))
 
 
 @mcp.tool()
 async def sap_get_column_info(grid_id: str) -> dict:
-    """Get detailed column information from an ALV grid (names, titles, tooltips)"""
+    """Get detailed column information from an ALV grid or table control (names, titles, tooltips)"""
     return await _com(lambda: controller.get_column_info(grid_id))
+
+
+@mcp.tool()
+async def sap_get_current_cell(table_id: str) -> dict:
+    """Get the currently focused cell position in an ALV grid or table control."""
+    return await _com(lambda: controller.get_current_cell(table_id))
+
+
+# ---- TableControl-specific tools ----
+
+@mcp.tool()
+async def sap_scroll_table_control(table_id: str, position: int) -> dict:
+    """Scroll a GuiTableControl to a specific row position. Use before sap_read_table to navigate to different sections. Does NOT work on ALV grids (they handle scrolling internally)."""
+    _check_write()
+    return await _com(lambda: controller.scroll_table_control(table_id, position))
+
+
+@mcp.tool()
+async def sap_get_table_control_row_info(
+    table_id: str,
+    rows: list[int] | None = None,
+) -> dict:
+    """Get row metadata (selectable, selected) from a GuiTableControl. If rows is omitted, queries all visible rows. Does NOT work on ALV grids."""
+    return await _com(lambda: controller.get_table_control_row_info(table_id, rows))
+
+
+@mcp.tool()
+async def sap_select_all_table_control_columns(
+    table_id: str,
+    select: bool = True,
+) -> dict:
+    """Select or deselect all columns in a GuiTableControl. Does NOT work on ALV grids."""
+    _check_write()
+    return await _com(lambda: controller.select_all_table_control_columns(table_id, select))
+
+
+# ---- ALV-specific tools ----
+
+@mcp.tool()
+async def sap_get_cell_info(grid_id: str, row: int, column: str) -> dict:
+    """Get detailed cell metadata from an ALV grid: value, changeable, color, tooltip, style, max_length. Does NOT work on GuiTableControl."""
+    return await _com(lambda: controller.get_cell_info(grid_id, row, column))
+
+
+@mcp.tool()
+async def sap_press_column_header(grid_id: str, column: str) -> dict:
+    """Click a column header in an ALV grid (triggers sort). Does NOT work on GuiTableControl."""
+    _check_write()
+    return await _com(lambda: controller.press_column_header(grid_id, column))
+
+
+@mcp.tool()
+async def sap_select_all_rows(grid_id: str) -> dict:
+    """Select all rows in an ALV grid. Does NOT work on GuiTableControl."""
+    _check_write()
+    return await _com(lambda: controller.select_all_rows(grid_id))
 
 
 # ===========================================================================

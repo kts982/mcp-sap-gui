@@ -468,24 +468,62 @@ class SAPGUIController:
         try:
             window = self._session.findById("wnd[0]")
             info = self._session.Info
+            status = self._get_status_bar_info()
 
             return {
                 "transaction": info.Transaction,
                 "program": info.Program,
                 "screen_number": info.ScreenNumber,
                 "title": window.Text,
-                "message": self._get_status_bar_message(),
+                "message": status.get("text"),
+                "message_type": status.get("message_type", ""),
+                "message_id": status.get("message_id", ""),
+                "message_number": status.get("message_number", ""),
             }
         except Exception as e:
             return {"error": str(e)}
 
-    def _get_status_bar_message(self) -> Optional[str]:
-        """Get the message from the status bar."""
+    def _get_status_bar_info(self) -> Dict[str, Any]:
+        """Get structured information from the status bar.
+
+        Returns a dict with:
+        - text: The full message text
+        - message_type: S=Success, W=Warning, E=Error, A=Abort, I=Info
+        - message_id: SAP message class (e.g., 'MM', 'SD')
+        - message_number: Three-digit message number
+        - message_parameters: List of up to 4 message parameters
+        """
         try:
-            statusbar = self._session.findById("wnd[0]/sbar")
-            return statusbar.Text
+            sbar = self._session.findById("wnd[0]/sbar")
+            info: Dict[str, Any] = {"text": sbar.Text}
+            for attr, key in [
+                ("MessageType", "message_type"),
+                ("MessageId", "message_id"),
+                ("MessageNumber", "message_number"),
+            ]:
+                try:
+                    info[key] = getattr(sbar, attr)
+                except Exception:
+                    info[key] = ""
+            # Message parameters (up to 4)
+            params = []
+            for attr in ["MessageParameter", "MessageParameter1",
+                         "MessageParameter2", "MessageParameter3"]:
+                try:
+                    val = getattr(sbar, attr, None)
+                    if val is not None:
+                        params.append(str(val))
+                except Exception:
+                    pass
+            if params:
+                info["message_parameters"] = params
+            return info
         except Exception:
-            return None
+            return {"text": None}
+
+    def _get_status_bar_message(self) -> Optional[str]:
+        """Get the message text from the status bar (legacy helper)."""
+        return self._get_status_bar_info().get("text")
 
     # =========================================================================
     # Field Operations
@@ -494,6 +532,10 @@ class SAPGUIController:
     def read_field(self, field_id: str) -> Dict[str, Any]:
         """
         Read a field value from the screen.
+
+        Returns the field value plus metadata like required, max_length,
+        numerical flag, and associated labels (when available from
+        GuiTextField / GuiCTextField).
 
         Args:
             field_id: SAP GUI element ID (e.g., "wnd[0]/usr/txtMATNR")
@@ -506,13 +548,41 @@ class SAPGUIController:
         try:
             element = self._session.findById(field_id)
 
-            return {
+            result: Dict[str, Any] = {
                 "field_id": field_id,
                 "value": getattr(element, 'Text', ''),
                 "type": element.Type,
                 "name": getattr(element, 'Name', ''),
                 "changeable": getattr(element, 'Changeable', None),
             }
+
+            # Extended metadata for text fields
+            for attr, key in [
+                ("Required", "required"),
+                ("MaxLength", "max_length"),
+                ("Numerical", "numerical"),
+                ("Highlighted", "highlighted"),
+            ]:
+                try:
+                    val = getattr(element, attr, None)
+                    if val is not None:
+                        result[key] = val
+                except Exception:
+                    pass
+
+            # Associated labels (GuiTextField / GuiCTextField)
+            for attr, key in [
+                ("LeftLabel", "left_label"),
+                ("RightLabel", "right_label"),
+            ]:
+                try:
+                    label = getattr(element, attr, None)
+                    if label is not None:
+                        result[key] = getattr(label, 'Text', str(label))
+                except Exception:
+                    pass
+
+            return result
         except Exception as e:
             return {"field_id": field_id, "error": str(e)}
 
@@ -715,6 +785,151 @@ class SAPGUIController:
             }
         except Exception as e:
             return {"tab_id": tab_id, "error": str(e)}
+
+    def get_combobox_entries(self, combobox_id: str) -> Dict[str, Any]:
+        """
+        List all entries in a combobox/dropdown.
+
+        Returns the available key-value pairs so the caller knows which
+        values are valid before attempting to set one.
+
+        Args:
+            combobox_id: SAP GUI combobox ID
+
+        Returns:
+            Dict with list of entries (key, value pairs)
+        """
+        self._require_session()
+
+        try:
+            combo = self._session.findById(combobox_id)
+            entries = []
+            for i in range(combo.Entries.Count):
+                entry = combo.Entries(i)
+                entries.append({
+                    "key": entry.Key,
+                    "value": entry.Value,
+                })
+            return {
+                "combobox_id": combobox_id,
+                "current_key": getattr(combo, 'Key', ''),
+                "entry_count": len(entries),
+                "entries": entries,
+            }
+        except Exception as e:
+            return {"combobox_id": combobox_id, "error": str(e)}
+
+    def set_batch_fields(self, fields: Dict[str, str]) -> Dict[str, Any]:
+        """
+        Set multiple field values at once.
+
+        More efficient than calling set_field repeatedly — all values are
+        set before a single round-trip return.
+
+        Args:
+            fields: Dict mapping field_id → value
+
+        Returns:
+            Dict with per-field results
+        """
+        self._require_session()
+
+        results = {}
+        for field_id, value in fields.items():
+            try:
+                self._session.findById(field_id).text = value
+                results[field_id] = "success"
+            except Exception as e:
+                results[field_id] = f"error: {e}"
+
+        succeeded = sum(1 for v in results.values() if v == "success")
+        return {
+            "total": len(fields),
+            "succeeded": succeeded,
+            "failed": len(fields) - succeeded,
+            "results": results,
+        }
+
+    def read_textedit(self, textedit_id: str) -> Dict[str, Any]:
+        """
+        Read the content of a multiline text editor (GuiTextedit).
+
+        Args:
+            textedit_id: SAP GUI textedit ID
+
+        Returns:
+            Dict with full text, line count, and individual lines
+        """
+        self._require_session()
+
+        try:
+            textedit = self._session.findById(textedit_id)
+            line_count = textedit.LineCount
+            lines = []
+            for i in range(line_count):
+                try:
+                    lines.append(textedit.GetLineText(i))
+                except Exception:
+                    lines.append("")
+
+            return {
+                "textedit_id": textedit_id,
+                "line_count": line_count,
+                "text": "\n".join(lines),
+                "lines": lines,
+                "changeable": getattr(textedit, 'Changeable', None),
+            }
+        except Exception as e:
+            return {"textedit_id": textedit_id, "error": str(e)}
+
+    def set_textedit(self, textedit_id: str, text: str) -> Dict[str, Any]:
+        """
+        Set the content of a multiline text editor (GuiTextedit).
+
+        Attempts to set via the Text property first, then falls back
+        to SetUnprotectedTextPart for protected editors.
+
+        Args:
+            textedit_id: SAP GUI textedit ID
+            text: Text content to set
+
+        Returns:
+            Dict with result status
+        """
+        self._require_session()
+
+        try:
+            textedit = self._session.findById(textedit_id)
+            try:
+                textedit.Text = text
+            except Exception:
+                # Fallback: set only the unprotected part
+                textedit.SetUnprotectedTextPart(text)
+
+            return {
+                "textedit_id": textedit_id,
+                "status": "success",
+            }
+        except Exception as e:
+            return {"textedit_id": textedit_id, "error": str(e)}
+
+    def set_focus(self, element_id: str) -> Dict[str, Any]:
+        """
+        Set focus to any screen element.
+
+        Args:
+            element_id: SAP GUI element ID
+
+        Returns:
+            Dict with result status
+        """
+        self._require_session()
+
+        try:
+            self._session.findById(element_id).SetFocus()
+            return {"element_id": element_id, "status": "success"}
+        except Exception as e:
+            return {"element_id": element_id, "error": str(e)}
 
     # =========================================================================
     # Table/Grid Operations
@@ -1286,6 +1501,245 @@ class SAPGUIController:
             }
         except Exception as e:
             return {"grid_id": grid_id, "error": str(e)}
+
+    # ---- TableControl-specific operations ----
+
+    def scroll_table_control(self, table_id: str, position: int) -> Dict[str, Any]:
+        """
+        Scroll a GuiTableControl to a specific row position.
+
+        Since read_table does not scroll (it reads only visible rows),
+        use this tool to navigate to a different section of the table
+        before reading.
+
+        Args:
+            table_id: SAP GUI table control ID
+            position: Absolute row position to scroll to
+
+        Returns:
+            Dict with new scroll position and visible data summary
+        """
+        self._require_session()
+
+        try:
+            table = self._session.findById(table_id)
+            if getattr(table, 'Type', '') != "GuiTableControl":
+                return {"table_id": table_id, "error": "Not a GuiTableControl. Use ALV grid methods instead."}
+
+            scrollbar = table.VerticalScrollbar
+            new_pos = max(scrollbar.Minimum, min(position, scrollbar.Maximum))
+            scrollbar.Position = new_pos
+
+            return {
+                "table_id": table_id,
+                "status": "success",
+                "position": new_pos,
+                "visible_rows": table.VisibleRowCount,
+                "total_rows": table.RowCount,
+                "scroll_max": scrollbar.Maximum,
+            }
+        except Exception as e:
+            return {"table_id": table_id, "error": str(e)}
+
+    def get_table_control_row_info(self, table_id: str,
+                                    rows: Optional[List[int]] = None) -> Dict[str, Any]:
+        """
+        Get row metadata from a GuiTableControl.
+
+        Returns whether each row is selectable and currently selected,
+        using GetAbsoluteRow() for absolute indexing.
+
+        Args:
+            table_id: SAP GUI table control ID
+            rows: List of absolute row indices to query.
+                  If None, queries all currently visible rows.
+
+        Returns:
+            Dict with row info list
+        """
+        self._require_session()
+
+        try:
+            table = self._session.findById(table_id)
+            if getattr(table, 'Type', '') != "GuiTableControl":
+                return {"table_id": table_id, "error": "Not a GuiTableControl"}
+
+            if rows is None:
+                start = table.VerticalScrollbar.Position
+                rows = list(range(start, start + table.VisibleRowCount))
+
+            row_info = []
+            for r in rows:
+                info: Dict[str, Any] = {"row": r}
+                try:
+                    abs_row = table.GetAbsoluteRow(r)
+                    info["selectable"] = getattr(abs_row, 'Selectable', True)
+                    info["selected"] = getattr(abs_row, 'Selected', False)
+                except Exception as e:
+                    info["error"] = str(e)
+                row_info.append(info)
+
+            return {
+                "table_id": table_id,
+                "row_count": len(row_info),
+                "rows": row_info,
+            }
+        except Exception as e:
+            return {"table_id": table_id, "error": str(e)}
+
+    def select_all_table_control_columns(self, table_id: str,
+                                          select: bool = True) -> Dict[str, Any]:
+        """
+        Select or deselect all columns in a GuiTableControl.
+
+        Args:
+            table_id: SAP GUI table control ID
+            select: True to select all, False to deselect all
+
+        Returns:
+            Dict with result status
+        """
+        self._require_session()
+
+        try:
+            table = self._session.findById(table_id)
+            if getattr(table, 'Type', '') != "GuiTableControl":
+                return {"table_id": table_id, "error": "Not a GuiTableControl"}
+
+            if select:
+                table.SelectAllColumns()
+            else:
+                table.DeselectAllColumns()
+
+            return {
+                "table_id": table_id,
+                "status": "all_selected" if select else "all_deselected",
+            }
+        except Exception as e:
+            return {"table_id": table_id, "error": str(e)}
+
+    # ---- ALV-specific operations ----
+
+    def get_cell_info(self, grid_id: str, row: int,
+                      column: str) -> Dict[str, Any]:
+        """
+        Get detailed cell metadata from an ALV grid (GuiGridView).
+
+        Returns whether the cell is editable, its color/style, and tooltip.
+
+        Args:
+            grid_id: SAP GUI grid ID (ALV)
+            row: Row index (0-based)
+            column: Column name
+
+        Returns:
+            Dict with cell properties
+        """
+        self._require_session()
+
+        try:
+            grid = self._session.findById(grid_id)
+            info: Dict[str, Any] = {
+                "grid_id": grid_id,
+                "row": row,
+                "column": column,
+                "value": grid.GetCellValue(row, column),
+            }
+
+            for method, key in [
+                ("GetCellChangeable", "changeable"),
+                ("GetCellColor", "color"),
+                ("GetCellTooltip", "tooltip"),
+                ("GetCellStyle", "style"),
+                ("GetCellMaxLength", "max_length"),
+            ]:
+                try:
+                    info[key] = getattr(grid, method)(row, column)
+                except Exception:
+                    pass
+
+            return info
+        except Exception as e:
+            return {"grid_id": grid_id, "row": row, "column": column, "error": str(e)}
+
+    def press_column_header(self, grid_id: str,
+                             column: str) -> Dict[str, Any]:
+        """
+        Click a column header in an ALV grid (triggers sort/filter).
+
+        Args:
+            grid_id: SAP GUI grid ID (ALV)
+            column: Column name
+
+        Returns:
+            Dict with result status and screen info
+        """
+        self._require_session()
+
+        try:
+            grid = self._session.findById(grid_id)
+            grid.PressColumnHeader(column)
+            return {
+                "grid_id": grid_id,
+                "column": column,
+                "status": "pressed",
+                "screen": self.get_screen_info(),
+            }
+        except Exception as e:
+            return {"grid_id": grid_id, "column": column, "error": str(e)}
+
+    def select_all_rows(self, grid_id: str) -> Dict[str, Any]:
+        """
+        Select all rows in an ALV grid.
+
+        Args:
+            grid_id: SAP GUI grid ID (ALV)
+
+        Returns:
+            Dict with result status
+        """
+        self._require_session()
+
+        try:
+            grid = self._session.findById(grid_id)
+            grid.SelectAll()
+            return {"grid_id": grid_id, "status": "all_selected"}
+        except Exception as e:
+            return {"grid_id": grid_id, "error": str(e)}
+
+    # ---- Operations for both table types ----
+
+    def get_current_cell(self, table_id: str) -> Dict[str, Any]:
+        """
+        Get the currently focused cell in an ALV grid or table control.
+
+        Args:
+            table_id: SAP GUI grid/table ID
+
+        Returns:
+            Dict with current row and column
+        """
+        self._require_session()
+
+        try:
+            table = self._session.findById(table_id)
+
+            if getattr(table, 'Type', '') == "GuiTableControl":
+                return {
+                    "table_id": table_id,
+                    "table_type": "GuiTableControl",
+                    "current_row": getattr(table, 'CurrentRow', -1),
+                    "current_col": getattr(table, 'CurrentCol', -1),
+                }
+            else:
+                return {
+                    "table_id": table_id,
+                    "table_type": "GuiGridView",
+                    "current_row": getattr(table, 'CurrentCellRow', -1),
+                    "current_column": getattr(table, 'CurrentCellColumn', ''),
+                }
+        except Exception as e:
+            return {"table_id": table_id, "error": str(e)}
 
     # =========================================================================
     # Tree Control Operations

@@ -212,7 +212,7 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 "Connect to my open SAP session and tell me what system I'm on"
 ```
 
-## Available Tools (34 total)
+## Available Tools (46 total)
 
 ### Connection Tools
 | Tool | Description |
@@ -227,34 +227,73 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code (MM03, VA01, etc.) |
 | `sap_send_key` | Send keyboard keys (Enter, F1-F12, Back, Save, etc.) |
-| `sap_get_screen_info` | Get current screen information |
+| `sap_get_screen_info` | Get current screen information (includes structured status bar) |
 
 ### Field & UI Element Tools
 | Tool | Description |
 |------|-------------|
-| `sap_read_field` | Read a field value |
+| `sap_read_field` | Read a field value (includes metadata: required, max_length, labels) |
 | `sap_set_field` | Set a field value |
+| `sap_set_batch_fields` | Set multiple field values at once (dict of field_id -> value) |
 | `sap_press_button` | Press a button |
 | `sap_select_menu` | Select a menu item from the menu bar |
 | `sap_select_checkbox` | Select or deselect a checkbox |
 | `sap_select_radio_button` | Select a radio button |
 | `sap_select_combobox_entry` | Select a combobox/dropdown entry by key or value |
+| `sap_get_combobox_entries` | List all entries in a combobox (key-value pairs) |
 | `sap_select_tab` | Select a tab in a tab strip |
+| `sap_read_textedit` | Read content of a multiline text editor (GuiTextedit) |
+| `sap_set_textedit` | Set content of a multiline text editor (GuiTextedit) |
+| `sap_set_focus` | Set focus to any screen element by its ID |
 
 ### Table/Grid Tools
-Supports both **ALV grids** (GuiGridView) and **classic table controls** (GuiTableControl) — auto-detected.
 
+SAP has two different table types. **All table tools auto-detect the type**, and `sap_read_table` returns a `table_type` field (`"GuiGridView"` or `"GuiTableControl"`) so you know which type-specific tools to use.
+
+#### Both Types (auto-detected)
 | Tool | Description |
 |------|-------------|
-| `sap_read_table` | Read data from ALV grid or table control (with scrolling) |
-| `sap_select_table_row` | Select a table row |
-| `sap_double_click_cell` | Double-click a table cell (often opens details) |
+| `sap_read_table` | Read data (returns `table_type` to identify ALV vs TableControl) |
+| `sap_select_table_row` | Select a row |
+| `sap_double_click_cell` | Double-click a cell (often opens details) |
 | `sap_modify_cell` | Modify an editable cell value |
-| `sap_set_current_cell` | Set focus to a specific cell |
+| `sap_set_current_cell` | Set the focused cell |
 | `sap_get_column_info` | Get column names, titles, and tooltips |
+| `sap_get_current_cell` | Get the currently focused cell position |
+
+#### ALV Grid Only (GuiGridView)
+| Tool | Description |
+|------|-------------|
 | `sap_get_alv_toolbar` | List all toolbar buttons on an ALV grid |
-| `sap_press_alv_toolbar_button` | Press an ALV toolbar button (auto-detects menu types) |
-| `sap_select_alv_context_menu_item` | Select from ALV context menu (supports atomic open+select) |
+| `sap_press_alv_toolbar_button` | Press an ALV toolbar button |
+| `sap_select_alv_context_menu_item` | Select from ALV context menu |
+| `sap_get_cell_info` | Get detailed cell metadata (color, tooltip, style, max_length) |
+| `sap_press_column_header` | Click a column header (triggers sort) |
+| `sap_select_all_rows` | Select all rows |
+
+#### TableControl Only (GuiTableControl)
+| Tool | Description |
+|------|-------------|
+| `sap_scroll_table_control` | Scroll to a specific row position |
+| `sap_get_table_control_row_info` | Get row metadata (selected, changeable) |
+| `sap_select_all_table_control_columns` | Select/deselect all column headers |
+
+### ALV Grid vs TableControl — When to Use What
+
+Both table types are found throughout SAP, but in different contexts:
+
+| | **ALV Grid** (GuiGridView) | **TableControl** (GuiTableControl) |
+|---|---|---|
+| **Where** | Reports, list displays (ME2M, VA05, etc.) | Customizing (SPRO), table maintenance (SM30) |
+| **Element ID pattern** | `wnd[0]/usr/cntl.../shellcont/shell` | `wnd[0]/usr/tblSAPL...` |
+| **Scrolling** | Automatic — all rows accessible in one read | Manual — use `sap_scroll_table_control` to page |
+| **Toolbar** | Built-in ALV toolbar (`sap_get_alv_toolbar`) | Standard menu bar + toolbar buttons |
+| **Sorting** | `sap_press_column_header` | Use menu bar (Table View > Sort) |
+
+**Workflow:**
+1. Call `sap_read_table(table_id)` — works for both types
+2. Check `table_type` in the response
+3. Use the appropriate type-specific tools for further interaction
 
 ### Tree Tools
 | Tool | Description |
