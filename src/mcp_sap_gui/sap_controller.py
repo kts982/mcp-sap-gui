@@ -462,29 +462,67 @@ class SAPGUIController:
         return self.send_vkey(VKey.F8)
 
     def get_screen_info(self) -> Dict[str, Any]:
-        """Get information about the current screen."""
+        """Get information about the current screen.
+
+        Reads from ``session.ActiveWindow`` so the title always reflects
+        what the user actually sees.  When ActiveWindow is a popup
+        (wnd[1], wnd[2], …) the response ``active_window`` field tells
+        the caller which window is in focus — no separate tool call
+        needed.
+
+        ``session.Info`` (transaction, program, screen_number) already
+        reflects the active screen regardless of which window is focused.
+        """
         self._require_session()
 
         try:
-            window = self._session.findById("wnd[0]")
             info = self._session.Info
-            status = self._get_status_bar_info()
 
-            return {
+            # Determine the active window — use ActiveWindow when
+            # available, fall back to wnd[0].
+            active_wnd_id = "wnd[0]"
+            try:
+                active = self._session.ActiveWindow
+                if active is not None:
+                    full_id = active.Id  # e.g. /app/con[0]/ses[0]/wnd[1]
+                    if "wnd[" in full_id:
+                        active_wnd_id = "wnd[" + full_id.split("wnd[")[1]
+            except Exception:
+                pass
+
+            # Read title from the active window
+            try:
+                title = self._session.findById(active_wnd_id).Text
+            except Exception:
+                title = ""
+
+            # Status bar — try active window first, fall back to wnd[0]
+            status = self._get_status_bar_info(active_wnd_id)
+
+            result: Dict[str, Any] = {
+                "active_window": active_wnd_id,
                 "transaction": info.Transaction,
                 "program": info.Program,
                 "screen_number": info.ScreenNumber,
-                "title": window.Text,
+                "title": title,
                 "message": status.get("text"),
                 "message_type": status.get("message_type", ""),
                 "message_id": status.get("message_id", ""),
                 "message_number": status.get("message_number", ""),
             }
+
+            return result
         except Exception as e:
             return {"error": str(e)}
 
-    def _get_status_bar_info(self) -> Dict[str, Any]:
+    def _get_status_bar_info(
+        self, window_id: str = "wnd[0]",
+    ) -> Dict[str, Any]:
         """Get structured information from the status bar.
+
+        Tries the given *window_id*'s status bar first (e.g. a popup's
+        ``wnd[1]/sbar``).  Falls back to ``wnd[0]/sbar`` when the
+        active window doesn't have one.
 
         Returns a dict with:
         - text: The full message text
@@ -493,8 +531,16 @@ class SAPGUIController:
         - message_number: Three-digit message number
         - message_parameters: List of up to 4 message parameters
         """
+        sbar = None
+        for wnd in dict.fromkeys([window_id, "wnd[0]"]):
+            try:
+                sbar = self._session.findById(f"{wnd}/sbar")
+                break
+            except Exception:
+                continue
+        if sbar is None:
+            return {"text": None}
         try:
-            sbar = self._session.findById("wnd[0]/sbar")
             info: Dict[str, Any] = {"text": sbar.Text}
             for attr, key in [
                 ("MessageType", "message_type"),

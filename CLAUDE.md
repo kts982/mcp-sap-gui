@@ -195,14 +195,14 @@ for e in elements:
 
 ### Handling Popups
 
+`get_screen_info()` returns `active_window` which is `"wnd[1]"` (or higher) when a popup is open. Every action tool includes this in its response, so popups are detected automatically — no separate check needed.
+
 ```python
-# Check for popup window
-try:
-    popup = session.findById("wnd[1]")
-    # Handle popup
-    popup.findById("wnd[1]/usr/btnBUTTON_1").press()  # Yes
-except:
-    pass  # No popup
+# After any action, check the screen response:
+result = controller.press_button("wnd[0]/tbar[1]/btn[8]")
+if result["screen"]["active_window"] != "wnd[0]":
+    # A popup appeared — use get_popup_window() for full details
+    popup = controller.get_popup_window()
 ```
 
 ### Reading Status Messages

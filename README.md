@@ -227,7 +227,7 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code (MM03, VA01, etc.) |
 | `sap_send_key` | Send keyboard keys (Enter, F1-F12, Shift+F1-F9, Ctrl+F/G/P, Back, Save, etc.) |
-| `sap_get_screen_info` | Get current screen information (includes structured status bar) |
+| `sap_get_screen_info` | Get current screen info — reports `active_window` (wnd[0] or wnd[1] if popup) and title of the focused window |
 
 ### Field & UI Element Tools
 | Tool | Description |
@@ -297,9 +297,12 @@ Both table types are found throughout SAP, but in different contexts:
 3. Use the appropriate type-specific tools for further interaction
 
 ### Popup & Dialog Tools
+
+Every action tool automatically reports `active_window` in its response (e.g. `"wnd[1]"` when a popup opens). Use `sap_get_popup_window` when you need full details.
+
 | Tool | Description |
 |------|-------------|
-| `sap_get_popup_window` | Check if a popup/modal dialog is open, get its title, text, and buttons |
+| `sap_get_popup_window` | Get full popup content: title, text elements, and buttons |
 
 ### Toolbar Discovery Tools
 | Tool | Description |

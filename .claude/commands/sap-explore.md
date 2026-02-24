@@ -3,10 +3,11 @@ Explore the current SAP screen and report what you find.
 Steps:
 1. Connect to the existing SAP session using `sap_connect_existing`
 2. Get session info with `sap_get_session_info` to know where we are
-3. Get screen info with `sap_get_screen_info` for the current transaction and any status messages
-4. Check for popups with `sap_get_popup_window` — if one is open, report it first
-5. Discover all screen elements with `sap_get_screen_elements` on the main user area (`wnd[0]/usr`)
-6. Get available toolbar buttons with `sap_get_toolbar_buttons`
+3. Get screen info with `sap_get_screen_info` — check `active_window` in the response:
+   - If `wnd[0]`: normal screen, continue with step 4
+   - If `wnd[1]` or higher: a popup is open — use `sap_get_popup_window` for full details and report it first
+4. Discover all screen elements with `sap_get_screen_elements` on the active window's user area
+5. Get available toolbar buttons with `sap_get_toolbar_buttons`
 7. If the screen contains a table or grid (look for element types containing `GuiGridView` or `GuiTableControl`):
    - Read the table data with `sap_read_table` (limit to 20 rows)
    - Note the `table_type` in the response

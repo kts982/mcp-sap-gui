@@ -4,8 +4,8 @@ Steps:
 1. List all open SAP connections with `sap_list_connections`
 2. If there's an active session, connect with `sap_connect_existing`
 3. Get session info with `sap_get_session_info` (system, client, user, transaction)
-4. Get screen info with `sap_get_screen_info` (screen title, status message)
-5. Check for any popup windows with `sap_get_popup_window`
+4. Get screen info with `sap_get_screen_info` — check `active_window` to see if a popup is open
+5. If `active_window` is `wnd[1]` or higher, use `sap_get_popup_window` for full popup details
 6. Take a screenshot with `sap_screenshot` so the user can see the current state
 
 Present a concise summary:

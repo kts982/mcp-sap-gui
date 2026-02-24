@@ -64,11 +64,11 @@ Guidelines:
 - Always connect to an existing SAP session first (mcp__sap-gui__sap_connect_existing)
 - Use mcp__sap-gui__sap_get_screen_elements to discover field IDs on unfamiliar screens
 - After setting fields, press Enter or Execute (F8) to confirm
-- Check mcp__sap-gui__sap_get_screen_info after each action for status messages
+- Every action tool returns screen info with active_window — if it says wnd[1],
+  a popup appeared. Use mcp__sap-gui__sap_get_popup_window for full popup details.
 - Take screenshots at key milestones for documentation
 - When reading tables, start with a reasonable max_rows (50-100)
 - For tree controls, expand nodes before trying to read children
-- If a popup appears (wnd[1]), handle it before continuing on wnd[0]
 - Use Read tool to read specification documents from disk
 
 When given a specification document:

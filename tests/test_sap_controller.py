@@ -2089,3 +2089,149 @@ class TestReadShellContent:
         result = controller.read_shell_content("wnd[0]/usr/shell")
         assert "error" in result
 
+
+# ===========================================================================
+# Screen Info Popup Detection Tests
+# ===========================================================================
+
+class TestScreenInfoActiveWindow:
+    """Tests for active window detection in get_screen_info()."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def _setup_screen(self, controller, popup_wnd_id=None, popup_title=None):
+        """Set up mocks. If popup_wnd_id is given, simulates a popup."""
+        mock_main = MagicMock()
+        mock_main.Text = "SAP Easy Access"
+
+        mock_popup = MagicMock()
+        mock_popup.Text = popup_title or ""
+
+        mock_info = MagicMock()
+        mock_info.Transaction = "SESSION_MANAGER"
+        mock_info.Program = "SAPMSYST"
+        mock_info.ScreenNumber = 100
+
+        mock_sbar = MagicMock()
+        mock_sbar.Text = ""
+        mock_sbar.MessageType = ""
+        mock_sbar.MessageId = ""
+        mock_sbar.MessageNumber = ""
+
+        controller._session.Info = mock_info
+
+        # ActiveWindow
+        if popup_wnd_id:
+            mock_active = MagicMock()
+            mock_active.Id = f"/app/con[0]/ses[0]/{popup_wnd_id}"
+            mock_active.Text = popup_title or ""
+            controller._session.ActiveWindow = mock_active
+        else:
+            mock_active = MagicMock()
+            mock_active.Id = "/app/con[0]/ses[0]/wnd[0]"
+            controller._session.ActiveWindow = mock_active
+
+        def find_by_id(element_id):
+            if element_id == "wnd[0]":
+                return mock_main
+            if element_id == "wnd[0]/sbar":
+                return mock_sbar
+            if popup_wnd_id and element_id == popup_wnd_id:
+                return mock_popup
+            if popup_wnd_id and element_id == f"{popup_wnd_id}/sbar":
+                raise Exception("no sbar on popup")
+            raise Exception("not found")
+
+        controller._session.findById.side_effect = find_by_id
+
+    def test_no_popup_active_window_is_wnd0(self):
+        """When no popup, active_window is 'wnd[0]'."""
+        controller = self._make_controller_with_session()
+        self._setup_screen(controller)
+
+        result = controller.get_screen_info()
+        assert result["active_window"] == "wnd[0]"
+        assert result["title"] == "SAP Easy Access"
+        assert result["transaction"] == "SESSION_MANAGER"
+
+    def test_popup_active_window_is_wnd1(self):
+        """When popup opens, active_window is 'wnd[1]' and title is popup's."""
+        controller = self._make_controller_with_session()
+        self._setup_screen(controller, popup_wnd_id="wnd[1]",
+                           popup_title="Enter Values")
+
+        result = controller.get_screen_info()
+        assert result["active_window"] == "wnd[1]"
+        assert result["title"] == "Enter Values"
+        assert result["transaction"] == "SESSION_MANAGER"
+
+    def test_nested_popup_wnd2(self):
+        """Detects wnd[2] (popup on top of popup)."""
+        controller = self._make_controller_with_session()
+        self._setup_screen(controller, popup_wnd_id="wnd[2]",
+                           popup_title="Confirmation")
+
+        result = controller.get_screen_info()
+        assert result["active_window"] == "wnd[2]"
+        assert result["title"] == "Confirmation"
+
+    def test_active_window_exception_falls_back_to_wnd0(self):
+        """When ActiveWindow throws, falls back to wnd[0]."""
+        controller = self._make_controller_with_session()
+        self._setup_screen(controller)
+
+        type(controller._session).ActiveWindow = property(
+            lambda self: (_ for _ in ()).throw(Exception("not supported"))
+        )
+
+        result = controller.get_screen_info()
+        assert result["active_window"] == "wnd[0]"
+        assert result["title"] == "SAP Easy Access"
+
+    def test_active_window_none_falls_back_to_wnd0(self):
+        """When ActiveWindow returns None, falls back to wnd[0]."""
+        controller = self._make_controller_with_session()
+        self._setup_screen(controller)
+        controller._session.ActiveWindow = None
+
+        result = controller.get_screen_info()
+        assert result["active_window"] == "wnd[0]"
+
+    def test_action_tool_reports_popup(self):
+        """press_button result includes active_window from screen info."""
+        controller = self._make_controller_with_session()
+        self._setup_screen(controller, popup_wnd_id="wnd[1]",
+                           popup_title="Selection Screen")
+
+        mock_button = MagicMock()
+        original_find = controller._session.findById.side_effect
+
+        def find_by_id(element_id):
+            if element_id == "wnd[0]/tbar[1]/btn[8]":
+                return mock_button
+            return original_find(element_id)
+
+        controller._session.findById.side_effect = find_by_id
+
+        result = controller.press_button("wnd[0]/tbar[1]/btn[8]")
+        assert result["status"] == "pressed"
+        assert result["screen"]["active_window"] == "wnd[1]"
+        assert result["screen"]["title"] == "Selection Screen"
+
+    def test_status_bar_falls_back_to_wnd0(self):
+        """When popup has no sbar, status bar is read from wnd[0]."""
+        controller = self._make_controller_with_session()
+        self._setup_screen(controller, popup_wnd_id="wnd[1]",
+                           popup_title="Popup Without Sbar")
+
+        # The _setup_screen mock already raises for wnd[1]/sbar
+        # and returns a valid sbar for wnd[0]/sbar
+        result = controller.get_screen_info()
+        assert result["active_window"] == "wnd[1]"
+        # Status bar should still be populated from wnd[0]
+        assert result["message"] is not None  # got "" from mock, not None
+

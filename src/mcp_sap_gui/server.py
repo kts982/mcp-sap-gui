@@ -214,7 +214,16 @@ async def sap_send_key(
 
 @mcp.tool()
 async def sap_get_screen_info() -> dict:
-    """Get information about the current SAP screen (transaction, program, screen number, title, status message)"""
+    """Get information about the current SAP screen (transaction, program, screen number, title, status message).
+
+    Reads from ``session.ActiveWindow`` so the response always reflects
+    what the user sees.  The ``active_window`` field tells you which
+    window is in focus (e.g. ``wnd[0]`` for the main screen, ``wnd[1]``
+    for a popup).  The ``title`` comes from the active window.
+
+    Every action tool (press_button, send_key, select_menu, etc.) returns
+    this same screen info, so you always know when a popup appears.
+    Use sap_get_popup_window for full popup content (texts, buttons)."""
     return await _com(controller.get_screen_info)
 
 
