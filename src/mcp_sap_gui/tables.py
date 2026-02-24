@@ -181,6 +181,7 @@ class TablesMixin:
                     row_data[col] = grid.GetCellValue(row, col)
                 except Exception:
                     row_data[col] = None
+            row_data["_absolute_row_index"] = row
             data.append(row_data)
 
         return {
@@ -233,6 +234,7 @@ class TablesMixin:
                         all_empty = False
                 if all_empty:
                     break
+                row_data["_absolute_row_index"] = start_position + vis_idx
                 data.append(row_data)
         else:
             start_position = 0
@@ -444,8 +446,13 @@ class TablesMixin:
             table = self._session.findById(table_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
-                self._scroll_table_control_to_row(table, row)
-                # GetAbsoluteRow: absolute indexing, not affected by scroll
+                # Scroll is best-effort — GetAbsoluteRow uses absolute
+                # indexing and works regardless of scroll position.
+                # Some popup tables throw COM errors on scroll.
+                try:
+                    self._scroll_table_control_to_row(table, row)
+                except Exception:
+                    pass
                 table.GetAbsoluteRow(row).Selected = True
             else:
                 table.selectedRows = str(row)
@@ -644,8 +651,23 @@ class TablesMixin:
                 }
 
             scrollbar = table.VerticalScrollbar
-            new_pos = max(scrollbar.Minimum, min(position, scrollbar.Maximum))
-            scrollbar.Position = new_pos
+            scroll_max = scrollbar.Maximum
+            new_pos = max(scrollbar.Minimum, min(position, scroll_max))
+            try:
+                scrollbar.Position = new_pos
+            except Exception as scroll_err:
+                # Some popup tables throw COM errors on scroll.
+                # Return diagnostic info so the caller can use
+                # navigation buttons or Position... dialog instead.
+                return {
+                    "table_id": table_id,
+                    "error": str(scroll_err),
+                    "requested_position": position,
+                    "clamped_position": new_pos,
+                    "scroll_max": scroll_max,
+                    "total_rows": table.RowCount,
+                    "hint": "Scrollbar failed; use navigation buttons or Position dialog.",
+                }
 
             return {
                 "table_id": table_id,
@@ -653,7 +675,7 @@ class TablesMixin:
                 "position": new_pos,
                 "visible_rows": table.VisibleRowCount,
                 "total_rows": table.RowCount,
-                "scroll_max": scrollbar.Maximum,
+                "scroll_max": scroll_max,
             }
         except Exception as e:
             return {"table_id": table_id, "error": str(e)}

@@ -429,6 +429,24 @@ class TestGridEnhancements:
         assert result["column_info"][0]["tooltip"] == "Tooltip A"
         assert result["column_info"][0]["title"] == "Title A"
 
+    def test_read_table_alv_includes_absolute_row_index(self):
+        """ALV read_table rows include _absolute_row_index matching the loop index."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.ColumnCount = 1
+        mock_grid.ColumnOrder.return_value = "MATNR"
+        mock_grid.GetColumnTooltip.return_value = ""
+        mock_grid.GetDisplayedColumnTitle.return_value = "Material"
+        mock_grid.RowCount = 3
+        mock_grid.GetCellValue.side_effect = lambda r, c: f"MAT{r:03d}"
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.read_table("wnd[0]/usr/grid", max_rows=10)
+
+        assert len(result["data"]) == 3
+        for i, row in enumerate(result["data"]):
+            assert row["_absolute_row_index"] == i
+
     def test_alv_toolbar_includes_tooltip_and_enabled(self):
         """get_alv_toolbar now includes tooltip and enabled per button."""
         controller = self._make_controller_with_session()
@@ -1103,6 +1121,23 @@ class TestGuiTableControl:
         assert result["data"][0]["LGNUM"] == "WH0500"
         assert result["data"][19]["LGNUM"] == "WH0519"
 
+    def test_read_table_control_absolute_row_index(self):
+        """Each row includes _absolute_row_index = start_position + vis_idx."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL", "title": "Col"}]
+        rows = [[f"v{i}"] for i in range(50)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=50, visible_rows=5,
+            initial_scroll_position=10,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["rows_returned"] == 5
+        for i, row in enumerate(result["data"]):
+            assert row["_absolute_row_index"] == 10 + i
+
     def test_read_table_control_near_end_with_padding(self):
         """Reading near end excludes padding rows from the visible window.
 
@@ -1422,6 +1457,31 @@ class TestGuiTableControl:
         # but 15 >= 10 (visible), so it scrolls to 75, offset = 0
         assert mock_table.VerticalScrollbar.Position == 75
         # GetAbsoluteRow uses absolute row index
+        mock_table.GetAbsoluteRow.assert_called_with(75)
+        assert mock_table.GetAbsoluteRow(75).Selected is True
+
+    def test_select_table_row_succeeds_when_scroll_fails(self):
+        """select_table_row uses GetAbsoluteRow even if scroll throws COM error."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "FIELD", "title": "Field"}]
+        rows = [[f"row_{i}"] for i in range(84)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=84, visible_rows=9,
+            initial_scroll_position=0,
+        )
+        # Make scrollbar.Position setter throw (simulates popup table COM error)
+        type(mock_table.VerticalScrollbar).Position = property(
+            lambda self: 0,
+            lambda self, v: (_ for _ in ()).throw(
+                Exception("(-2147417851, 'The server threw an exception.')")
+            ),
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.select_table_row("wnd[1]/usr/tblSEL_FLDS", 75)
+
+        assert result["status"] == "success"
+        assert result["selected_row"] == 75
         mock_table.GetAbsoluteRow.assert_called_with(75)
         assert mock_table.GetAbsoluteRow(75).Selected is True
 
@@ -1778,6 +1838,33 @@ class TestScrollTableControl:
 
         assert "error" in result
         assert "Not a GuiTableControl" in result["error"]
+
+    def test_scroll_returns_diagnostic_on_com_error(self):
+        """scroll_table_control returns diagnostic info when Position setter throws."""
+        controller = self._make_controller_with_session()
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        mock_table.RowCount = 84
+        scrollbar = MagicMock()
+        scrollbar.Minimum = 0
+        scrollbar.Maximum = 75
+        # Make Position setter throw (simulates popup table COM error)
+        type(scrollbar).Position = property(
+            lambda self: 0,
+            lambda self, v: (_ for _ in ()).throw(
+                Exception("(-2147417851, 'The server threw an exception.')")
+            ),
+        )
+        mock_table.VerticalScrollbar = scrollbar
+        controller._session.findById.return_value = mock_table
+
+        result = controller.scroll_table_control("wnd[1]/usr/tblSEL_FLDS", 70)
+
+        assert "error" in result
+        assert "hint" in result
+        assert result["clamped_position"] == 70
+        assert result["scroll_max"] == 75
+        assert result["total_rows"] == 84
 
 
 class TestGetTableControlRowInfo:
