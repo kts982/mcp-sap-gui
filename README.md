@@ -212,7 +212,7 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 "Connect to my open SAP session and tell me what system I'm on"
 ```
 
-## Available Tools (46 total)
+## Available Tools (50 total)
 
 ### Connection Tools
 | Tool | Description |
@@ -226,7 +226,7 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 | Tool | Description |
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code (MM03, VA01, etc.) |
-| `sap_send_key` | Send keyboard keys (Enter, F1-F12, Back, Save, etc.) |
+| `sap_send_key` | Send keyboard keys (Enter, F1-F12, Shift+F1-F9, Ctrl+F/G/P, Back, Save, etc.) |
 | `sap_get_screen_info` | Get current screen information (includes structured status bar) |
 
 ### Field & UI Element Tools
@@ -260,6 +260,7 @@ SAP has two different table types. **All table tools auto-detect the type**, and
 | `sap_set_current_cell` | Set the focused cell |
 | `sap_get_column_info` | Get column names, titles, and tooltips |
 | `sap_get_current_cell` | Get the currently focused cell position |
+| `sap_select_multiple_rows` | Select multiple rows at once (list of row indices) |
 
 #### ALV Grid Only (GuiGridView)
 | Tool | Description |
@@ -294,6 +295,21 @@ Both table types are found throughout SAP, but in different contexts:
 1. Call `sap_read_table(table_id)` — works for both types
 2. Check `table_type` in the response
 3. Use the appropriate type-specific tools for further interaction
+
+### Popup & Dialog Tools
+| Tool | Description |
+|------|-------------|
+| `sap_get_popup_window` | Check if a popup/modal dialog is open, get its title, text, and buttons |
+
+### Toolbar Discovery Tools
+| Tool | Description |
+|------|-------------|
+| `sap_get_toolbar_buttons` | List buttons on system and application toolbars (not ALV) |
+
+### Shell Content Tools
+| Tool | Description |
+|------|-------------|
+| `sap_read_shell_content` | Read content from GuiShell subtypes (HTMLViewer, etc.) |
 
 ### Tree Tools
 | Tool | Description |

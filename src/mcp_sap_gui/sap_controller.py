@@ -2166,6 +2166,261 @@ class SAPGUIController:
             return {"tree_id": tree_id, "path": path, "error": str(e)}
 
     # =========================================================================
+    # Popup Window Handling
+    # =========================================================================
+
+    def get_popup_window(self) -> Dict[str, Any]:
+        """
+        Check if a popup window (modal dialog) is currently open.
+
+        SAP popups appear as wnd[1], wnd[2], etc.  Returns the topmost
+        popup's title, text content, and available buttons so the AI can
+        decide how to respond.
+
+        Returns:
+            Dict with popup info or {"popup_exists": False}
+        """
+        self._require_session()
+
+        # Find the topmost window above wnd[0]
+        popup_wnd = None
+        popup_id = None
+        for i in range(1, 10):
+            wnd_id = f"wnd[{i}]"
+            try:
+                wnd = self._session.findById(wnd_id)
+                popup_wnd = wnd
+                popup_id = wnd_id
+            except Exception:
+                break
+
+        if popup_wnd is None:
+            return {"popup_exists": False}
+
+        result: Dict[str, Any] = {
+            "popup_exists": True,
+            "window_id": popup_id,
+            "title": getattr(popup_wnd, 'Text', ''),
+        }
+
+        # Read the status bar message in the popup if any
+        try:
+            sbar = self._session.findById(f"{popup_id}/sbar")
+            result["message"] = sbar.Text
+            result["message_type"] = getattr(sbar, 'MessageType', '')
+        except Exception:
+            pass
+
+        # Collect text elements and buttons from the user area
+        texts = []
+        buttons = []
+        try:
+            usr = self._session.findById(f"{popup_id}/usr")
+            self._collect_popup_contents(usr, texts, buttons)
+        except Exception:
+            pass
+
+        # Also check toolbar buttons (tbar[0] for OK/Cancel)
+        for tbar_idx in range(2):
+            try:
+                tbar = self._session.findById(f"{popup_id}/tbar[{tbar_idx}]")
+                for i in range(tbar.Children.Count):
+                    btn = tbar.Children(i)
+                    if getattr(btn, 'Type', '') in ('GuiButton',):
+                        buttons.append({
+                            "id": btn.Id,
+                            "text": getattr(btn, 'Text', '').strip(),
+                            "tooltip": getattr(btn, 'Tooltip', '').strip(),
+                        })
+            except Exception:
+                pass
+
+        if texts:
+            result["texts"] = texts
+        if buttons:
+            result["buttons"] = buttons
+
+        return result
+
+    def _collect_popup_contents(
+        self, container, texts: list, buttons: list, depth: int = 0,
+    ) -> None:
+        """Recursively collect text and buttons from a popup's user area."""
+        if depth > 3:
+            return
+        try:
+            for i in range(container.Children.Count):
+                child = container.Children(i)
+                ctype = getattr(child, 'Type', '')
+                text = getattr(child, 'Text', '').strip()
+
+                if ctype == 'GuiButton':
+                    buttons.append({
+                        "id": child.Id,
+                        "text": text,
+                        "tooltip": getattr(child, 'Tooltip', '').strip(),
+                    })
+                elif text and ctype in (
+                    'GuiTextField', 'GuiCTextField', 'GuiLabel',
+                    'GuiTitlebar', 'GuiStatusbar',
+                ):
+                    texts.append(text)
+
+                if hasattr(child, 'Children'):
+                    try:
+                        if child.Children.Count > 0:
+                            self._collect_popup_contents(
+                                child, texts, buttons, depth + 1,
+                            )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # =========================================================================
+    # Toolbar Discovery
+    # =========================================================================
+
+    def get_toolbar_buttons(self, window_id: str = "wnd[0]") -> Dict[str, Any]:
+        """
+        List all toolbar buttons on a window's application toolbar.
+
+        Reads buttons from tbar[0] (system toolbar) and tbar[1] (application
+        toolbar).  Returns button IDs, text, tooltip, and enabled state.
+
+        Args:
+            window_id: Window ID (default "wnd[0]")
+
+        Returns:
+            Dict with toolbar button info
+        """
+        self._require_session()
+
+        toolbars: Dict[str, list] = {}
+        for tbar_idx, tbar_name in [(0, "system_toolbar"), (1, "application_toolbar")]:
+            buttons = []
+            try:
+                tbar = self._session.findById(f"{window_id}/tbar[{tbar_idx}]")
+                for i in range(tbar.Children.Count):
+                    btn = tbar.Children(i)
+                    btype = getattr(btn, 'Type', '')
+                    if btype in ('GuiButton',):
+                        buttons.append({
+                            "id": btn.Id,
+                            "text": getattr(btn, 'Text', '').strip(),
+                            "tooltip": getattr(btn, 'Tooltip', '').strip(),
+                            "enabled": not getattr(btn, 'Changeable', True) is False,
+                        })
+            except Exception:
+                pass
+            if buttons:
+                toolbars[tbar_name] = buttons
+
+        return {
+            "window_id": window_id,
+            "toolbars": toolbars,
+        }
+
+    # =========================================================================
+    # Multi-Row Selection
+    # =========================================================================
+
+    def select_multiple_rows(
+        self, table_id: str, rows: List[int],
+    ) -> Dict[str, Any]:
+        """
+        Select multiple rows in an ALV grid or table control.
+
+        For ALV grids, uses the SelectedRows property which accepts
+        comma-separated row indices (e.g., "0,2,5").
+
+        For GuiTableControl, iterates and sets Selected on each
+        absolute row.
+
+        Args:
+            table_id: SAP GUI table/grid ID
+            rows: List of row indices to select
+
+        Returns:
+            Dict with selection result
+        """
+        self._require_session()
+
+        try:
+            table = self._session.findById(table_id)
+
+            if getattr(table, 'Type', '') == "GuiTableControl":
+                for row in rows:
+                    self._scroll_table_control_to_row(table, row)
+                    table.GetAbsoluteRow(row).Selected = True
+            else:
+                # ALV: comma-separated row list
+                table.SelectedRows = ",".join(str(r) for r in rows)
+
+            return {
+                "table_id": table_id,
+                "selected_rows": rows,
+                "count": len(rows),
+                "status": "success",
+            }
+        except Exception as e:
+            return {"table_id": table_id, "error": str(e)}
+
+    # =========================================================================
+    # Shell Content Reading
+    # =========================================================================
+
+    def read_shell_content(self, shell_id: str) -> Dict[str, Any]:
+        """
+        Read content from a GuiShell subtype (HTMLViewer, etc.).
+
+        Attempts to extract useful content based on the shell's SubType.
+        Supports GuiHTMLViewer (BrowserHandle → InnerHTML), and falls
+        back to generic Text property.
+
+        Args:
+            shell_id: SAP GUI shell element ID
+
+        Returns:
+            Dict with shell content and metadata
+        """
+        self._require_session()
+
+        try:
+            shell = self._session.findById(shell_id)
+            shell_type = getattr(shell, 'Type', '')
+            sub_type = getattr(shell, 'SubType', '')
+
+            result: Dict[str, Any] = {
+                "shell_id": shell_id,
+                "type": shell_type,
+                "sub_type": sub_type,
+            }
+
+            # Try SubType-specific extraction
+            if sub_type == "HTMLViewer":
+                try:
+                    result["inner_html"] = shell.InnerHTML
+                except Exception:
+                    pass
+                try:
+                    result["url"] = shell.CurrentUrl
+                except Exception:
+                    pass
+
+            # Generic fallback: Text property
+            try:
+                text = getattr(shell, 'Text', None)
+                if text is not None:
+                    result["text"] = str(text)[:5000]
+            except Exception:
+                pass
+
+            return result
+        except Exception as e:
+            return {"shell_id": shell_id, "error": str(e)}
+
+    # =========================================================================
     # Screen Element Discovery
     # =========================================================================
 

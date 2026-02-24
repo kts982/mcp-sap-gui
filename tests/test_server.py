@@ -303,6 +303,12 @@ class TestReadOnlyMode:
         with pytest.raises(ValueError, match="read-only"):
             await readonly_srv.sap_select_all_rows("wnd[0]/usr/grid")
 
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_select_multiple_rows(self, readonly_srv):
+        """sap_select_multiple_rows raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_multiple_rows("wnd[0]/usr/grid", [0, 1])
+
 
 # ===========================================================================
 # _parse_key Tests
@@ -327,6 +333,17 @@ class TestParseKey:
         assert srv._parse_key("Cancel") == VKey.F12
         assert srv._parse_key("F5") == VKey.F5
         assert srv._parse_key("Refresh") == VKey.F5
+
+    def test_shift_and_ctrl_keys(self, srv):
+        """Shift+F and Ctrl+ key names parse correctly."""
+        from mcp_sap_gui.sap_controller import VKey
+
+        assert srv._parse_key("Shift+F1") == VKey.SHIFT_F1
+        assert srv._parse_key("Shift+F5") == VKey.SHIFT_F5
+        assert srv._parse_key("Shift+F9") == VKey.SHIFT_F9
+        assert srv._parse_key("Ctrl+F") == VKey.CTRL_F
+        assert srv._parse_key("Ctrl+G") == VKey.CTRL_G
+        assert srv._parse_key("Ctrl+P") == VKey.CTRL_P
 
     def test_unknown_key_raises_error(self, srv):
         """Unknown key names raise ValueError instead of silently defaulting."""
@@ -388,6 +405,14 @@ class TestToolRegistration:
             # Table (TableControl-specific)
             "sap_scroll_table_control", "sap_get_table_control_row_info",
             "sap_select_all_table_control_columns",
+            # Table (multi-row)
+            "sap_select_multiple_rows",
+            # Popup & dialog
+            "sap_get_popup_window",
+            # Toolbar discovery
+            "sap_get_toolbar_buttons",
+            # Shell content
+            "sap_read_shell_content",
             # Tree
             "sap_read_tree", "sap_expand_tree_node", "sap_collapse_tree_node",
             "sap_select_tree_node", "sap_double_click_tree_node",
@@ -413,7 +438,7 @@ class TestToolRegistration:
         assert "enum" in key_schema
         assert "Enter" in key_schema["enum"]
         assert "F8" in key_schema["enum"]
-        assert len(key_schema["enum"]) == 18
+        assert len(key_schema["enum"]) == 30
 
 
 # ===========================================================================

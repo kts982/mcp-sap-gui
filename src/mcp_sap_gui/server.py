@@ -113,6 +113,14 @@ _KEY_MAP = {
     "F6": VKey.F6, "F7": VKey.F7, "F8": VKey.F8, "Execute": VKey.F8,
     "F9": VKey.F9, "F10": VKey.F10, "F11": VKey.F11, "Save": VKey.F11,
     "F12": VKey.F12, "Cancel": VKey.F12,
+    # Shift+F keys (common in SAP: Shift+F1=WhereUsed, Shift+F4=CloseAll, etc.)
+    "Shift+F1": VKey.SHIFT_F1, "Shift+F2": VKey.SHIFT_F2,
+    "Shift+F3": VKey.SHIFT_F3, "Shift+F4": VKey.SHIFT_F4,
+    "Shift+F5": VKey.SHIFT_F5, "Shift+F6": VKey.SHIFT_F6,
+    "Shift+F7": VKey.SHIFT_F7, "Shift+F8": VKey.SHIFT_F8,
+    "Shift+F9": VKey.SHIFT_F9,
+    # Ctrl combinations
+    "Ctrl+F": VKey.CTRL_F, "Ctrl+G": VKey.CTRL_G, "Ctrl+P": VKey.CTRL_P,
 }
 
 
@@ -193,9 +201,12 @@ async def sap_send_key(
         "Enter", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8",
         "F9", "F10", "F11", "F12", "Back", "Save", "Cancel",
         "Execute", "Refresh",
+        "Shift+F1", "Shift+F2", "Shift+F3", "Shift+F4", "Shift+F5",
+        "Shift+F6", "Shift+F7", "Shift+F8", "Shift+F9",
+        "Ctrl+F", "Ctrl+G", "Ctrl+P",
     ],
 ) -> dict:
-    """Send a keyboard key. Common keys: Enter, F1 (Help), F3 (Back), F4 (Search help), F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel)"""
+    """Send a keyboard key. Common keys: Enter, F1 (Help), F3 (Back), F4 (Search help), F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel). Also supports Shift+F1..F9 and Ctrl+F (Find), Ctrl+G (Continue search), Ctrl+P (Print)."""
     _check_write()
     vkey = _parse_key(key)
     return await _com(lambda: controller.send_vkey(vkey))
@@ -433,6 +444,37 @@ async def sap_select_all_rows(grid_id: str) -> dict:
     """Select all rows in an ALV grid. Does NOT work on GuiTableControl."""
     _check_write()
     return await _com(lambda: controller.select_all_rows(grid_id))
+
+
+@mcp.tool()
+async def sap_select_multiple_rows(table_id: str, rows: list[int]) -> dict:
+    """Select multiple rows at once in an ALV grid or table control. Pass a list of row indices (e.g., [0, 2, 5])."""
+    _check_write()
+    return await _com(lambda: controller.select_multiple_rows(table_id, rows))
+
+
+# ---- Popup & dialog tools ----
+
+@mcp.tool()
+async def sap_get_popup_window() -> dict:
+    """Check if a popup/modal dialog is open (wnd[1], wnd[2], etc.). Returns the popup's title, text content, and available buttons so you know how to respond. Returns {popup_exists: false} if no popup."""
+    return await _com(controller.get_popup_window)
+
+
+# ---- Toolbar discovery ----
+
+@mcp.tool()
+async def sap_get_toolbar_buttons(window_id: str = "wnd[0]") -> dict:
+    """List all buttons on the system toolbar (tbar[0]) and application toolbar (tbar[1]). Returns button IDs, text, tooltip, and enabled state. Useful for discovering available actions on a screen. This is for standard SAP toolbars, NOT ALV toolbars (use sap_get_alv_toolbar for ALV)."""
+    return await _com(lambda: controller.get_toolbar_buttons(window_id))
+
+
+# ---- Shell content ----
+
+@mcp.tool()
+async def sap_read_shell_content(shell_id: str) -> dict:
+    """Read content from a GuiShell subtype (e.g., HTMLViewer). Extracts HTML, URL, or text depending on the shell type. Use sap_get_screen_elements first to find shell element IDs."""
+    return await _com(lambda: controller.read_shell_content(shell_id))
 
 
 # ===========================================================================

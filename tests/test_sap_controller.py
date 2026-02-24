@@ -1852,3 +1852,240 @@ class TestGetCurrentCell:
         assert result["current_row"] == 3
         assert result["current_col"] == 2
 
+
+# ===========================================================================
+# Popup Window Detection Tests
+# ===========================================================================
+
+class TestGetPopupWindow:
+    """Tests for get_popup_window()."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_no_popup(self):
+        """Returns popup_exists=False when no popup window."""
+        controller = self._make_controller_with_session()
+        # wnd[1] not found
+        controller._session.findById.side_effect = Exception("not found")
+
+        result = controller.get_popup_window()
+        assert result["popup_exists"] is False
+
+    def test_popup_found(self):
+        """Returns popup info when wnd[1] exists."""
+        controller = self._make_controller_with_session()
+
+        mock_popup = MagicMock()
+        mock_popup.Text = "Confirm Action"
+
+        mock_usr = MagicMock()
+        mock_usr.Children.Count = 1
+        mock_label = MagicMock()
+        mock_label.Type = "GuiLabel"
+        mock_label.Text = "Do you want to continue?"
+        mock_label.Children = MagicMock()
+        mock_label.Children.Count = 0
+        mock_usr.Children.side_effect = lambda i: mock_label
+
+        mock_tbar = MagicMock()
+        mock_btn = MagicMock()
+        mock_btn.Type = "GuiButton"
+        mock_btn.Id = "wnd[1]/tbar[0]/btn[0]"
+        mock_btn.Text = "Yes"
+        mock_btn.Tooltip = "Confirm"
+        mock_tbar.Children.Count = 1
+        mock_tbar.Children.side_effect = lambda i: mock_btn
+
+        def find_by_id(element_id):
+            if element_id == "wnd[1]":
+                return mock_popup
+            if element_id == "wnd[2]":
+                raise Exception("not found")
+            if element_id == "wnd[1]/sbar":
+                raise Exception("no sbar")
+            if element_id == "wnd[1]/usr":
+                return mock_usr
+            if element_id == "wnd[1]/tbar[0]":
+                return mock_tbar
+            if element_id == "wnd[1]/tbar[1]":
+                raise Exception("no tbar[1]")
+            raise Exception("not found")
+
+        controller._session.findById.side_effect = find_by_id
+
+        result = controller.get_popup_window()
+        assert result["popup_exists"] is True
+        assert result["title"] == "Confirm Action"
+        assert "texts" in result
+        assert "Do you want to continue?" in result["texts"]
+        assert len(result["buttons"]) >= 1
+        assert result["buttons"][0]["text"] == "Yes"
+
+
+# ===========================================================================
+# Toolbar Button Discovery Tests
+# ===========================================================================
+
+class TestGetToolbarButtons:
+    """Tests for get_toolbar_buttons()."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_reads_toolbar_buttons(self):
+        """Enumerates buttons from tbar[0] and tbar[1]."""
+        controller = self._make_controller_with_session()
+
+        # tbar[0]: one system button
+        mock_sys_btn = MagicMock()
+        mock_sys_btn.Type = "GuiButton"
+        mock_sys_btn.Id = "wnd[0]/tbar[0]/btn[0]"
+        mock_sys_btn.Text = ""
+        mock_sys_btn.Tooltip = "Save (Ctrl+S)"
+        mock_sys_btn.Changeable = True
+        mock_sys_tbar = MagicMock()
+        mock_sys_tbar.Children.Count = 1
+        mock_sys_tbar.Children.side_effect = lambda i: mock_sys_btn
+
+        # tbar[1]: one app button
+        mock_app_btn = MagicMock()
+        mock_app_btn.Type = "GuiButton"
+        mock_app_btn.Id = "wnd[0]/tbar[1]/btn[8]"
+        mock_app_btn.Text = "Execute"
+        mock_app_btn.Tooltip = "Execute (F8)"
+        mock_app_btn.Changeable = True
+        mock_app_tbar = MagicMock()
+        mock_app_tbar.Children.Count = 1
+        mock_app_tbar.Children.side_effect = lambda i: mock_app_btn
+
+        def find_by_id(element_id):
+            if element_id == "wnd[0]/tbar[0]":
+                return mock_sys_tbar
+            if element_id == "wnd[0]/tbar[1]":
+                return mock_app_tbar
+            raise Exception("not found")
+
+        controller._session.findById.side_effect = find_by_id
+
+        result = controller.get_toolbar_buttons()
+        assert "system_toolbar" in result["toolbars"]
+        assert "application_toolbar" in result["toolbars"]
+        assert result["toolbars"]["system_toolbar"][0]["tooltip"] == "Save (Ctrl+S)"
+        assert result["toolbars"]["application_toolbar"][0]["text"] == "Execute"
+
+    def test_empty_toolbars(self):
+        """Handles missing toolbars gracefully."""
+        controller = self._make_controller_with_session()
+        controller._session.findById.side_effect = Exception("not found")
+
+        result = controller.get_toolbar_buttons()
+        assert result["toolbars"] == {}
+
+
+# ===========================================================================
+# Multi-Row Selection Tests
+# ===========================================================================
+
+class TestSelectMultipleRows:
+    """Tests for select_multiple_rows()."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_alv_grid(self):
+        """ALV grid gets comma-separated SelectedRows."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.Type = "GuiGridView"
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.select_multiple_rows("wnd[0]/usr/grid", [0, 3, 7])
+
+        assert mock_grid.SelectedRows == "0,3,7"
+        assert result["status"] == "success"
+        assert result["count"] == 3
+
+    def test_table_control(self):
+        """TableControl iterates rows and sets Selected."""
+        controller = self._make_controller_with_session()
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        mock_table.VerticalScrollbar = MagicMock()
+        mock_table.VerticalScrollbar.Position = 0
+        mock_table.VerticalScrollbar.Maximum = 100
+        mock_rows = {}
+        for r in [1, 4]:
+            mock_rows[r] = MagicMock()
+        mock_table.GetAbsoluteRow.side_effect = lambda r: mock_rows.get(r, MagicMock())
+        # Stub VisibleRowCount for _scroll_table_control_to_row
+        mock_table.VisibleRowCount = 20
+        controller._session.findById.return_value = mock_table
+
+        result = controller.select_multiple_rows("wnd[0]/usr/tblTEST", [1, 4])
+        assert result["status"] == "success"
+        assert result["count"] == 2
+
+
+# ===========================================================================
+# Shell Content Reading Tests
+# ===========================================================================
+
+class TestReadShellContent:
+    """Tests for read_shell_content()."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_html_viewer(self):
+        """Reads InnerHTML and URL from HTMLViewer shell."""
+        controller = self._make_controller_with_session()
+        mock_shell = MagicMock()
+        mock_shell.Type = "GuiShell"
+        mock_shell.SubType = "HTMLViewer"
+        mock_shell.InnerHTML = "<h1>Report</h1>"
+        mock_shell.CurrentUrl = "about:blank"
+        mock_shell.Text = "Report"
+        controller._session.findById.return_value = mock_shell
+
+        result = controller.read_shell_content("wnd[0]/usr/shell")
+
+        assert result["sub_type"] == "HTMLViewer"
+        assert result["inner_html"] == "<h1>Report</h1>"
+        assert result["url"] == "about:blank"
+
+    def test_generic_shell(self):
+        """Falls back to Text property for unknown shell types."""
+        controller = self._make_controller_with_session()
+        mock_shell = MagicMock()
+        mock_shell.Type = "GuiShell"
+        mock_shell.SubType = "Unknown"
+        mock_shell.Text = "Some content"
+        # No InnerHTML / CurrentUrl
+        del mock_shell.InnerHTML
+        del mock_shell.CurrentUrl
+        controller._session.findById.return_value = mock_shell
+
+        result = controller.read_shell_content("wnd[0]/usr/shell")
+        assert result["text"] == "Some content"
+
+    def test_error_handling(self):
+        """Returns error dict when element not found."""
+        controller = self._make_controller_with_session()
+        controller._session.findById.side_effect = Exception("not found")
+
+        result = controller.read_shell_content("wnd[0]/usr/shell")
+        assert "error" in result
+
