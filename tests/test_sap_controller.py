@@ -2952,6 +2952,36 @@ class TestGetScreenElementsFiltering:
         assert len(result) == 1
         assert result[0].type == "GuiTextField"
 
+    def test_max_depth_limits_recursion(self):
+        """max_depth=1 returns only direct children, not grandchildren."""
+        controller = self._make_controller_with_session()
+        # Container with a nested child (depth 2)
+        container = self._make_container([
+            {"type": "GuiSimpleContainer", "name": "cont", "changeable": False,
+             "children": [
+                 {"type": "GuiTextField", "name": "txtDeep", "changeable": True},
+             ]},
+            {"type": "GuiButton", "name": "btnTop", "changeable": True},
+        ])
+        controller._session.findById.return_value = container
+
+        # depth=1: only direct children (container + button), no grandchildren
+        result_shallow = controller.get_screen_elements(
+            "wnd[0]/usr", max_depth=1,
+        )
+        types_shallow = [e.type for e in result_shallow]
+        assert "GuiSimpleContainer" in types_shallow
+        assert "GuiButton" in types_shallow
+        assert "GuiTextField" not in types_shallow
+
+        # depth=2: recurse into container, so grandchild is included
+        result_deep = controller.get_screen_elements(
+            "wnd[0]/usr", max_depth=2,
+        )
+        types_deep = [e.type for e in result_deep]
+        assert "GuiTextField" in types_deep
+        assert len(result_deep) == 3  # container + button + textfield
+
 
 # ===========================================================================
 # Table Read Filtering Tests (P2)

@@ -198,7 +198,8 @@ async def sap_connect(
 ) -> dict:
     """Connect to an SAP system by its name in SAP Logon Pad.
 
-    Optionally provide credentials for automatic login."""
+    Optionally provide credentials for automatic login.
+    If SAP is already open and logged in, use sap_connect_existing instead."""
     kwargs: dict[str, str] = {"system_description": system_description}
     for key, val in [("client", client), ("user", user),
                      ("password", password), ("language", language)]:
@@ -212,7 +213,10 @@ async def sap_connect_existing(
     connection_index: int = 0,
     session_index: int = 0,
 ) -> dict:
-    """Connect to an already open SAP session. Use this when SAP is already logged in."""
+    """Connect to an already open SAP session. Use this when SAP is already logged in.
+
+    This is the most common starting point. connection_index=0 and session_index=0
+    connect to the first open session. Use sap_list_connections to see all sessions."""
     return _to_dict(await _com(
         lambda: controller.connect_to_existing_session(connection_index, session_index)
     ))
@@ -236,7 +240,11 @@ async def sap_get_session_info() -> dict:
 
 @mcp.tool(annotations=_DESTRUCTIVE)
 async def sap_execute_transaction(tcode: str) -> dict:
-    """Execute an SAP transaction code (e.g., MM03, VA01, SE80)"""
+    """Execute an SAP transaction code (e.g., MM03, VA01, SE80).
+
+    Navigates to the transaction's initial screen. Always check the
+    screen info in the response to understand what screen you landed on.
+    Some transactions require /n prefix for SCWM (e.g., /n/SCWM/MON)."""
     _check_write()
     if _is_transaction_blocked(tcode):
         raise ValueError(f"Transaction {tcode} is blocked by security policy")
@@ -285,13 +293,19 @@ async def sap_get_screen_info() -> dict:
 
 @mcp.tool(annotations=_READ_ONLY)
 async def sap_read_field(field_id: str) -> dict:
-    """Read the value of a field on the current SAP screen"""
+    """Read the value of a field on the current SAP screen.
+
+    Returns value, type, changeable status, and labels (left/right).
+    Use sap_get_screen_elements to discover field IDs on unknown screens."""
     return await _com(lambda: controller.read_field(field_id))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_set_field(field_id: str, value: str) -> dict:
-    """Set a value in a field on the current SAP screen"""
+    """Set a value in a field on the current SAP screen.
+
+    For setting multiple fields at once, use sap_set_batch_fields instead.
+    After setting a field, you may need to press Enter to trigger validation."""
     _check_write()
     _check_okcode_bypass(field_id, value)
     return await _com(lambda: controller.set_field(field_id, value))
@@ -299,45 +313,62 @@ async def sap_set_field(field_id: str, value: str) -> dict:
 
 @mcp.tool(annotations=_WRITE)
 async def sap_press_button(button_id: str) -> dict:
-    """Press a button on the current SAP screen"""
+    """Press a button on the current SAP screen.
+
+    Returns screen info after the press so you can detect navigation or popups.
+    Use sap_get_toolbar_buttons to discover toolbar button IDs.
+    Use sap_get_screen_elements to find on-screen button IDs."""
     _check_write()
     return await _com(lambda: controller.press_button(button_id))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_select_menu(menu_id: str) -> dict:
-    """Select a menu item from the menu bar.
+    """Select a menu item from the menu bar or a submenu.
 
     Example: 'wnd[0]/mbar/menu[1]/menu[0]'.
-    Use sap_get_screen_elements on 'wnd[0]/mbar' to discover menus."""
+    Use sap_get_screen_elements on 'wnd[0]/mbar' to discover menu structure.
+    Returns screen info after selection so you can detect navigation."""
     _check_write()
     return await _com(lambda: controller.select_menu(menu_id))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_select_checkbox(checkbox_id: str, selected: bool = True) -> dict:
-    """Select or deselect a checkbox on the current SAP screen"""
+    """Select or deselect a checkbox on the current SAP screen.
+
+    Set selected=false to uncheck. Use sap_get_screen_elements with
+    type_filter='GuiCheckBox' to find checkbox IDs."""
     _check_write()
     return await _com(lambda: controller.select_checkbox(checkbox_id, selected))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_select_radio_button(radio_id: str) -> dict:
-    """Select a radio button on the current SAP screen"""
+    """Select a radio button on the current SAP screen.
+
+    Use sap_get_screen_elements with type_filter='GuiRadioButton'
+    to find radio button IDs on the current screen."""
     _check_write()
     return await _com(lambda: controller.select_radio_button(radio_id))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_select_combobox_entry(combobox_id: str, key_or_value: str) -> dict:
-    """Select an entry in a combobox/dropdown by its key or display value text"""
+    """Select an entry in a combobox/dropdown by its key or display value text.
+
+    Accepts either the technical key or the visible display text.
+    Use sap_get_combobox_entries first to see all valid options."""
     _check_write()
     return await _com(lambda: controller.select_combobox_entry(combobox_id, key_or_value))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_select_tab(tab_id: str) -> dict:
-    """Select a tab in a tab strip control"""
+    """Select a tab in a tab strip control.
+
+    Returns screen info after selection (tab content changes).
+    Tab IDs typically look like 'wnd[0]/usr/tabsTABSTRIP/tabpTAB01'."""
     _check_write()
     return await _com(lambda: controller.select_tab(tab_id))
 
@@ -379,7 +410,11 @@ async def sap_set_textedit(textedit_id: str, text: str) -> dict:
 
 @mcp.tool(annotations=_WRITE)
 async def sap_set_focus(element_id: str) -> dict:
-    """Set focus to any screen element by its ID."""
+    """Set focus to any screen element by its ID.
+
+    Some SAP actions require focus on a specific element before they work
+    (e.g., F4 search help on a field). Use this to set focus before
+    sending keys with sap_send_key."""
     _check_write()
     return await _com(lambda: controller.set_focus(element_id))
 
@@ -417,7 +452,10 @@ async def sap_read_table(
 async def sap_get_alv_toolbar(grid_id: str) -> dict:
     """Get all toolbar buttons from an ALV grid.
 
-    Returns button IDs, texts, and types. Use this to discover actions."""
+    Returns button IDs, texts, and types. Use this to discover available
+    actions (sort, filter, export, etc.) before pressing them with
+    sap_press_alv_toolbar_button. Only works on GuiGridView (ALV),
+    not GuiTableControl."""
     return await _com(lambda: controller.get_alv_toolbar(grid_id))
 
 
@@ -464,14 +502,21 @@ async def sap_select_alv_context_menu_item(
 
 @mcp.tool(annotations=_WRITE)
 async def sap_select_table_row(table_id: str, row: int) -> dict:
-    """Select a row in a table/grid"""
+    """Select a row in a table/grid.
+
+    Works on both ALV grids and table controls. Row index is zero-based.
+    For ALV: uses absolute row index. For TableControl: scrolls to make
+    the row visible first if needed."""
     _check_write()
     return await _com(lambda: controller.select_table_row(table_id, row))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_double_click_cell(table_id: str, row: int, column: str) -> dict:
-    """Double-click a cell in a table/grid (often opens details)"""
+    """Double-click a cell in a table/grid (often opens details or drills down).
+
+    Row is zero-based. Column is the column name (from sap_read_table
+    or sap_get_column_info). Works on both ALV and TableControl."""
     _check_write()
     return await _com(
         lambda: controller.double_click_table_cell(table_id, row, column)
@@ -480,21 +525,30 @@ async def sap_double_click_cell(table_id: str, row: int, column: str) -> dict:
 
 @mcp.tool(annotations=_WRITE)
 async def sap_modify_cell(grid_id: str, row: int, column: str, value: str) -> dict:
-    """Modify the value of a cell in an ALV grid or table control (e.g., for editable grids)"""
+    """Modify the value of a cell in an ALV grid or table control.
+
+    Only works on editable cells. Use sap_get_cell_info to check if
+    a cell is changeable before attempting to modify it."""
     _check_write()
     return await _com(lambda: controller.modify_cell(grid_id, row, column, value))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_set_current_cell(grid_id: str, row: int, column: str) -> dict:
-    """Set the current (focused) cell in an ALV grid or table control"""
+    """Set the current (focused) cell in an ALV grid or table control.
+
+    Useful before pressing toolbar buttons that act on the current cell."""
     _check_write()
     return await _com(lambda: controller.set_current_cell(grid_id, row, column))
 
 
 @mcp.tool(annotations=_READ_ONLY)
 async def sap_get_column_info(grid_id: str) -> dict:
-    """Get detailed column info from an ALV grid or table control."""
+    """Get detailed column info from an ALV grid or table control.
+
+    Returns column names, titles, widths, and visibility. Useful for
+    understanding table structure. For a lighter alternative, use
+    sap_read_table with columns_only=true."""
     return await _com(lambda: controller.get_column_info(grid_id))
 
 
@@ -510,8 +564,9 @@ async def sap_get_current_cell(table_id: str) -> dict:
 async def sap_scroll_table_control(table_id: str, position: int) -> dict:
     """Scroll a GuiTableControl to a specific row position.
 
-    Use before sap_read_table to navigate to different sections.
-    Does NOT work on ALV grids (they handle scrolling internally)."""
+    Does NOT work on ALV grids (they handle scrolling internally).
+    For reading data at a specific offset, prefer sap_read_table with
+    start_row parameter — it handles scrolling automatically."""
     _check_write()
     return await _com(lambda: controller.scroll_table_control(table_id, position))
 
@@ -613,14 +668,20 @@ async def sap_read_shell_content(shell_id: str) -> dict:
 async def sap_read_tree(tree_id: str, max_nodes: int = 200) -> dict:
     """Read data from a tree control (TableTreeControl, ColumnTreeControl, etc.).
 
-    Returns node hierarchy with texts and column values."""
+    Returns node hierarchy with texts and column values. For large trees
+    (e.g., SPRO with 1000+ nodes), use sap_get_tree_node_children for
+    step-by-step navigation instead. Use sap_search_tree_nodes to find
+    specific nodes by text."""
     capped = min(max_nodes, config.max_table_rows)
     return await _com(lambda: controller.read_tree(tree_id, capped))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_expand_tree_node(tree_id: str, node_key: str) -> dict:
-    """Expand a folder node in a tree control to reveal its children"""
+    """Expand a folder node in a tree control to reveal its children.
+
+    After expanding, use sap_get_tree_node_children or sap_read_tree
+    to see the newly visible child nodes."""
     _check_write()
     return await _com(lambda: controller.expand_tree_node(tree_id, node_key))
 
@@ -634,21 +695,31 @@ async def sap_collapse_tree_node(tree_id: str, node_key: str) -> dict:
 
 @mcp.tool(annotations=_WRITE)
 async def sap_select_tree_node(tree_id: str, node_key: str) -> dict:
-    """Select a node in a tree control"""
+    """Select a node in a tree control.
+
+    Highlights the node without opening it. For SPRO-style trees,
+    use sap_click_tree_link on the execute icon column instead."""
     _check_write()
     return await _com(lambda: controller.select_tree_node(tree_id, node_key))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_double_click_tree_node(tree_id: str, node_key: str) -> dict:
-    """Double-click a node in a tree control (often opens details or drills down)"""
+    """Double-click a node in a tree control (often opens details or drills down).
+
+    In SPRO/customizing trees, this may open documentation (hypertext)
+    rather than executing the activity. Use sap_click_tree_link on the
+    execute column (typically column '2') for SPRO activities."""
     _check_write()
     return await _com(lambda: controller.double_click_tree_node(tree_id, node_key))
 
 
 @mcp.tool(annotations=_WRITE)
 async def sap_double_click_tree_item(tree_id: str, node_key: str, item_name: str) -> dict:
-    """Double-click a specific item (column cell) in a tree node row"""
+    """Double-click a specific item (column cell) in a tree node row.
+
+    item_name is the column name (e.g., 'Column1', 'Column2').
+    Use sap_read_tree to discover column names for the tree."""
     _check_write()
     return await _com(
         lambda: controller.double_click_tree_item(tree_id, node_key, item_name)
@@ -657,7 +728,11 @@ async def sap_double_click_tree_item(tree_id: str, node_key: str, item_name: str
 
 @mcp.tool(annotations=_WRITE)
 async def sap_click_tree_link(tree_id: str, node_key: str, item_name: str) -> dict:
-    """Click a hyperlink in a tree node item"""
+    """Click a hyperlink in a tree node item.
+
+    For SPRO/customizing trees, click on the execute icon column
+    (typically item_name='2') to run an activity. Use sap_read_tree
+    to see which columns have link-type items."""
     _check_write()
     return await _com(
         lambda: controller.click_tree_link(tree_id, node_key, item_name)
@@ -679,13 +754,7 @@ async def sap_search_tree_nodes(tree_id: str, search_text: str,
 
     Useful for finding nodes in deep trees where the same label appears
     in multiple branches. Case-insensitive substring match.
-
-    Args:
-        tree_id: SAP GUI tree element ID
-        search_text: Text to search for (case-insensitive substring)
-        column: Optional column name to search in (omit to search node text)
-        max_results: Maximum matches to return (default 20)
-    """
+    Optionally pass column to search in a specific column instead of node text."""
     capped = min(max_results, config.max_table_rows)
     return await _com(lambda: controller.search_tree_nodes(
         tree_id, search_text, column, capped
@@ -698,11 +767,8 @@ async def sap_get_tree_node_children(tree_id: str, node_key: str = "",
     """Get direct children of a tree node. Much faster than read_tree for
     step-by-step navigation of deep trees (e.g., SPRO).
 
-    Args:
-        tree_id: SAP GUI tree element ID
-        node_key: Parent node key. Omit or empty for root-level nodes.
-        expand: If true, expand the node first to reveal hidden children.
-    """
+    Omit node_key or pass empty string for root-level nodes.
+    Set expand=true to expand the node first (requires write permission)."""
     if expand:
         _check_write()
     return await _com(lambda: controller.get_tree_node_children(
@@ -717,6 +783,7 @@ async def sap_get_tree_node_children(tree_id: str, node_key: str = "",
 @mcp.tool(annotations=_READ_ONLY)
 async def sap_get_screen_elements(
     container_id: str = "wnd[0]/usr",
+    max_depth: int = 2,
     type_filter: str = "",
     changeable_only: bool = False,
 ) -> dict:
@@ -726,10 +793,17 @@ async def sap_get_screen_elements(
 
     Use type_filter and changeable_only to reduce response size on
     complex screens (e.g. type_filter="GuiTextField,GuiCTextField"
-    to find only input fields)."""
+    to find only input fields).
+
+    max_depth controls how deep to recurse into containers (default 2).
+    Use max_depth=1 for a quick overview, max_depth=3+ for deeply nested
+    layouts (splitter containers, tab strips with sub-containers).
+
+    Pass container_id='wnd[0]/mbar' to discover the menu bar structure."""
     elements = await _com(
         lambda: controller.get_screen_elements(
-            container_id, type_filter=type_filter,
+            container_id, max_depth=max_depth,
+            type_filter=type_filter,
             changeable_only=changeable_only,
         )
     )
@@ -741,7 +815,11 @@ async def sap_get_screen_elements(
 
 @mcp.tool(annotations=_READ_ONLY)
 async def sap_screenshot() -> Image:
-    """Take a screenshot of the current SAP window"""
+    """Take a screenshot of the current SAP window.
+
+    Use as a fallback when structured tools (sap_get_screen_elements,
+    sap_read_field, sap_read_table) return empty or confusing results,
+    e.g., on Web Dynpro screens where the element tree is non-standard."""
     result = await _com(controller.take_screenshot)
     if "error" in result:
         raise ValueError(result["error"])
