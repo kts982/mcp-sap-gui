@@ -620,6 +620,111 @@ class TestInstructionsAndResource:
 
 
 # ===========================================================================
+# COM Retry Tests
+# ===========================================================================
+
+class TestCOMRetry:
+    """Tests for transient COM error retry logic."""
+
+    def test_is_transient_com_error_by_hresult(self, srv):
+        """Recognizes transient error by hresult attribute."""
+        exc = Exception("COM error")
+        exc.hresult = -2147417851  # RPC_E_CALL_REJECTED
+        assert srv._is_transient_com_error(exc) is True
+
+    def test_is_transient_com_error_by_args(self, srv):
+        """Recognizes transient error by args[0] (pywintypes.com_error style)."""
+        exc = Exception(-2147417851, "Call was rejected", None, None)
+        assert srv._is_transient_com_error(exc) is True
+
+    def test_is_not_transient_for_unknown_hresult(self, srv):
+        """Non-transient COM errors are not retried."""
+        exc = Exception("Some other error")
+        exc.hresult = -2147352567  # random hresult
+        assert srv._is_transient_com_error(exc) is False
+
+    def test_is_not_transient_for_regular_exception(self, srv):
+        """Regular exceptions are not transient."""
+        assert srv._is_transient_com_error(ValueError("bad value")) is False
+
+    @patch("mcp_sap_gui.server.time.sleep")
+    def test_com_with_retry_succeeds_on_first_try(self, mock_sleep, srv):
+        """No retry needed when call succeeds immediately."""
+        result = srv._com_with_retry(lambda: "ok")
+        assert result == "ok"
+        mock_sleep.assert_not_called()
+
+    @patch("mcp_sap_gui.server.time.sleep")
+    def test_com_with_retry_retries_transient_then_succeeds(self, mock_sleep, srv):
+        """Retries on transient error, then succeeds."""
+        call_count = 0
+
+        def flaky():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                exc = Exception("COM error")
+                exc.hresult = -2147417851
+                raise exc
+            return "recovered"
+
+        result = srv._com_with_retry(flaky)
+        assert result == "recovered"
+        assert call_count == 3
+        assert mock_sleep.call_count == 2
+
+    @patch("mcp_sap_gui.server.time.sleep")
+    def test_com_with_retry_raises_after_max_retries(self, mock_sleep, srv):
+        """Raises after exhausting all retries."""
+        def always_fail():
+            exc = Exception("COM error")
+            exc.hresult = -2147417851
+            raise exc
+
+        with pytest.raises(Exception, match="COM error"):
+            srv._com_with_retry(always_fail)
+
+        assert mock_sleep.call_count == srv._COM_MAX_RETRIES
+
+    @patch("mcp_sap_gui.server.time.sleep")
+    def test_com_with_retry_no_retry_for_non_transient(self, mock_sleep, srv):
+        """Non-transient errors are raised immediately without retry."""
+        def bad_call():
+            raise ValueError("not a COM error")
+
+        with pytest.raises(ValueError, match="not a COM error"):
+            srv._com_with_retry(bad_call)
+
+        mock_sleep.assert_not_called()
+
+    @patch("mcp_sap_gui.server.time.sleep")
+    def test_com_with_retry_exponential_backoff(self, mock_sleep, srv):
+        """Retry delays follow exponential backoff."""
+        call_count = 0
+
+        def fail_twice():
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                exc = Exception("COM error")
+                exc.hresult = -2147417851
+                raise exc
+            return "ok"
+
+        srv._com_with_retry(fail_twice)
+        delays = [c.args[0] for c in mock_sleep.call_args_list]
+        # base=0.3: first=0.3, second=0.6
+        assert len(delays) == 2
+        assert delays[0] == pytest.approx(0.3)
+        assert delays[1] == pytest.approx(0.6)
+
+    def test_transient_hresults_cover_known_codes(self, srv):
+        """All documented transient hresults are in the set."""
+        expected = {-2147417851, -2147418111, -2147417848}
+        assert srv._TRANSIENT_COM_HRESULTS == expected
+
+
+# ===========================================================================
 # Screenshot Optimization Tests
 # ===========================================================================
 

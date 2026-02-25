@@ -20,6 +20,7 @@ Security Note:
 import asyncio
 import base64
 import logging
+import time
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -149,7 +150,10 @@ to jump to a specific entry, look for a "Position..." button in the toolbar \
 
 SPRO uses a deep tree (1000+ nodes). **Do NOT use `sap_read_tree`** — it's too slow.
 
-1. `sap_search_tree_nodes` — find nodes by text (e.g. "Storage Type").
+1. `sap_search_tree_nodes` — find nodes by text (e.g. "Storage Type"). \
+**Note**: only searches already-expanded nodes. If you don't find a match, \
+expand parent nodes first with `sap_get_tree_node_children(expand=true)`, \
+then search again.
 2. `sap_get_tree_node_children` with `expand=true` — step through the hierarchy.
 3. **To execute an activity**: use `sap_click_tree_link(tree_id, node_key, "2")` \
 (column "2" is the execute icon). Do NOT use `sap_double_click_tree_node` — that \
@@ -263,6 +267,8 @@ SPRO (transaction SPRO) is SAP's customizing tree with 1000+ nodes.
 1. Execute transaction: `sap_execute_transaction("SPRO")`
 2. Click "SAP Reference IMG" button (check toolbar with `sap_get_toolbar_buttons`)
 3. Search for your target: `sap_search_tree_nodes(tree_id, "your search text")`
+   - **Limitation**: only searches already-expanded/loaded nodes
+   - If no results, expand parent nodes with `sap_get_tree_node_children(expand=true)` first
 4. Navigate to the node using `sap_get_tree_node_children` with `expand=true`
 5. Execute the activity: `sap_click_tree_link(tree_id, node_key, "2")`
    - Column "2" is the execute/activity icon in SPRO trees
@@ -311,12 +317,64 @@ _executor: Optional[ThreadPoolExecutor] = None
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Known transient COM error codes that are safe to retry
+_TRANSIENT_COM_HRESULTS = {
+    -2147417851,  # RPC_E_CALL_REJECTED (0x80010001) — "Call was rejected by callee"
+    -2147418111,  # RPC_E_DISCONNECTED (0x80010108) — object disconnected
+    -2147417848,  # RPC_E_RETRY (0x80010109) — "The callee is not available"
+}
+
+_COM_MAX_RETRIES = 3
+_COM_BASE_DELAY = 0.3  # seconds
+
+
+def _is_transient_com_error(exc: Exception) -> bool:
+    """Check if a COM exception is a known transient error safe to retry."""
+    hresult = getattr(exc, "hresult", None)
+    if hresult is not None and hresult in _TRANSIENT_COM_HRESULTS:
+        return True
+    # pywintypes.com_error stores hresult in args[0]
+    if exc.args and isinstance(exc.args[0], int) and exc.args[0] in _TRANSIENT_COM_HRESULTS:
+        return True
+    return False
+
+
+def _com_with_retry(fn):
+    """Run a COM operation with retry for transient errors.
+
+    Runs synchronously in the COM thread. Retries up to _COM_MAX_RETRIES
+    times with exponential backoff for known transient COM errors.
+    """
+    last_exc = None
+    for attempt in range(_COM_MAX_RETRIES + 1):
+        try:
+            return fn()
+        except Exception as e:
+            if attempt < _COM_MAX_RETRIES and _is_transient_com_error(e):
+                delay = _COM_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "Transient COM error (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt + 1, _COM_MAX_RETRIES + 1, delay, e,
+                )
+                time.sleep(delay)
+                last_exc = e
+            else:
+                raise
+    raise last_exc  # pragma: no cover — unreachable, loop always raises
+
+
 async def _com(fn):
-    """Run a synchronous COM operation in the dedicated thread."""
+    """Run a synchronous COM operation in the dedicated thread.
+
+    Automatically retries known transient COM errors (e.g. RPC_E_CALL_REJECTED)
+    up to 3 times with exponential backoff.
+    """
     global _executor
     if _executor is None:
         _executor = ThreadPoolExecutor(max_workers=1)
-    return await asyncio.get_running_loop().run_in_executor(_executor, fn)
+    return await asyncio.get_running_loop().run_in_executor(
+        _executor, lambda: _com_with_retry(fn)
+    )
 
 
 def _check_write():
@@ -954,7 +1012,12 @@ async def sap_search_tree_nodes(tree_id: str, search_text: str,
 
     Useful for finding nodes in deep trees where the same label appears
     in multiple branches. Case-insensitive substring match.
-    Optionally pass column to search in a specific column instead of node text."""
+    Optionally pass column to search in a specific column instead of node text.
+
+    **Important limitation**: Only searches nodes that are already loaded
+    (expanded) in the tree. Collapsed subtrees are not searched. If you
+    don't find what you expect, expand parent nodes first using
+    sap_get_tree_node_children with expand=true, then search again."""
     capped = min(max_results, config.max_table_rows)
     return await _com(lambda: controller.search_tree_nodes(
         tree_id, search_text, column, capped
