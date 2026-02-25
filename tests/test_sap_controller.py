@@ -414,6 +414,154 @@ class TestSearchTreeNodes:
         assert result["total_matches"] == 2
 
 
+class TestGetTreeNodeChildren:
+    """Tests for get_tree_node_children."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def _make_gui_collection(self, items):
+        col = MagicMock()
+        col.Count = len(items)
+        col.side_effect = lambda i: items[i]
+        col.__iter__ = lambda self: iter(items)
+        return col
+
+    def _build_tree(self, node_defs):
+        """Build a mock tree from (key, text, parent_key) tuples."""
+        mock_tree = MagicMock()
+        mock_tree.GetTreeType.return_value = 0
+
+        keys = [n[0] for n in node_defs]
+        mock_tree.GetAllNodeKeys.return_value = self._make_gui_collection(keys)
+
+        text_map = {n[0]: n[1] for n in node_defs}
+        parent_map = {n[0]: n[2] for n in node_defs}
+
+        mock_tree.GetNodeTextByKey.side_effect = lambda k: text_map.get(k, "")
+        mock_tree.GetParent.side_effect = lambda k: parent_map.get(k)
+        mock_tree.IsFolderExpandable.return_value = True
+        mock_tree.IsFolderExpanded.return_value = False
+        mock_tree.GetNodeChildrenCount.side_effect = lambda k: sum(
+            1 for n in node_defs if n[2] == k
+        )
+
+        return mock_tree
+
+    def test_root_children(self):
+        """Empty node_key returns root-level nodes only."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R1", "Root A", None),
+            ("R2", "Root B", None),
+            ("C1", "Child of A", "R1"),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.get_tree_node_children("tree1")
+
+        assert result["children_count"] == 2
+        keys = [c["key"] for c in result["children"]]
+        assert "R1" in keys
+        assert "R2" in keys
+        assert "C1" not in keys
+
+    def test_specific_node_children(self):
+        """Returns only direct children of the specified node."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R", "Root", None),
+            ("A", "Child A", "R"),
+            ("B", "Child B", "R"),
+            ("A1", "Grandchild", "A"),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.get_tree_node_children("tree1", node_key="R")
+
+        assert result["children_count"] == 2
+        keys = [c["key"] for c in result["children"]]
+        assert "A" in keys
+        assert "B" in keys
+        assert "A1" not in keys
+
+    def test_expand_flag_calls_expand_node(self):
+        """When expand=True, ExpandNode is called on the parent."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R", "Root", None),
+            ("C", "Child", "R"),
+        ])
+        controller._session.findById.return_value = mock_tree
+        controller.get_screen_info = MagicMock(return_value={"transaction": "SPRO"})
+
+        result = controller.get_tree_node_children("tree1", node_key="R", expand=True)
+
+        mock_tree.ExpandNode.assert_called_once_with("R")
+        assert "screen" in result
+
+    def test_no_expand_no_screen_info(self):
+        """When expand=False, no screen info is returned."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R", "Root", None),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.get_tree_node_children("tree1")
+
+        assert "screen" not in result
+
+    def test_includes_parent_path(self):
+        """When node_key given, result includes parent text and ancestor path."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R", "Root", None),
+            ("A", "EWM", "R"),
+            ("B", "Master Data", "A"),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.get_tree_node_children("tree1", node_key="A")
+
+        assert result["node_text"] == "EWM"
+        assert result["path"] == "Root > EWM"
+        assert result["children_count"] == 1
+        assert result["children"][0]["key"] == "B"
+
+    def test_leaf_node_returns_empty(self):
+        """A leaf node with no children returns empty list."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R", "Root", None),
+            ("L", "Leaf", "R"),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.get_tree_node_children("tree1", node_key="L")
+
+        assert result["children_count"] == 0
+        assert result["children"] == []
+
+    def test_expand_failure_surfaced(self):
+        """When expand fails, the error is included in the response."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R", "Root", None),
+        ])
+        mock_tree.ExpandNode.side_effect = Exception("Node not expandable")
+        controller._session.findById.return_value = mock_tree
+        controller.get_screen_info = MagicMock(return_value={"transaction": "SPRO"})
+
+        result = controller.get_tree_node_children("tree1", node_key="R", expand=True)
+
+        assert "expand_error" in result
+        assert "not expandable" in result["expand_error"]
+
+
 class TestRadioButtonComboboxTab:
     """Tests for radio button, combobox, and tab selection."""
 

@@ -352,6 +352,12 @@ class TestReadOnlyMode:
             await readonly_srv.sap_click_tree_link("wnd[0]/usr/tree", "1", "LINK")
 
     @pytest.mark.asyncio
+    async def test_readonly_blocks_get_tree_node_children_expand(self, readonly_srv):
+        """sap_get_tree_node_children with expand=True raises in read-only mode."""
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_get_tree_node_children("wnd[0]/usr/tree", "1", expand=True)
+
+    @pytest.mark.asyncio
     async def test_readonly_blocks_set_batch_fields(self, readonly_srv):
         """sap_set_batch_fields raises in read-only mode."""
         with pytest.raises(ValueError, match="read-only"):
@@ -508,6 +514,7 @@ class TestToolRegistration:
             "sap_select_tree_node", "sap_double_click_tree_node",
             "sap_double_click_tree_item", "sap_click_tree_link",
             "sap_find_tree_node_by_path", "sap_search_tree_nodes",
+            "sap_get_tree_node_children",
             # Discovery
             "sap_get_screen_elements", "sap_screenshot",
         }

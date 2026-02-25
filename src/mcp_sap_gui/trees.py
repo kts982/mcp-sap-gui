@@ -536,6 +536,116 @@ class TreesMixin:
         except Exception as e:
             return {"tree_id": tree_id, "search_text": search_text, "error": str(e)}
 
+    def get_tree_node_children(self, tree_id: str, node_key: str = "",
+                               expand: bool = False) -> Dict[str, Any]:
+        """
+        Get the direct children of a specific tree node.
+
+        Much more efficient than read_tree for navigating deep trees step by
+        step — returns only the immediate children of the given node instead
+        of the entire tree.
+
+        Args:
+            tree_id: SAP GUI tree ID
+            node_key: Key of the parent node. Empty string = root nodes.
+            expand: If True, expand the node first to reveal children.
+
+        Returns:
+            Dict with the parent info and a list of child nodes.
+        """
+        self._require_session()
+
+        try:
+            tree = self._session.findById(tree_id)
+            column_names, _ = self._get_tree_column_info(tree)
+
+            # Optionally expand first
+            expand_error = None
+            if expand and node_key:
+                try:
+                    tree.ExpandNode(node_key)
+                except Exception as e:
+                    expand_error = str(e)
+                    logger.debug("ExpandNode failed for %s: %s", node_key, e)
+
+            # Get all node keys and filter to direct children
+            all_keys = []
+            try:
+                keys = tree.GetAllNodeKeys()
+                if hasattr(keys, 'Count'):
+                    for i in range(keys.Count):
+                        all_keys.append(keys(i))
+                elif hasattr(keys, '__iter__'):
+                    all_keys = list(keys)
+            except Exception as e:
+                return {"tree_id": tree_id, "error": f"Cannot read node keys: {e}"}
+
+            children = []
+            for key in all_keys:
+                # Determine parent of this node
+                parent = None
+                try:
+                    parent = tree.GetParent(key)
+                except Exception:
+                    try:
+                        parent = tree.GetParentNodeKey(key)
+                    except Exception:
+                        pass
+
+                # Match: root nodes (parent is None/empty) when node_key is empty,
+                # or nodes whose parent matches node_key
+                is_child = False
+                if not node_key:
+                    is_child = not parent
+                else:
+                    is_child = (parent == node_key)
+
+                if not is_child:
+                    continue
+
+                child = {"key": key}
+                child["text"] = self._get_node_text(tree, key, column_names)
+
+                try:
+                    child["is_folder"] = tree.IsFolderExpandable(key)
+                except Exception:
+                    child["is_folder"] = False
+
+                try:
+                    child["is_expanded"] = tree.IsFolderExpanded(key)
+                except Exception:
+                    child["is_expanded"] = False
+
+                try:
+                    child["children_count"] = tree.GetNodeChildrenCount(key)
+                except Exception:
+                    child["children_count"] = 0
+
+                children.append(child)
+
+            result = {
+                "tree_id": tree_id,
+                "node_key": node_key or "(root)",
+                "children_count": len(children),
+                "children": children,
+            }
+
+            # Include parent text for context
+            if node_key:
+                result["node_text"] = self._get_node_text(tree, node_key, column_names)
+                result["path"] = self._build_ancestor_path(tree, node_key, column_names)
+
+            if expand and node_key:
+                result["screen"] = self.get_screen_info()
+
+            if expand_error:
+                result["expand_error"] = expand_error
+
+            return result
+
+        except Exception as e:
+            return {"tree_id": tree_id, "node_key": node_key, "error": str(e)}
+
     def find_tree_node_by_path(self, tree_id: str, path: str) -> Dict[str, Any]:
         """
         Find a node key by its path in the tree hierarchy.

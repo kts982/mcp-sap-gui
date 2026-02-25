@@ -326,6 +326,7 @@ Every action tool automatically reports `active_window` in its response (e.g. `"
 | `sap_click_tree_link` | Click a hyperlink in a tree node |
 | `sap_find_tree_node_by_path` | Find a node key by path (e.g., '2\\1\\2') |
 | `sap_search_tree_nodes` | Search nodes by text, returns matches with full ancestor paths |
+| `sap_get_tree_node_children` | Get direct children of a node (with optional expand) |
 
 ### Discovery Tools
 | Tool | Description |

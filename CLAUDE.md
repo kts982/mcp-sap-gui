@@ -147,7 +147,7 @@ blocked_transactions = [
 
 When `config.read_only = True`, all write tools raise `ValueError`. Each write tool calls `_check_write()` at the start. The tools are always visible but return an error if invoked in read-only mode.
 
-**Write tools** (blocked in read-only): `sap_execute_transaction`, `sap_send_key`, `sap_set_field`, `sap_press_button`, `sap_select_menu`, `sap_select_checkbox`, `sap_select_radio_button`, `sap_select_combobox_entry`, `sap_select_tab`, `sap_set_batch_fields`, `sap_set_textedit`, `sap_set_focus`, `sap_select_table_row`, `sap_double_click_cell`, `sap_modify_cell`, `sap_set_current_cell`, `sap_press_alv_toolbar_button`, `sap_select_alv_context_menu_item`, `sap_scroll_table_control`, `sap_select_all_table_control_columns`, `sap_press_column_header`, `sap_select_all_rows`, `sap_select_multiple_rows`, `sap_expand_tree_node`, `sap_collapse_tree_node`, `sap_select_tree_node`, `sap_double_click_tree_node`, `sap_double_click_tree_item`, `sap_click_tree_link`
+**Write tools** (blocked in read-only): `sap_execute_transaction`, `sap_send_key`, `sap_set_field`, `sap_press_button`, `sap_select_menu`, `sap_select_checkbox`, `sap_select_radio_button`, `sap_select_combobox_entry`, `sap_select_tab`, `sap_set_batch_fields`, `sap_set_textedit`, `sap_set_focus`, `sap_select_table_row`, `sap_double_click_cell`, `sap_modify_cell`, `sap_set_current_cell`, `sap_press_alv_toolbar_button`, `sap_select_alv_context_menu_item`, `sap_scroll_table_control`, `sap_select_all_table_control_columns`, `sap_press_column_header`, `sap_select_all_rows`, `sap_select_multiple_rows`, `sap_expand_tree_node`, `sap_collapse_tree_node`, `sap_select_tree_node`, `sap_double_click_tree_node`, `sap_double_click_tree_item`, `sap_click_tree_link`, `sap_get_tree_node_children` (only when expand=True)
 
 **Read tools** (always allowed): `sap_connect`, `sap_connect_existing`, `sap_list_connections`, `sap_get_session_info`, `sap_get_screen_info`, `sap_read_field`, `sap_get_combobox_entries`, `sap_read_textedit`, `sap_read_table`, `sap_get_alv_toolbar`, `sap_get_column_info`, `sap_get_current_cell`, `sap_get_table_control_row_info`, `sap_get_cell_info`, `sap_get_popup_window`, `sap_get_toolbar_buttons`, `sap_read_shell_content`, `sap_read_tree`, `sap_find_tree_node_by_path`, `sap_search_tree_nodes`, `sap_get_screen_elements`, `sap_screenshot`
 
@@ -272,3 +272,207 @@ def print_tree(elem, depth=0):
 - [SAP Note 480149](https://launchpad.support.sap.com/#/notes/480149) - Scripting Security
 - [SAP Note 587202](https://launchpad.support.sap.com/#/notes/587202) - Scripting Setup
 - [MCP Specification](https://modelcontextprotocol.io/docs)
+
+
+# Multi-CLI Orchestration Guide
+
+You (Claude Code) are the **orchestrator**. You have access to two additional AI CLI tools — `codex` (OpenAI) and `gemini` (Google Gemini CLI). Use them as specialized workers when their strengths match the task. **You remain the decision-maker, architect, and integrator.**
+
+All three CLIs run on subscription plans — there is **no cost concern**. Always optimize for **quality and speed**, never for token savings. Let each tool use its best available model. Feed full context when it helps.
+
+---
+
+## Core Principle: File-Based Context Passing
+
+Never pipe large context through CLI arguments. Instead:
+
+1. Write a focused task spec to `.tasks/<n>.task.md`
+2. Invoke the CLI with that file
+3. Capture output to `.tasks/<n>.result.md`
+4. Read the result back and integrate it
+
+```bash
+# Setup (run once per project)
+mkdir -p .tasks
+echo ".tasks/" >> .gitignore
+```
+
+---
+
+## Routing: When to Delegate vs Handle Directly
+
+Route by **task shape**, not by language or domain.
+
+### KEEP in Claude Code (yourself)
+
+- **Architecture & design** — system design, API contracts, module boundaries
+- **Multi-file refactoring** — changes that ripple across the project
+- **Tasks needing project context you already hold** — if you'd have to
+  dump half the project into a task spec, just do it yourself
+- **Ambiguous or underspecified tasks** — you can ask the user to clarify;
+  workers can't
+- **Orchestration itself** — decomposition, integration, final review
+- **Domain-specific work** where you have strong knowledge the others lack
+  (e.g., SAP/ABAP/EWM/SD, MCP protocol internals)
+- **Complex debugging** requiring holistic understanding of state and flow
+- **Security-sensitive code** — auth, crypto, access control
+
+### DELEGATE to Codex CLI (`codex`)
+
+Codex excels at **focused, well-scoped code generation** with clear specs.
+
+- Single function, single file, or single module generation
+- Unit/integration test generation from interfaces or examples
+- Implementing a function/method from a clear signature + docstring
+- Code translation between languages (e.g., Python → Go, JS → TS)
+- Regex, SQL queries, shell scripts from plain-English specs
+- Boilerplate and scaffolding (REST handlers, CLI arg parsing, CRUD, etc.)
+- Algorithm implementation from a description
+- Generating types/schemas/protobuf from specs or examples
+- Quick, well-defined bug fixes with clear repro steps
+
+**Invocation:**
+```bash
+# Use exec subcommand for non-interactive mode
+codex exec --full-auto \
+  "$(cat .tasks/codex-job.task.md)" > .tasks/codex-job.result.md 2>&1
+```
+
+### DELEGATE to Gemini CLI (`gemini`)
+
+Gemini's 1M token context window makes it the best choice for **large-context tasks**. Don't hesitate to feed it entire files or even whole directories.
+
+- Analyzing large codebases, modules, or log files
+- Reviewing large diffs or pull requests
+- Documentation generation from large or complex code
+- Summarizing lengthy logs, traces, stack dumps, or CI output
+- Cross-referencing many files to answer architectural questions
+- Generating comprehensive test plans or migration checklists
+- Processing/analyzing large data files (CSV, JSON, XML, ABAP transports)
+- "Find all places in this codebase where X happens"
+
+**Invocation:**
+```bash
+# Use -p for non-interactive mode; feed file content inline or via stdin
+gemini -p "$(cat .tasks/gemini-job.task.md)" \
+  --sandbox false > .tasks/gemini-job.result.md 2>&1
+# For large file context, prepend file contents to the prompt or use
+# --include-directories for whole directories
+```
+
+---
+
+## Decision Flowchart
+
+```
+New task arrives
+│
+├─ Can I do this faster than writing a spec? ──────→ DO IT YOURSELF
+│
+├─ Is it ambiguous / needs user clarification? ────→ DO IT YOURSELF (ask user)
+│
+├─ Does it need project context I already hold? ───→ DO IT YOURSELF
+│
+├─ Is it a focused code-gen task with clear spec?
+│  ├─ Single file / function / module? ────────────→ CODEX
+│  └─ Needs reading many files first? ────────────→ GEMINI (analyze) then
+│                                                    CODEX (generate) or YOURSELF
+│
+├─ Does it involve analyzing/reviewing large input?
+│  ├─ Large files, logs, diffs, traces? ───────────→ GEMINI
+│  └─ Large codebase sweep / search? ─────────────→ GEMINI
+│
+├─ Are there independent subtasks? ────────────────→ PARALLELIZE (see below)
+│
+└─ Default ────────────────────────────────────────→ DO IT YOURSELF
+```
+
+---
+
+## Parallel Execution
+
+When subtasks are independent, run them concurrently:
+
+```bash
+(codex exec --full-auto \
+  "$(cat .tasks/codex-api.task.md)" > .tasks/codex-api.result.md 2>&1) &
+PID1=$!
+
+(gemini -p "$(cat .tasks/gemini-review.task.md)" \
+  --sandbox false > .tasks/gemini-review.result.md 2>&1) &
+PID2=$!
+
+wait $PID1 $PID2
+echo "Both tasks complete."
+```
+
+You can also run **two Codex tasks** or **two Gemini tasks** in parallel — they're separate processes.
+
+---
+
+## Task Spec Template
+
+When writing task specs for delegation, use this structure. Make each spec **self-contained** — the worker has zero project context.
+
+```markdown
+## Task
+[One sentence: what to produce]
+
+## Context
+[Only what the worker needs. Include relevant type definitions, interfaces,
+function signatures, or data structures inline. Don't reference files the
+worker can't see — paste the relevant parts.]
+
+## Requirements
+1. [Concrete, testable requirement]
+2. [Another one]
+3. ...
+
+## Constraints
+- Language / framework / version
+- Patterns to follow or avoid
+- Dependencies available
+- Style conventions (naming, error handling, etc.)
+
+## Output Format
+[Exactly what to produce: a complete file, a function, a diff, a report, etc.]
+
+## Examples (optional but helpful)
+[Example input/output, example usage, or a similar function to mimic]
+```
+
+**Rules for good task specs:**
+- Be specific and self-contained
+- Include relevant types/interfaces/signatures inline
+- Specify language, version, and conventions
+- Include examples when the spec alone might be ambiguous
+- For Go: mention error handling style, module path
+- For Python: mention Python version, type hints expectation, async or sync
+- For ABAP: include relevant data dictionary definitions and naming conventions
+
+---
+
+## Quality Gates
+
+**Always review delegated output before using it.** Run through:
+
+- [ ] **Correctness** — does it solve the task? Does it compile/run?
+- [ ] **Consistency** — does it match existing project style and patterns?
+- [ ] **Completeness** — all requirements met? Edge cases handled?
+- [ ] **Integration** — does it fit cleanly into the codebase?
+
+If a result is poor, **refine the spec and retry once**. If it fails again, do it yourself.
+
+---
+
+## Anti-Patterns
+
+1. **Over-delegating** — don't delegate a 10-line function; just write it
+2. **Under-specifying** — a vague task spec produces vague results
+3. **Context dumping** — don't paste the entire project into a task spec;
+   include only what's relevant
+4. **Trust without review** — always verify delegated output before integration
+5. **Sequential when parallel works** — if tasks are independent, parallelize
+6. **Re-delegating repeated failures** — if a worker fails twice, do it yourself
+7. **Delegating what you already know** — if the answer is in your context, use it
+8. **Forcing models** — let each CLI choose its best model for the task

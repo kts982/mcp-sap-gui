@@ -678,6 +678,24 @@ async def sap_search_tree_nodes(tree_id: str, search_text: str,
     ))
 
 
+@mcp.tool(annotations=_WRITE)
+async def sap_get_tree_node_children(tree_id: str, node_key: str = "",
+                                     expand: bool = False) -> dict:
+    """Get direct children of a tree node. Much faster than read_tree for
+    step-by-step navigation of deep trees (e.g., SPRO).
+
+    Args:
+        tree_id: SAP GUI tree element ID
+        node_key: Parent node key. Omit or empty for root-level nodes.
+        expand: If true, expand the node first to reveal hidden children.
+    """
+    if expand:
+        _check_write()
+    return await _com(lambda: controller.get_tree_node_children(
+        tree_id, node_key, expand
+    ))
+
+
 # ===========================================================================
 # Discovery tools
 # ===========================================================================
