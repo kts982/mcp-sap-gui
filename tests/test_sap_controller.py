@@ -247,6 +247,173 @@ class TestReadTree:
         assert result["nodes"][0]["text"] == "Extended Warehouse Mgmt"
 
 
+class TestSearchTreeNodes:
+    """Tests for tree node search functionality."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def _make_gui_collection(self, items):
+        col = MagicMock()
+        col.Count = len(items)
+        col.side_effect = lambda i: items[i]
+        col.__iter__ = lambda self: iter(items)
+        return col
+
+    def _build_tree(self, node_defs):
+        """Build a mock tree from a list of (key, text, parent_key) tuples.
+
+        Returns a MagicMock tree configured for search_tree_nodes.
+        """
+        mock_tree = MagicMock()
+        mock_tree.GetTreeType.return_value = 0  # Simple tree
+
+        keys = [n[0] for n in node_defs]
+        mock_tree.GetAllNodeKeys.return_value = self._make_gui_collection(keys)
+
+        text_map = {n[0]: n[1] for n in node_defs}
+        parent_map = {n[0]: n[2] for n in node_defs}
+
+        mock_tree.GetNodeTextByKey.side_effect = lambda k: text_map.get(k, "")
+        mock_tree.GetParent.side_effect = lambda k: parent_map.get(k)
+        mock_tree.IsFolderExpandable.return_value = False
+        mock_tree.GetHierarchyLevel.side_effect = lambda k: 0
+
+        return mock_tree
+
+    def test_basic_substring_match(self):
+        """Search finds nodes whose text contains the search string."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R", "Root", None),
+            ("A", "Documents", "R"),
+            ("B", "Warehouse Tasks", "A"),
+            ("C", "Other Stuff", "R"),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.search_tree_nodes("tree1", "Warehouse")
+
+        assert result["total_matches"] == 1
+        assert result["matches"][0]["key"] == "B"
+        assert result["matches"][0]["text"] == "Warehouse Tasks"
+
+    def test_case_insensitive(self):
+        """Search is case-insensitive."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("A", "Warehouse Tasks", None),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.search_tree_nodes("tree1", "warehouse tasks")
+
+        assert result["total_matches"] == 1
+        assert result["matches"][0]["key"] == "A"
+
+    def test_ancestor_path_construction(self):
+        """Full ancestor path is built by walking up the parent chain."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R", "Root", None),
+            ("OB", "Outbound", "R"),
+            ("DOC", "Documents", "OB"),
+            ("WT", "Warehouse Tasks", "DOC"),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.search_tree_nodes("tree1", "Warehouse Tasks")
+
+        assert result["total_matches"] == 1
+        assert result["matches"][0]["path"] == "Root > Outbound > Documents > Warehouse Tasks"
+
+    def test_multiple_matches_disambiguation(self):
+        """Same label in different branches returns both with distinct paths."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("R", "Root", None),
+            ("OB", "Outbound", "R"),
+            ("OB_D", "Documents", "OB"),
+            ("OB_WT", "Warehouse Tasks", "OB_D"),
+            ("IB", "Inbound", "R"),
+            ("IB_DL", "Delivery", "IB"),
+            ("IB_D", "Documents", "IB_DL"),
+            ("IB_WT", "Warehouse Tasks", "IB_D"),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.search_tree_nodes("tree1", "Warehouse Tasks")
+
+        assert result["total_matches"] == 2
+        paths = [m["path"] for m in result["matches"]]
+        assert "Root > Outbound > Documents > Warehouse Tasks" in paths
+        assert "Root > Inbound > Delivery > Documents > Warehouse Tasks" in paths
+
+    def test_column_search(self):
+        """When column is specified, only that column is searched."""
+        controller = self._make_controller_with_session()
+
+        mock_tree = MagicMock()
+        mock_tree.GetTreeType.return_value = 1  # List tree
+        col_names = self._make_gui_collection(["HIER", "STATUS"])
+        mock_tree.GetColumnNames.return_value = col_names
+        mock_tree.GetColumnTitleFromName.side_effect = lambda n: n
+
+        keys = self._make_gui_collection(["K1", "K2"])
+        mock_tree.GetAllNodeKeys.return_value = keys
+        mock_tree.GetNodeTextByKey.return_value = ""
+
+        def get_item_text(key, col):
+            data = {
+                ("K1", "HIER"): "Node A",
+                ("K1", "STATUS"): "Active",
+                ("K2", "HIER"): "Node B",
+                ("K2", "STATUS"): "Inactive",
+            }
+            return data.get((key, col), "")
+        mock_tree.GetItemText.side_effect = get_item_text
+        mock_tree.GetParent.return_value = None
+        mock_tree.IsFolderExpandable.return_value = False
+        mock_tree.GetHierarchyLevel.return_value = 0
+
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.search_tree_nodes("tree1", "Active", column="STATUS")
+
+        # "Active" matches K1, "Inactive" also contains "Active"
+        assert result["total_matches"] == 2
+
+    def test_no_matches(self):
+        """Returns empty matches list when nothing matches."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("A", "Something Else", None),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.search_tree_nodes("tree1", "Nonexistent")
+
+        assert result["total_matches"] == 0
+        assert result["matches"] == []
+
+    def test_max_results_cap(self):
+        """Results are capped at max_results."""
+        controller = self._make_controller_with_session()
+        mock_tree = self._build_tree([
+            ("K1", "Task 1", None),
+            ("K2", "Task 2", None),
+            ("K3", "Task 3", None),
+        ])
+        controller._session.findById.return_value = mock_tree
+
+        result = controller.search_tree_nodes("tree1", "Task", max_results=2)
+
+        assert result["total_matches"] == 2
+
+
 class TestRadioButtonComboboxTab:
     """Tests for radio button, combobox, and tab selection."""
 

@@ -658,6 +658,26 @@ async def sap_find_tree_node_by_path(tree_id: str, path: str) -> dict:
     return await _com(lambda: controller.find_tree_node_by_path(tree_id, path))
 
 
+@mcp.tool(annotations=_READ_ONLY)
+async def sap_search_tree_nodes(tree_id: str, search_text: str,
+                                column: str = "", max_results: int = 20) -> dict:
+    """Search for tree nodes by text. Returns matches with full ancestor paths.
+
+    Useful for finding nodes in deep trees where the same label appears
+    in multiple branches. Case-insensitive substring match.
+
+    Args:
+        tree_id: SAP GUI tree element ID
+        search_text: Text to search for (case-insensitive substring)
+        column: Optional column name to search in (omit to search node text)
+        max_results: Maximum matches to return (default 20)
+    """
+    capped = min(max_results, config.max_table_rows)
+    return await _com(lambda: controller.search_tree_nodes(
+        tree_id, search_text, column, capped
+    ))
+
+
 # ===========================================================================
 # Discovery tools
 # ===========================================================================

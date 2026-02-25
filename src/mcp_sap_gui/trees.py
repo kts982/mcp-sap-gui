@@ -409,6 +409,133 @@ class TreesMixin:
                 "item_name": item_name, "error": str(e),
             }
 
+    def _get_node_text(self, tree, key, column_names):
+        """Get searchable text for a node, with column fallback."""
+        text = ""
+        try:
+            text = tree.GetNodeTextByKey(key)
+        except Exception:
+            pass
+        if not text and column_names:
+            for col_name in column_names:
+                try:
+                    val = tree.GetItemText(key, col_name)
+                    if val:
+                        text = val
+                        break
+                except Exception:
+                    pass
+        return text
+
+    def _build_ancestor_path(self, tree, node_key, column_names):
+        """Walk up the parent chain and build a ' > ' separated path string."""
+        parts = []
+        current = node_key
+        seen = set()
+        while current and current not in seen:
+            seen.add(current)
+            text = self._get_node_text(tree, current, column_names)
+            parts.append(text or current)
+            # Walk up
+            parent = None
+            try:
+                parent = tree.GetParent(current)
+            except Exception:
+                try:
+                    parent = tree.GetParentNodeKey(current)
+                except Exception:
+                    pass
+            current = parent
+        parts.reverse()
+        return " > ".join(parts)
+
+    def search_tree_nodes(self, tree_id: str, search_text: str,
+                          column: str = "",
+                          max_results: int = 20) -> Dict[str, Any]:
+        """
+        Search tree nodes by text and return matches with full ancestor paths.
+
+        Case-insensitive substring match. For each match, walks up the parent
+        chain to build the full path, making it easy to disambiguate nodes
+        with the same label in different branches.
+
+        Args:
+            tree_id: SAP GUI tree ID
+            search_text: Text to search for (case-insensitive substring)
+            column: Optional column name to restrict search to
+            max_results: Maximum number of matches to return
+
+        Returns:
+            Dict with matching nodes and their full ancestor paths
+        """
+        self._require_session()
+
+        try:
+            tree = self._session.findById(tree_id)
+
+            # Get column info for text fallback
+            column_names, _ = self._get_tree_column_info(tree)
+
+            # Get all node keys
+            node_keys = []
+            try:
+                keys = tree.GetAllNodeKeys()
+                if hasattr(keys, 'Count'):
+                    for i in range(keys.Count):
+                        node_keys.append(keys(i))
+                elif hasattr(keys, '__iter__'):
+                    node_keys = list(keys)
+            except Exception as e:
+                return {"tree_id": tree_id, "error": f"Cannot read node keys: {e}"}
+
+            needle = search_text.lower()
+            matches = []
+
+            for key in node_keys:
+                if len(matches) >= max_results:
+                    break
+
+                # Determine text to search against
+                if column:
+                    try:
+                        haystack = tree.GetItemText(key, column) or ""
+                    except Exception:
+                        continue
+                else:
+                    haystack = self._get_node_text(tree, key, column_names)
+
+                if needle not in haystack.lower():
+                    continue
+
+                # Build match entry
+                match = {"key": key, "text": haystack}
+
+                match["path"] = self._build_ancestor_path(
+                    tree, key, column_names
+                )
+
+                try:
+                    match["is_folder"] = tree.IsFolderExpandable(key)
+                except Exception:
+                    match["is_folder"] = False
+
+                try:
+                    match["hierarchy_level"] = tree.GetHierarchyLevel(key)
+                except Exception:
+                    match["hierarchy_level"] = None
+
+                matches.append(match)
+
+            return {
+                "tree_id": tree_id,
+                "search_text": search_text,
+                "total_matches": len(matches),
+                "matches": matches,
+            }
+
+        except Exception as e:
+            return {"tree_id": tree_id, "search_text": search_text, "error": str(e)}
+
     def find_tree_node_by_path(self, tree_id: str, path: str) -> Dict[str, Any]:
         """
         Find a node key by its path in the tree hierarchy.

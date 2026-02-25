@@ -507,7 +507,7 @@ class TestToolRegistration:
             "sap_read_tree", "sap_expand_tree_node", "sap_collapse_tree_node",
             "sap_select_tree_node", "sap_double_click_tree_node",
             "sap_double_click_tree_item", "sap_click_tree_link",
-            "sap_find_tree_node_by_path",
+            "sap_find_tree_node_by_path", "sap_search_tree_nodes",
             # Discovery
             "sap_get_screen_elements", "sap_screenshot",
         }
@@ -547,7 +547,7 @@ class TestToolRegistration:
             "sap_get_table_control_row_info", "sap_get_cell_info",
             "sap_get_popup_window", "sap_get_toolbar_buttons",
             "sap_read_shell_content", "sap_read_tree", "sap_find_tree_node_by_path",
-            "sap_get_screen_elements", "sap_screenshot",
+            "sap_search_tree_nodes", "sap_get_screen_elements", "sap_screenshot",
         }
         destructive_tools = {"sap_execute_transaction"}
 
