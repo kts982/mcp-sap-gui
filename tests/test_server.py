@@ -576,6 +576,50 @@ class TestToolRegistration:
 
 
 # ===========================================================================
+# Instructions & Resource Tests
+# ===========================================================================
+
+class TestInstructionsAndResource:
+    """Tests for MCP instructions and resource registration."""
+
+    def test_instructions_set_on_mcp(self, srv):
+        """FastMCP instance has instructions set."""
+        assert srv.mcp.instructions is not None
+        assert len(srv.mcp.instructions) > 0
+
+    def test_instructions_contain_key_sections(self, srv):
+        """Instructions cover essential SAP navigation topics."""
+        instructions = srv.mcp.instructions
+        assert "Getting Started" in instructions
+        assert "Screen Discovery" in instructions
+        assert "Popup Handling" in instructions
+        assert "Tables" in instructions
+        assert "SPRO" in instructions
+        assert "Common Mistakes" in instructions
+
+    def test_instructions_warn_against_guessing_ids(self, srv):
+        """Instructions explicitly warn against guessing element IDs."""
+        assert "Never guess" in srv.mcp.instructions
+
+    def test_resource_registered(self, srv):
+        """The docs://sap-gui-guide resource is registered."""
+        import asyncio
+
+        async def get_resources():
+            return await srv.mcp.list_resources()
+
+        resources = asyncio.new_event_loop().run_until_complete(get_resources())
+        uris = [str(r.uri) for r in resources]
+        assert "docs://sap-gui-guide" in uris
+
+    def test_resource_content_not_empty(self, srv):
+        """The SAP GUI guide resource returns non-empty content."""
+        assert len(srv._SAP_GUI_GUIDE) > 0
+        assert "Element Types" in srv._SAP_GUI_GUIDE
+        assert "SPRO Navigation" in srv._SAP_GUI_GUIDE
+
+
+# ===========================================================================
 # Screenshot Optimization Tests
 # ===========================================================================
 

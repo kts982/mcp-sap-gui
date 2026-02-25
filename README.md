@@ -212,6 +212,15 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 "Connect to my open SAP session and tell me what system I'm on"
 ```
 
+## Built-in Agent Guidance
+
+The server includes built-in navigation knowledge that helps any MCP client (Claude Code, Copilot, Cursor, Cline, etc.) use SAP GUI effectively:
+
+- **MCP Instructions** — Injected into every client's system prompt during initialization. Covers screen discovery workflow, popup handling, table pagination, SPRO tree navigation, key reference, and common mistakes to avoid.
+- **`docs://sap-gui-guide` Resource** — Detailed reference guide available on-demand via `resources/read`. Covers element types, ID naming conventions, transaction code formats, table type comparison, status bar messages, and step-by-step patterns for SPRO and table maintenance views.
+
+These prevent common agent mistakes like guessing element IDs, ignoring popups, pressing F5 (="New Entries") when meaning to refresh, or using `double_click_tree_node` in SPRO (which opens docs instead of executing the activity).
+
 ## Available Tools (50 total)
 
 ### Connection Tools

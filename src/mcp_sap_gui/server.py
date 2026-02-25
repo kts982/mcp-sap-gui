@@ -98,10 +98,210 @@ async def _lifespan(server: FastMCP) -> AsyncIterator[None]:
 
 
 # ---------------------------------------------------------------------------
+# MCP Instructions (injected into every client's system prompt)
+# ---------------------------------------------------------------------------
+
+_INSTRUCTIONS = """\
+SAP GUI automation server. Controls SAP GUI for Windows via COM scripting.
+
+## Getting Started
+
+1. If SAP is already open and logged in, use `sap_connect_existing` (most common).
+2. If SAP is not open, use `sap_connect` with the system name from SAP Logon Pad.
+3. After connecting, use `sap_get_session_info` to see the current transaction/screen.
+
+## Screen Discovery (use this workflow on every new screen)
+
+1. `sap_get_screen_elements` — discovers all element IDs on the current screen. \
+Use `type_filter` (e.g. "GuiTextField,GuiCTextField") and `changeable_only=true` \
+to reduce output on complex screens.
+2. `sap_get_toolbar_buttons` — lists toolbar button IDs (system bar + app bar).
+3. `sap_read_field` — reads a specific field's value and labels.
+
+**CRITICAL: Never guess or hallucinate element IDs.** Always discover them first \
+with the tools above. SAP field IDs vary across systems and customizations.
+
+## Popup Handling
+
+Every action tool returns `screen.active_window`. If it is `wnd[1]` or higher, \
+a popup appeared. Call `sap_get_popup_window` to read popup text and buttons. \
+Always check for popups after actions that may trigger them (button presses, \
+Enter key, transaction execution, double-clicks).
+
+## Tables: ALV Grid vs TableControl
+
+`sap_read_table` auto-detects the type. The response includes `table_type`:
+- **GuiGridView (ALV)**: Standard for reports. All rows accessible via `start_row`. \
+Use `sap_get_alv_toolbar` for toolbar actions.
+- **GuiTableControl**: Standard for customizing (SPRO, SM30). Visible rows only.
+
+**Pagination**: Use `start_row` parameter to paginate through large tables. \
+Check `total_rows` in the response to know when you've read everything.
+
+**Schema first**: Use `columns_only=true` to see column names before reading data. \
+Then use `columns="COL_A,COL_B"` to fetch only what you need.
+
+**Table maintenance views (SM30-style)**: These use GuiTableControl. If you need \
+to jump to a specific entry, look for a "Position..." button in the toolbar \
+(`sap_get_toolbar_buttons`) — it opens a search dialog. Don't manually scroll.
+
+## SPRO / Customizing Tree Navigation
+
+SPRO uses a deep tree (1000+ nodes). **Do NOT use `sap_read_tree`** — it's too slow.
+
+1. `sap_search_tree_nodes` — find nodes by text (e.g. "Storage Type").
+2. `sap_get_tree_node_children` with `expand=true` — step through the hierarchy.
+3. **To execute an activity**: use `sap_click_tree_link(tree_id, node_key, "2")` \
+(column "2" is the execute icon). Do NOT use `sap_double_click_tree_node` — that \
+opens documentation, not the activity.
+4. After clicking, check for popups (selection screens often appear as dialogs).
+
+## Key Reference
+
+- **Enter**: Confirm / continue
+- **F3 / Back**: Go back one screen
+- **F4**: Open search help / dropdown (set focus on field first with `sap_set_focus`)
+- **F5 / Refresh**: Context-dependent — in table maintenance views this means \
+"New Entries", NOT refresh. Check toolbar button tooltips first.
+- **F8 / Execute**: Run report / execute selection
+- **F11 / Save**: Save (Ctrl+S equivalent)
+- **F12 / Cancel**: Cancel / close dialog
+
+## Common Mistakes to Avoid
+
+- **Guessing IDs**: Always use `sap_get_screen_elements` or `sap_get_toolbar_buttons` first.
+- **Ignoring popups**: Check `active_window` in every action response.
+- **F5 in table maintenance**: F5 means "New Entries", not refresh.
+- **double_click_tree_node in SPRO**: Opens docs, not activities. Use `click_tree_link`.
+- **Scrolling TableControls manually**: Use `start_row` in `sap_read_table` or \
+the "Position..." button instead.
+- **Reading huge trees**: Use `search_tree_nodes` + `get_tree_node_children`, \
+not `read_tree` on large trees like SPRO.
+"""
+
+
+# ---------------------------------------------------------------------------
+# MCP Resource: detailed SAP GUI reference guide
+# ---------------------------------------------------------------------------
+
+_SAP_GUI_GUIDE = """\
+# SAP GUI Navigation Reference for AI Agents
+
+Detailed reference guide for automating SAP GUI via MCP tools.
+
+## Element Types and ID Patterns
+
+| Type | Description | Typical ID Pattern |
+|------|-------------|-------------------|
+| GuiTextField | Text input | `wnd[0]/usr/txtFIELD_NAME` |
+| GuiCTextField | Text with search help (F4) | `wnd[0]/usr/ctxtFIELD_NAME` |
+| GuiPasswordField | Password input | `wnd[0]/usr/pwdFIELD_NAME` |
+| GuiButton | Pushbutton | `wnd[0]/tbar[1]/btn[8]` or `wnd[0]/usr/btnBUTTON_NAME` |
+| GuiCheckBox | Checkbox | `wnd[0]/usr/chkFIELD_NAME` |
+| GuiRadioButton | Radio button | `wnd[0]/usr/radFIELD_NAME` |
+| GuiComboBox | Dropdown | `wnd[0]/usr/cmbFIELD_NAME` |
+| GuiTab | Tab in strip | `wnd[0]/usr/tabsTABSTRIP/tabpTAB01` |
+| GuiMenu | Menu bar item | `wnd[0]/mbar/menu[0]/menu[1]` |
+| GuiGridView | ALV Grid | `wnd[0]/usr/cntlGRID/shellcont/shell` |
+| GuiTableControl | Classic table | `wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS` |
+| GuiTree | Tree control | `wnd[0]/usr/cntlTREE/shellcont/shell` |
+| GuiStatusbar | Status bar | `wnd[0]/sbar` |
+| GuiOkCodeField | Command/OK-code field | `wnd[0]/tbar[0]/okcd` |
+
+## ID Naming Conventions
+
+- `wnd[0]` = main window, `wnd[1]` = first popup, `wnd[2]` = second popup
+- `usr` = user area (screen body)
+- `tbar[0]` = system toolbar (top), `tbar[1]` = application toolbar
+- `mbar` = menu bar
+- `btn[N]` = toolbar button by position
+- `shell/shellcont/shell` = container for ALV grids and tree controls
+- `txt` prefix = GuiTextField, `ctxt` = GuiCTextField, `chk` = GuiCheckBox
+- `rad` = GuiRadioButton, `cmb` = GuiComboBox, `pwd` = GuiPasswordField
+
+## Transaction Code Conventions
+
+- Standard: `MM03` (display material), `VA03` (display sales order)
+- With /n prefix: `/nMM03` — closes current transaction, opens new one
+- With /o prefix: `/oMM03` — opens in new session (new window)
+- SCWM transactions need /n: `/n/SCWM/MON`, `/n/SCWM/PRDO`
+
+## Table Type Comparison
+
+### GuiGridView (ALV)
+- Used in: Reports, list displays, transaction results
+- ID contains: `shellcont/shell`
+- All rows accessible directly (internal scrolling)
+- Has built-in toolbar: sort, filter, export, layout
+- Use `sap_get_alv_toolbar` for toolbar button discovery
+- Use `sap_press_alv_toolbar_button` to execute toolbar actions
+- Pagination: `start_row` parameter in `sap_read_table`
+
+### GuiTableControl
+- Used in: SPRO customizing, SM30 table maintenance, config screens
+- ID starts with: `tbl`
+- Only visible rows accessible at a time
+- Scrolling via `VerticalScrollbar.Position`
+- Pagination: `start_row` in `sap_read_table` (handles scrolling internally)
+- "Position..." button for jumping to specific entries
+- F5 = "New Entries" (NOT refresh!)
+
+## Reading Status Bar Messages
+
+The status bar (`wnd[0]/sbar`) shows messages after actions:
+- **S** (Success): Operation completed successfully
+- **E** (Error): Operation failed — read the message for details
+- **W** (Warning): Warning that may need acknowledgment
+- **I** (Info): Informational message
+
+Use `sap_read_field("wnd[0]/sbar")` to read the status bar after actions.
+
+## SPRO Navigation Pattern (Step-by-Step)
+
+SPRO (transaction SPRO) is SAP's customizing tree with 1000+ nodes.
+
+1. Execute transaction: `sap_execute_transaction("SPRO")`
+2. Click "SAP Reference IMG" button (check toolbar with `sap_get_toolbar_buttons`)
+3. Search for your target: `sap_search_tree_nodes(tree_id, "your search text")`
+4. Navigate to the node using `sap_get_tree_node_children` with `expand=true`
+5. Execute the activity: `sap_click_tree_link(tree_id, node_key, "2")`
+   - Column "2" is the execute/activity icon in SPRO trees
+   - Do NOT use `double_click_tree_node` — that opens documentation
+6. Handle the resulting screen (often a popup selection screen or table maintenance view)
+
+## Table Maintenance Views (SM30-style)
+
+These appear when you execute SPRO activities or use SM30:
+
+1. Usually shows a selection screen first (popup on wnd[1])
+2. After execution, shows a GuiTableControl with configuration entries
+3. Toolbar has: "New Entries", "Position...", "Delete", "Save"
+4. To find specific entries, use "Position..." button (opens search dialog)
+5. To read all entries, use `sap_read_table` with `start_row` pagination
+6. Check `total_rows` in response to know total entry count
+
+## Web Dynpro Screens
+
+Some newer SAP screens use Web Dynpro technology:
+- `sap_get_screen_elements` may return 0 elements on wnd[0]/usr
+- Use `sap_screenshot` as fallback to see what's displayed
+- Element IDs follow different patterns (deeper nesting)
+- Try increasing `max_depth` in `sap_get_screen_elements`
+
+## Handling Splitter Layouts
+
+Some transactions use split-screen layouts:
+- Elements are nested inside `shellcont[0]`, `shellcont[1]`, etc.
+- Use `sap_get_screen_elements` with `max_depth=3` or higher
+- Example: Warehouse Monitor `/SCWM/MON` uses splitter with tree in `shellcont[0]`
+"""
+
+
+# ---------------------------------------------------------------------------
 # Module-level state
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP("mcp-sap-gui", lifespan=_lifespan)
+mcp = FastMCP("mcp-sap-gui", instructions=_INSTRUCTIONS, lifespan=_lifespan)
 controller: Optional[SAPGUIController] = None
 config = ServerConfig()
 _executor: Optional[ThreadPoolExecutor] = None
@@ -824,6 +1024,19 @@ async def sap_screenshot() -> Image:
     if "error" in result:
         raise ValueError(result["error"])
     return Image(data=base64.b64decode(result["data"]), format="png")
+
+
+# ===========================================================================
+# Resources
+# ===========================================================================
+
+@mcp.resource("docs://sap-gui-guide")
+def sap_gui_guide() -> str:
+    """Detailed SAP GUI navigation reference for AI agents.
+
+    Covers element types, ID patterns, transaction conventions,
+    table type comparison, SPRO navigation, and troubleshooting."""
+    return _SAP_GUI_GUIDE
 
 
 # ===========================================================================

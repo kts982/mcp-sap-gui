@@ -155,6 +155,32 @@ When `config.read_only = True`, all write tools raise `ValueError`. Each write t
 
 Edit `ServerConfig.blocked_transactions` in `server.py`.
 
+## MCP Instructions & Resource
+
+The server provides SAP navigation knowledge to all MCP clients via two mechanisms:
+
+### `_INSTRUCTIONS` (in `server.py`)
+
+Passed to `FastMCP(instructions=...)`. Injected into every client's system prompt during MCP `initialize`. Keep this **concise** — agents read it every session. Covers:
+- Getting started / connect flow
+- Screen discovery workflow (always discover, never guess IDs)
+- Popup handling (`active_window` check)
+- Table types, pagination, Position button
+- SPRO tree navigation (`search_tree_nodes` + `click_tree_link`)
+- Key reference with SAP-specific gotchas (F5 = "New Entries" in table maintenance)
+- Common mistakes to avoid
+
+### `_SAP_GUI_GUIDE` (in `server.py`)
+
+Exposed as `@mcp.resource("docs://sap-gui-guide")`. Detailed reference for clients that support resources. Contains element type tables, ID naming conventions, full SPRO step-by-step, table maintenance patterns, Web Dynpro fallback, etc.
+
+### Maintenance
+
+When adding new tools or discovering new navigation patterns:
+1. Update `_INSTRUCTIONS` if the pattern is critical (agents should always know it)
+2. Update `_SAP_GUI_GUIDE` for detailed reference information
+3. Update tests in `TestInstructionsAndResource` if new key sections are added
+
 ## Adding New Tools
 
 The server uses **FastMCP** (`@mcp.tool()` decorators). Adding a new tool is two steps:
