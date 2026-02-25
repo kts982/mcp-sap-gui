@@ -362,11 +362,12 @@ async def sap_set_batch_fields(fields: dict) -> dict:
 
 
 @mcp.tool(annotations=_READ_ONLY)
-async def sap_read_textedit(textedit_id: str) -> dict:
+async def sap_read_textedit(textedit_id: str, max_lines: int = 0) -> dict:
     """Read the content of a multiline text editor (GuiTextedit).
 
-    Returns full text, line count, and individual lines."""
-    return await _com(lambda: controller.read_textedit(textedit_id))
+    Returns full text and line count. Use max_lines to cap output for
+    large text editors (0 = all lines)."""
+    return await _com(lambda: controller.read_textedit(textedit_id, max_lines))
 
 
 @mcp.tool(annotations=_WRITE)
@@ -388,15 +389,28 @@ async def sap_set_focus(element_id: str) -> dict:
 # ===========================================================================
 
 @mcp.tool(annotations=_READ_ONLY)
-async def sap_read_table(table_id: str, max_rows: int = 100) -> dict:
+async def sap_read_table(
+    table_id: str,
+    max_rows: int = 100,
+    columns: str = "",
+    columns_only: bool = False,
+    start_row: int = 0,
+) -> dict:
     """Read data from an ALV grid or table on the current screen.
 
     Auto-detects the table type. The response includes a 'table_type' field
     ('GuiGridView' for ALV or 'GuiTableControl') so you know which
     type-specific tools to use next (e.g., sap_get_alv_toolbar for ALV,
-    sap_scroll_table_control for TableControl)."""
+    sap_scroll_table_control for TableControl).
+
+    Use columns_only=true for schema discovery (returns column metadata
+    only, no data). Use columns to fetch only specific columns (CSV).
+    Use start_row to paginate through large tables."""
     capped = min(max_rows, config.max_table_rows)
-    return await _com(lambda: controller.read_table(table_id, capped))
+    return await _com(lambda: controller.read_table(
+        table_id, capped, columns=columns,
+        columns_only=columns_only, start_row=start_row,
+    ))
 
 
 @mcp.tool(annotations=_READ_ONLY)
@@ -701,12 +715,23 @@ async def sap_get_tree_node_children(tree_id: str, node_key: str = "",
 # ===========================================================================
 
 @mcp.tool(annotations=_READ_ONLY)
-async def sap_get_screen_elements(container_id: str = "wnd[0]/usr") -> dict:
+async def sap_get_screen_elements(
+    container_id: str = "wnd[0]/usr",
+    type_filter: str = "",
+    changeable_only: bool = False,
+) -> dict:
     """Discover all elements on the current SAP screen.
 
-    Useful for finding field IDs when working with a new screen."""
+    Useful for finding field IDs when working with a new screen.
+
+    Use type_filter and changeable_only to reduce response size on
+    complex screens (e.g. type_filter="GuiTextField,GuiCTextField"
+    to find only input fields)."""
     elements = await _com(
-        lambda: controller.get_screen_elements(container_id)
+        lambda: controller.get_screen_elements(
+            container_id, type_filter=type_filter,
+            changeable_only=changeable_only,
+        )
     )
     return {
         "element_count": len(elements),

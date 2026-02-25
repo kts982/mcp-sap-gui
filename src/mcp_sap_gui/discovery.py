@@ -231,7 +231,9 @@ class DiscoveryMixin:
     # =========================================================================
 
     def get_screen_elements(self, container_id: str = "wnd[0]/usr",
-                            max_depth: int = 3) -> List[ScreenElement]:
+                            max_depth: int = 3,
+                            type_filter: str = "",
+                            changeable_only: bool = False) -> List[ScreenElement]:
         """
         Enumerate all elements on the current screen.
 
@@ -240,22 +242,35 @@ class DiscoveryMixin:
         Args:
             container_id: Starting container (default: main user area)
             max_depth: Maximum recursion depth
+            type_filter: Comma-separated SAP element types to include
+                (e.g. "GuiTextField,GuiCTextField"). Empty = all types.
+            changeable_only: If True, only return editable/input elements
 
         Returns:
             List of ScreenElement objects
         """
         self._require_session()
 
+        type_filter_set = None
+        if type_filter:
+            type_filter_set = {t.strip() for t in type_filter.split(",") if t.strip()}
+
         try:
             container = self._session.findById(container_id)
-            elements = self._enumerate_elements(container, max_depth)
+            elements = self._enumerate_elements(
+                container, max_depth,
+                type_filter_set=type_filter_set,
+                changeable_only=changeable_only,
+            )
             return elements
         except Exception as e:
             logger.error(f"Failed to enumerate elements: {e}")
             return []
 
     def _enumerate_elements(self, container, max_depth: int,
-                            current_depth: int = 0) -> List[ScreenElement]:
+                            current_depth: int = 0,
+                            type_filter_set: set = None,
+                            changeable_only: bool = False) -> List[ScreenElement]:
         """Recursively enumerate screen elements."""
         elements = []
 
@@ -274,12 +289,22 @@ class DiscoveryMixin:
                     changeable=getattr(child, 'Changeable', False),
                     visible=getattr(child, 'Visible', True),
                 )
-                elements.append(element)
 
-                # Recurse into containers
+                # Apply filters — but always recurse into containers
+                include = True
+                if type_filter_set and element.type not in type_filter_set:
+                    include = False
+                if changeable_only and not element.changeable:
+                    include = False
+                if include:
+                    elements.append(element)
+
+                # Recurse into containers regardless of filters
                 if hasattr(child, 'Children') and child.Children.Count > 0:
                     child_elements = self._enumerate_elements(
-                        child, max_depth, current_depth + 1
+                        child, max_depth, current_depth + 1,
+                        type_filter_set=type_filter_set,
+                        changeable_only=changeable_only,
                     )
                     elements.extend(child_elements)
 

@@ -2032,7 +2032,7 @@ class TestTextedit:
         return controller
 
     def test_read_textedit(self):
-        """read_textedit returns lines and full text."""
+        """read_textedit returns text and line_count (no lines key)."""
         controller = self._make_controller_with_session()
         mock_te = MagicMock()
         mock_te.LineCount = 3
@@ -2044,8 +2044,40 @@ class TestTextedit:
 
         assert result["line_count"] == 3
         assert result["text"] == "Line 1\nLine 2\nLine 3"
-        assert result["lines"] == ["Line 1", "Line 2", "Line 3"]
+        assert "lines" not in result
         assert result["changeable"] is True
+
+    def test_read_textedit_max_lines_truncation(self):
+        """max_lines caps the number of lines returned and adds truncated flag."""
+        controller = self._make_controller_with_session()
+        mock_te = MagicMock()
+        mock_te.LineCount = 100
+        mock_te.GetLineText.side_effect = [f"Line {i}" for i in range(100)]
+        mock_te.Changeable = True
+        controller._session.findById.return_value = mock_te
+
+        result = controller.read_textedit("wnd[0]/usr/txtEdit", max_lines=5)
+
+        assert result["line_count"] == 5
+        assert result["text"] == "Line 0\nLine 1\nLine 2\nLine 3\nLine 4"
+        assert result["truncated"] is True
+        assert result["total_lines"] == 100
+
+    def test_read_textedit_max_lines_zero_returns_all(self):
+        """max_lines=0 (default) returns all lines."""
+        controller = self._make_controller_with_session()
+        mock_te = MagicMock()
+        mock_te.LineCount = 3
+        mock_te.GetLineText.side_effect = ["A", "B", "C"]
+        mock_te.Changeable = False
+        controller._session.findById.return_value = mock_te
+
+        result = controller.read_textedit("wnd[0]/usr/txtEdit", max_lines=0)
+
+        assert result["line_count"] == 3
+        assert result["text"] == "A\nB\nC"
+        assert "truncated" not in result
+        assert "total_lines" not in result
 
     def test_set_textedit(self):
         """set_textedit sets the Text property."""
@@ -2784,4 +2816,363 @@ class TestScreenInfoActiveWindow:
         assert result["active_window"] == "wnd[1]"
         # Status bar should still be populated from wnd[0]
         assert result["message"] is not None  # got "" from mock, not None
+
+
+# ===========================================================================
+# Screen Element Filtering Tests (P1)
+# ===========================================================================
+
+class TestGetScreenElementsFiltering:
+    """Tests for type_filter and changeable_only in get_screen_elements."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def _make_container(self, elements):
+        """Build a mock container with child elements.
+
+        elements: list of dicts with type, name, text, changeable, children (optional).
+        """
+        container = MagicMock()
+        children = []
+        for elem in elements:
+            child = MagicMock()
+            child.Id = f"wnd[0]/usr/{elem.get('name', 'x')}"
+            child.Type = elem["type"]
+            child.Name = elem.get("name", "")
+            child.Text = elem.get("text", "")
+            child.Changeable = elem.get("changeable", False)
+            child.Visible = True
+
+            sub_children = elem.get("children", [])
+            if sub_children:
+                sub_mocks = []
+                for sc in sub_children:
+                    sc_mock = MagicMock()
+                    sc_mock.Id = f"wnd[0]/usr/{elem.get('name', 'x')}/{sc.get('name', 'y')}"
+                    sc_mock.Type = sc["type"]
+                    sc_mock.Name = sc.get("name", "")
+                    sc_mock.Text = sc.get("text", "")
+                    sc_mock.Changeable = sc.get("changeable", False)
+                    sc_mock.Visible = True
+                    sc_mock.Children.Count = 0
+                    sub_mocks.append(sc_mock)
+                child.Children.Count = len(sub_mocks)
+                child.Children.side_effect = lambda i, _mocks=sub_mocks: _mocks[i]
+            else:
+                child.Children.Count = 0
+
+            children.append(child)
+
+        container.Children.Count = len(children)
+        container.Children.side_effect = lambda i: children[i]
+        return container
+
+    def test_no_filters_returns_all(self):
+        """Without filters, all elements are returned (backward compat)."""
+        controller = self._make_controller_with_session()
+        container = self._make_container([
+            {"type": "GuiTextField", "name": "txtA", "changeable": True},
+            {"type": "GuiLabel", "name": "lblB", "changeable": False},
+            {"type": "GuiButton", "name": "btnC", "changeable": True},
+        ])
+        controller._session.findById.return_value = container
+
+        result = controller.get_screen_elements("wnd[0]/usr")
+        assert len(result) == 3
+
+    def test_type_filter_returns_only_matching_types(self):
+        """type_filter CSV filters to specified types only."""
+        controller = self._make_controller_with_session()
+        container = self._make_container([
+            {"type": "GuiTextField", "name": "txtA", "changeable": True},
+            {"type": "GuiLabel", "name": "lblB", "changeable": False},
+            {"type": "GuiButton", "name": "btnC", "changeable": True},
+        ])
+        controller._session.findById.return_value = container
+
+        result = controller.get_screen_elements(
+            "wnd[0]/usr", type_filter="GuiTextField,GuiButton",
+        )
+        types = {e.type for e in result}
+        assert types == {"GuiTextField", "GuiButton"}
+        assert len(result) == 2
+
+    def test_changeable_only_filters_non_changeable(self):
+        """changeable_only=True excludes non-changeable elements."""
+        controller = self._make_controller_with_session()
+        container = self._make_container([
+            {"type": "GuiTextField", "name": "txtA", "changeable": True},
+            {"type": "GuiLabel", "name": "lblB", "changeable": False},
+            {"type": "GuiCTextField", "name": "ctxtC", "changeable": True},
+        ])
+        controller._session.findById.return_value = container
+
+        result = controller.get_screen_elements(
+            "wnd[0]/usr", changeable_only=True,
+        )
+        assert len(result) == 2
+        assert all(e.changeable for e in result)
+
+    def test_combined_filters(self):
+        """type_filter + changeable_only work together."""
+        controller = self._make_controller_with_session()
+        container = self._make_container([
+            {"type": "GuiTextField", "name": "txtA", "changeable": True},
+            {"type": "GuiTextField", "name": "txtB", "changeable": False},
+            {"type": "GuiButton", "name": "btnC", "changeable": True},
+        ])
+        controller._session.findById.return_value = container
+
+        result = controller.get_screen_elements(
+            "wnd[0]/usr", type_filter="GuiTextField", changeable_only=True,
+        )
+        assert len(result) == 1
+        assert result[0].name == "txtA"
+
+    def test_filter_recurses_into_non_matching_containers(self):
+        """Filtering doesn't prevent recursion into container elements."""
+        controller = self._make_controller_with_session()
+        # A container (GuiSimpleContainer) holds a GuiTextField child.
+        # Even though the container doesn't match type_filter, its child should.
+        container = self._make_container([
+            {"type": "GuiSimpleContainer", "name": "cont", "changeable": False,
+             "children": [
+                 {"type": "GuiTextField", "name": "txtInner", "changeable": True},
+             ]},
+        ])
+        controller._session.findById.return_value = container
+
+        result = controller.get_screen_elements(
+            "wnd[0]/usr", type_filter="GuiTextField",
+        )
+        assert len(result) == 1
+        assert result[0].type == "GuiTextField"
+
+
+# ===========================================================================
+# Table Read Filtering Tests (P2)
+# ===========================================================================
+
+class TestReadTableFiltering:
+    """Tests for columns, columns_only, start_row in read_table."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def _make_alv_grid(self, columns, rows_data):
+        """Create a mock ALV grid (GuiGridView)."""
+        grid = MagicMock()
+        grid.ColumnCount = len(columns)
+        grid.ColumnOrder.side_effect = lambda i: columns[i]
+        grid.GetColumnTooltip.side_effect = lambda c: f"Tip_{c}"
+        grid.GetDisplayedColumnTitle.side_effect = lambda c: f"Title_{c}"
+        grid.RowCount = len(rows_data)
+
+        def get_cell_value(row, col):
+            col_idx = columns.index(col)
+            return rows_data[row][col_idx]
+        grid.GetCellValue.side_effect = get_cell_value
+        return grid
+
+    # ---- ALV tests ----
+
+    def test_read_table_columns_only_alv(self):
+        """columns_only returns metadata with empty data for ALV."""
+        controller = self._make_controller_with_session()
+        grid = self._make_alv_grid(["COL_A", "COL_B"], [["a1", "b1"], ["a2", "b2"]])
+        controller._session.findById.return_value = grid
+
+        result = controller.read_table("grid1", columns_only=True)
+
+        assert result["columns_only"] is True
+        assert result["data"] == []
+        assert result["rows_returned"] == 0
+        assert result["total_rows"] == 2
+        assert result["columns"] == ["COL_A", "COL_B"]
+        assert len(result["column_info"]) == 2
+
+    def test_read_table_column_filter_alv(self):
+        """columns CSV filters to selected columns in ALV data."""
+        controller = self._make_controller_with_session()
+        grid = self._make_alv_grid(
+            ["COL_A", "COL_B", "COL_C"],
+            [["a1", "b1", "c1"], ["a2", "b2", "c2"]],
+        )
+        controller._session.findById.return_value = grid
+
+        result = controller.read_table("grid1", columns="COL_A,COL_C")
+
+        assert result["columns"] == ["COL_A", "COL_C"]
+        assert len(result["column_info"]) == 2
+        assert set(result["data"][0].keys()) == {"COL_A", "COL_C", "_absolute_row_index"}
+        assert result["data"][0]["COL_A"] == "a1"
+        assert result["data"][0]["COL_C"] == "c1"
+
+    def test_read_table_start_row_alv(self):
+        """start_row skips first N rows for ALV."""
+        controller = self._make_controller_with_session()
+        grid = self._make_alv_grid(
+            ["COL"],
+            [["v0"], ["v1"], ["v2"], ["v3"], ["v4"]],
+        )
+        controller._session.findById.return_value = grid
+
+        result = controller.read_table("grid1", max_rows=2, start_row=2)
+
+        assert result["start_row"] == 2
+        assert result["rows_returned"] == 2
+        assert result["data"][0]["COL"] == "v2"
+        assert result["data"][0]["_absolute_row_index"] == 2
+        assert result["data"][1]["COL"] == "v3"
+
+    def test_read_table_start_row_past_end_alv(self):
+        """start_row beyond row count returns empty data for ALV."""
+        controller = self._make_controller_with_session()
+        grid = self._make_alv_grid(["COL"], [["v0"], ["v1"]])
+        controller._session.findById.return_value = grid
+
+        result = controller.read_table("grid1", start_row=10)
+
+        assert result["rows_returned"] == 0
+        assert result["data"] == []
+
+    # ---- TableControl tests ----
+
+    def _make_table_control(self, columns, rows_data, total_rows=None,
+                            visible_rows=None, initial_scroll_position=0):
+        """Create a mock GuiTableControl (reusable helper)."""
+        if total_rows is None:
+            total_rows = len(rows_data)
+        if visible_rows is None:
+            visible_rows = len(rows_data)
+
+        mock_table = MagicMock()
+        mock_table.Type = "GuiTableControl"
+        mock_table.TableFieldName = "TEST"
+        mock_table.RowCount = total_rows
+        mock_table.VisibleRowCount = visible_rows
+
+        mock_cols = MagicMock()
+        mock_cols.Count = len(columns)
+        col_mocks = []
+        for col_def in columns:
+            col_mock = MagicMock()
+            col_mock.Title = col_def.get("title", "")
+            col_mock.Tooltip = col_def.get("tooltip", "")
+            col_mocks.append(col_mock)
+        mock_cols.side_effect = lambda i: col_mocks[i]
+        mock_table.Columns = mock_cols
+
+        _col_names = [c.get("name", f"col_{i}") for i, c in enumerate(columns)]
+
+        scrollbar = MagicMock()
+        scrollbar.Minimum = 0
+        scrollbar.Maximum = max(0, total_rows - visible_rows)
+        scrollbar.Position = initial_scroll_position
+        mock_table.VerticalScrollbar = scrollbar
+
+        def get_cell(row_idx, col_idx):
+            abs_row = scrollbar.Position + row_idx
+            cell = MagicMock()
+            cell.Name = _col_names[col_idx] if col_idx < len(_col_names) else f"col_{col_idx}"
+            if abs_row < len(rows_data) and col_idx < len(rows_data[abs_row]):
+                cell.Type = "GuiTextField"
+                cell.Text = str(rows_data[abs_row][col_idx])
+            else:
+                cell.Type = "GuiTextField"
+                cell.Text = ""
+            return cell
+        mock_table.GetCell = MagicMock(side_effect=get_cell)
+        return mock_table
+
+    def test_read_table_columns_only_table_control(self):
+        """columns_only returns metadata with empty data for TableControl."""
+        controller = self._make_controller_with_session()
+        cols = [{"name": "A", "title": "ColA"}, {"name": "B", "title": "ColB"}]
+        mock_table = self._make_table_control(cols, [["a1", "b1"]])
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("tbl1", columns_only=True)
+
+        assert result["columns_only"] is True
+        assert result["data"] == []
+        assert result["rows_returned"] == 0
+        assert result["columns"] == ["A", "B"]
+        assert len(result["column_info"]) == 2
+
+    def test_read_table_column_filter_table_control(self):
+        """columns CSV filters to selected columns in TableControl data."""
+        controller = self._make_controller_with_session()
+        cols = [
+            {"name": "COL_A", "title": "A"},
+            {"name": "COL_B", "title": "B"},
+            {"name": "COL_C", "title": "C"},
+        ]
+        mock_table = self._make_table_control(
+            cols, [["a1", "b1", "c1"], ["a2", "b2", "c2"]],
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("tbl1", columns="COL_A,COL_C")
+
+        assert result["columns"] == ["COL_A", "COL_C"]
+        assert len(result["column_info"]) == 2
+        assert set(result["data"][0].keys()) == {"COL_A", "COL_C", "_absolute_row_index"}
+        assert result["data"][0]["COL_A"] == "a1"
+        assert result["data"][0]["COL_C"] == "c1"
+
+    def test_read_table_start_row_table_control(self):
+        """start_row scrolls TableControl to the requested position."""
+        controller = self._make_controller_with_session()
+        cols = [{"name": "COL", "title": "Col"}]
+        rows = [[f"v{i}"] for i in range(50)]
+        mock_table = self._make_table_control(
+            cols, rows, total_rows=50, visible_rows=5,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("tbl1", max_rows=3, start_row=10)
+
+        # Verify scroll was requested
+        assert mock_table.VerticalScrollbar.Position == 10
+        assert result["first_visible_row"] == 10
+        assert result["rows_returned"] == 3
+        assert result["data"][0]["COL"] == "v10"
+
+    def test_read_table_negative_start_row_clamped_alv(self):
+        """Negative start_row is clamped to 0 for ALV."""
+        controller = self._make_controller_with_session()
+        grid = self._make_alv_grid(["COL"], [["v0"], ["v1"]])
+        controller._session.findById.return_value = grid
+
+        result = controller.read_table("grid1", start_row=-5)
+
+        assert result["start_row"] == 0
+        assert result["rows_returned"] == 2
+        assert result["data"][0]["_absolute_row_index"] == 0
+
+    def test_read_table_column_filter_empty_col_with_data_in_other_cols(self):
+        """TableControl: rows with data in non-filtered columns are not treated as padding."""
+        controller = self._make_controller_with_session()
+        cols = [
+            {"name": "KEY", "title": "Key"},
+            {"name": "OPT", "title": "Optional"},
+        ]
+        # OPT is empty for all rows, but KEY has data
+        rows = [["k1", ""], ["k2", ""], ["k3", ""]]
+        mock_table = self._make_table_control(cols, rows)
+        controller._session.findById.return_value = mock_table
+
+        # Filter to only OPT — should still return 3 rows because
+        # padding detection checks all columns
+        result = controller.read_table("tbl1", columns="OPT")
+
+        assert result["rows_returned"] == 3
 

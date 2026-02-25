@@ -186,11 +186,10 @@ async def sap_new_tool(param1: str) -> dict:
 ### Finding Elements on Unknown Screens
 
 ```python
-# Get all elements
-elements = controller.get_screen_elements()
-for e in elements:
-    if e.changeable:  # Input fields
-        print(f"{e.id}: {e.type} = {e.text}")
+# Get only input fields (much smaller response on complex screens)
+elements = controller.get_screen_elements(changeable_only=True)
+# Or filter by type
+elements = controller.get_screen_elements(type_filter="GuiTextField,GuiCTextField")
 ```
 
 ### Handling Popups
@@ -215,6 +214,14 @@ def get_status():
         "type": sbar.MessageType,  # S=Success, E=Error, W=Warning, I=Info
     }
 ```
+
+### Response Size Optimization
+
+Three tools support optional filtering to reduce context token usage:
+
+- **`sap_get_screen_elements`**: `type_filter` (CSV, e.g. `"GuiTextField,GuiCTextField"`) and `changeable_only=True` to return only editable input fields instead of all 200+ elements on complex screens.
+- **`sap_read_table`**: `columns_only=True` for schema discovery (no data), `columns` (CSV) to fetch specific columns, `start_row` to paginate. Typical workflow: `columns_only=True` → inspect schema → `columns="COL_A,COL_B"` with `start_row` pagination.
+- **`sap_read_textedit`**: `max_lines` to cap output for large text editors (0 = all).
 
 ## GuiGridView (ALV) vs GuiTableControl
 

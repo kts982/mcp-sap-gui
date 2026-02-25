@@ -330,35 +330,46 @@ class FieldsMixin:
             "results": results,
         }
 
-    def read_textedit(self, textedit_id: str) -> Dict[str, Any]:
+    def read_textedit(self, textedit_id: str, max_lines: int = 0) -> Dict[str, Any]:
         """
         Read the content of a multiline text editor (GuiTextedit).
 
         Args:
             textedit_id: SAP GUI textedit ID
+            max_lines: Maximum lines to return (0 = all lines)
 
         Returns:
-            Dict with full text, line count, and individual lines
+            Dict with full text and line count
         """
         self._require_session()
 
         try:
             textedit = self._session.findById(textedit_id)
             line_count = textedit.LineCount
+
+            read_count = line_count
+            truncated = False
+            if max_lines > 0 and line_count > max_lines:
+                read_count = max_lines
+                truncated = True
+
             lines = []
-            for i in range(line_count):
+            for i in range(read_count):
                 try:
                     lines.append(textedit.GetLineText(i))
                 except Exception:
                     lines.append("")
 
-            return {
+            result: Dict[str, Any] = {
                 "textedit_id": textedit_id,
-                "line_count": line_count,
+                "line_count": read_count,
                 "text": "\n".join(lines),
-                "lines": lines,
                 "changeable": getattr(textedit, 'Changeable', None),
             }
+            if truncated:
+                result["truncated"] = True
+                result["total_lines"] = line_count
+            return result
         except Exception as e:
             return {"textedit_id": textedit_id, "error": str(e)}
 

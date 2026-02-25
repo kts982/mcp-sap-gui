@@ -129,7 +129,9 @@ class TablesMixin:
 
     # ---- Table reading ----
 
-    def read_table(self, table_id: str, max_rows: int = 100) -> Dict[str, Any]:
+    def read_table(self, table_id: str, max_rows: int = 100,
+                   columns: str = "", columns_only: bool = False,
+                   start_row: int = 0) -> Dict[str, Any]:
         """
         Read data from an ALV grid or table control.
 
@@ -139,28 +141,46 @@ class TablesMixin:
         Args:
             table_id: SAP GUI table/grid ID
             max_rows: Maximum rows to read (default 100)
+            columns: Comma-separated column names to include (empty = all).
+                Reduces response size when only a few columns are needed.
+            columns_only: If True, return only column metadata with empty
+                data (schema discovery mode — very small response).
+            start_row: Row index to start reading from (default 0).
+                For ALV: skips first N rows. For TableControl: scrolls to
+                that position before reading.
 
         Returns:
             Dict with table data and metadata
         """
         self._require_session()
 
+        col_filter = []
+        if columns:
+            col_filter = [c.strip() for c in columns.split(",") if c.strip()]
+
         try:
             table = self._session.findById(table_id)
             if getattr(table, 'Type', '') == "GuiTableControl":
-                return self._read_table_control(table, table_id, max_rows)
-            return self._read_alv_grid(table, table_id, max_rows)
+                return self._read_table_control(
+                    table, table_id, max_rows, col_filter, columns_only, start_row,
+                )
+            return self._read_alv_grid(
+                table, table_id, max_rows, col_filter, columns_only, start_row,
+            )
         except Exception as e:
             return {"table_id": table_id, "error": str(e)}
 
-    def _read_alv_grid(self, grid, table_id: str, max_rows: int) -> Dict[str, Any]:
+    def _read_alv_grid(self, grid, table_id: str, max_rows: int,
+                       col_filter: List[str] = None,
+                       columns_only: bool = False,
+                       start_row: int = 0) -> Dict[str, Any]:
         """Read data from an ALV grid (GuiGridView)."""
-        columns = []
+        all_columns = []
         for i in range(grid.ColumnCount):
-            columns.append(grid.ColumnOrder(i))
+            all_columns.append(grid.ColumnOrder(i))
 
-        column_info = []
-        for col in columns:
+        all_column_info = []
+        for col in all_columns:
             info = {"name": col}
             try:
                 info["tooltip"] = grid.GetColumnTooltip(col)
@@ -170,36 +190,55 @@ class TablesMixin:
                 info["title"] = grid.GetDisplayedColumnTitle(col)
             except Exception:
                 info["title"] = col
-            column_info.append(info)
+            all_column_info.append(info)
 
-        row_count = min(grid.RowCount, max_rows)
+        # Apply column filter
+        if col_filter:
+            col_set = set(col_filter)
+            columns = [c for c in all_columns if c in col_set]
+            column_info = [ci for ci in all_column_info if ci["name"] in col_set]
+        else:
+            columns = all_columns
+            column_info = all_column_info
+
         data = []
-        for row in range(row_count):
-            row_data = {}
-            for col in columns:
-                try:
-                    row_data[col] = grid.GetCellValue(row, col)
-                except Exception:
-                    row_data[col] = None
-            row_data["_absolute_row_index"] = row
-            data.append(row_data)
+        start_row = max(0, start_row)
+        if not columns_only:
+            end_row = min(start_row + max_rows, grid.RowCount)
+            for row in range(start_row, end_row):
+                row_data = {}
+                for col in columns:
+                    try:
+                        row_data[col] = grid.GetCellValue(row, col)
+                    except Exception:
+                        row_data[col] = None
+                row_data["_absolute_row_index"] = row
+                data.append(row_data)
 
-        return {
+        result = {
             "table_id": table_id,
             "table_type": "GuiGridView",
             "total_rows": grid.RowCount,
+            "start_row": start_row,
             "rows_returned": len(data),
             "columns": columns,
             "column_info": column_info,
             "data": data,
         }
+        if columns_only:
+            result["columns_only"] = True
+        return result
 
-    def _read_table_control(self, table, table_id: str, max_rows: int) -> Dict[str, Any]:
+    def _read_table_control(self, table, table_id: str, max_rows: int,
+                            col_filter: List[str] = None,
+                            columns_only: bool = False,
+                            start_row: int = 0) -> Dict[str, Any]:
         """Read visible rows from a GuiTableControl.
 
-        Reads from the current scroll position without changing it.  This
-        preserves the user's navigated position (e.g. after "Position..." in
-        SPRO/SM30) and avoids crashing SAP GUI's COM server -- programmatic
+        Reads from the current scroll position without changing it (unless
+        start_row is explicitly provided).  This preserves the user's
+        navigated position (e.g. after "Position..." in SPRO/SM30) and
+        avoids crashing SAP GUI's COM server -- programmatic
         scrollbar.Position changes can destabilize certain table views.
 
         The read is capped at VisibleRowCount.  GuiTableControl.RowCount often
@@ -207,39 +246,78 @@ class TablesMixin:
         the actual data), so reading stops early when an all-empty row is
         encountered.
         """
-        columns_info = self._get_table_control_columns(table)
-        column_names = [c["name"] for c in columns_info]
-        col_count = len(columns_info)
+        all_columns_info = self._get_table_control_columns(table)
+        all_column_names = [c["name"] for c in all_columns_info]
+        all_col_count = len(all_columns_info)
+
+        # Build column filter index mapping
+        if col_filter:
+            col_set = set(col_filter)
+            filtered_col_indices = [
+                i for i, name in enumerate(all_column_names) if name in col_set
+            ]
+            column_names = [all_column_names[i] for i in filtered_col_indices]
+            columns_info = [all_columns_info[i] for i in filtered_col_indices]
+        else:
+            filtered_col_indices = list(range(all_col_count))
+            column_names = all_column_names
+            columns_info = all_columns_info
 
         total_rows = table.RowCount
         visible_rows = table.VisibleRowCount
 
         data = []
-        if total_rows > 0 and col_count > 0:
+        if total_rows > 0 and all_col_count > 0:
             scrollbar = table.VerticalScrollbar
-            start_position = scrollbar.Position
-            rows_to_read = min(visible_rows, max_rows)
 
-            for vis_idx in range(rows_to_read):
-                row_data = {}
-                all_empty = True
-                for col_idx in range(col_count):
-                    try:
-                        cell = table.GetCell(vis_idx, col_idx)
-                        value = self._read_cell_value(cell)
-                    except Exception:
-                        value = None
-                    row_data[column_names[col_idx]] = value
-                    if value is not None and value != "":
-                        all_empty = False
-                if all_empty:
-                    break
-                row_data["_absolute_row_index"] = start_position + vis_idx
-                data.append(row_data)
+            # Scroll to start_row if explicitly requested
+            if start_row > 0:
+                new_pos = max(scrollbar.Minimum, min(start_row, scrollbar.Maximum))
+                try:
+                    scrollbar.Position = new_pos
+                except Exception:
+                    pass  # best-effort scroll
+                start_position = scrollbar.Position
+            else:
+                start_position = scrollbar.Position
+
+            if not columns_only:
+                rows_to_read = min(visible_rows, max_rows)
+                for vis_idx in range(rows_to_read):
+                    # Padding detection must check ALL columns, not just
+                    # filtered ones — a row may have data in unfiltered
+                    # columns while filtered columns are blank.
+                    all_empty = True
+                    if col_filter:
+                        for ci in range(all_col_count):
+                            try:
+                                cell = table.GetCell(vis_idx, ci)
+                                val = self._read_cell_value(cell)
+                            except Exception:
+                                val = None
+                            if val is not None and val != "":
+                                all_empty = False
+                                break
+                    row_data = {}
+                    for col_idx in filtered_col_indices:
+                        try:
+                            cell = table.GetCell(vis_idx, col_idx)
+                            value = self._read_cell_value(cell)
+                        except Exception:
+                            value = None
+                        col_name = all_column_names[col_idx]
+                        row_data[col_name] = value
+                        if not col_filter:
+                            if value is not None and value != "":
+                                all_empty = False
+                    if all_empty:
+                        break
+                    row_data["_absolute_row_index"] = start_position + vis_idx
+                    data.append(row_data)
         else:
             start_position = 0
 
-        return {
+        result = {
             "table_id": table_id,
             "table_type": "GuiTableControl",
             "table_field_name": getattr(table, 'TableFieldName', ''),
@@ -251,6 +329,9 @@ class TablesMixin:
             "column_info": columns_info,
             "data": data,
         }
+        if columns_only:
+            result["columns_only"] = True
+        return result
 
     def get_alv_toolbar(self, grid_id: str) -> Dict[str, Any]:
         """
