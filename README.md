@@ -1,10 +1,28 @@
 # MCP SAP GUI Server
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that enables AI assistants like Claude to interact with SAP GUI for Windows through the SAP GUI Scripting API.
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that enables AI assistants to interact with SAP GUI for Windows through the SAP GUI Scripting API.
+
+It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
+
+Current release target: `0.1.0` alpha for local Windows use over MCP `stdio`.
+
+## Status
+
+- GitHub workflows are included for `CI`, `Docs`, and tag-based `Release`.
+- Forgejo workflows are included for `CI` and `Docs`.
+- Live GitHub badges can be enabled once the public GitHub mirror slug is known.
+
+<!--
+Replace <owner>/<repo> after publishing the GitHub mirror:
+
+[![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<owner>/<repo>/actions/workflows/ci.yml)
+[![Docs](https://github.com/<owner>/<repo>/actions/workflows/docs.yml/badge.svg)](https://github.com/<owner>/<repo>/actions/workflows/docs.yml)
+[![Release](https://img.shields.io/github/v/release/<owner>/<repo>)](https://github.com/<owner>/<repo>/releases)
+-->
 
 ## What This Does
 
-This server allows Claude to:
+This server allows AI assistants to:
 - Connect to SAP systems (like double-clicking in SAP Logon Pad)
 - Execute transactions (MM03, VA01, SE80, etc.)
 - Read and write screen fields, checkboxes, radio buttons, comboboxes, and tabs
@@ -19,15 +37,43 @@ This server allows Claude to:
 ## Example Conversation
 
 ```
-User: "What's the description for material MAT-001 in our DEV system?"
+User: "What's the description for material MAT-001 in system D01?"
 
-Claude: [connects to DEV system]
-        [executes MM03]
-        [enters material number]
-        [reads description field]
+Assistant: [connects to D01]
+           [executes MM03]
+           [enters material number]
+           [reads description field]
 
 "The material MAT-001 is described as 'High-Grade Steel Plate 10mm'
-in the DEV system."
+in system D01."
+```
+
+## Quick Start
+
+1. Install dependencies:
+
+```bash
+uv sync --extra screenshots
+```
+
+2. Start SAP Logon Pad and open an SAP GUI session, or at least have SAP Logon running.
+
+3. Configure your MCP client to launch this server:
+
+```text
+Command:   uv
+Arguments: run python -m mcp_sap_gui.server
+Transport: stdio
+Working directory: <path-to-mcp-sap-gui>
+```
+
+4. Try one of these prompts:
+
+```text
+Connect to my open SAP session and tell me what system I'm on
+Show me the current screen info
+List all editable fields on this screen
+Read the first 20 rows of the visible table
 ```
 
 ## Requirements
@@ -38,6 +84,20 @@ in the DEV system."
 - **SAP GUI Scripting enabled** on your SAP systems
 - **Python 3.10+**
 - **[uv](https://docs.astral.sh/uv/)** (recommended Python package manager)
+
+## Supported Scope
+
+Supported in `0.1.0`:
+- SAP GUI for Windows via the SAP GUI Scripting COM API
+- Local MCP `stdio` transport
+- Interactive use from MCP-compatible clients
+- Read and write SAP GUI automation within the permissions of the logged-in SAP user
+
+Not part of `0.1.0`:
+- Streamable HTTP / remote server deployment
+- SAP GUI for Java or SAP GUI for HTML
+- Browser-based Fiori automation
+- Unattended multi-user production orchestration
 
 ### Enabling SAP GUI Scripting
 
@@ -56,7 +116,7 @@ SAP GUI Scripting must be enabled both client-side and server-side:
 
 ```bash
 # Clone the repository
-git clone ssh://git@git.tsioumpris.de:2222/Kostas/mcp-sap-gui.git
+git clone <repository-url>
 cd mcp-sap-gui
 
 # Install uv (if not already installed)
@@ -70,6 +130,7 @@ uv sync --extra screenshots
 
 # With dev dependencies (for testing, linting, type checking)
 uv sync --extra dev --extra screenshots
+
 ```
 
 ## Usage
@@ -94,7 +155,25 @@ uv run python -m mcp_sap_gui.server --debug
 
 This server communicates over **stdio** (stdin/stdout JSON-RPC), which is the standard MCP transport. You don't need to configure ports or URLs — the MCP client starts the server process and talks to it directly.
 
-Below are setup examples for the most common MCP clients.
+For any client, the core launch configuration is the same:
+
+```text
+Command:   uv
+Arguments: run python -m mcp_sap_gui.server
+Transport: stdio
+Working directory: <path-to-mcp-sap-gui>
+```
+
+### Client Setup Links
+
+- **Claude Code / Claude Desktop**: setup examples are included below
+- **Codex**: configure an MCP server in Codex and point it at the command above. Official MCP docs: https://developers.openai.com/learn/docs-mcp
+- **GitHub Copilot**: configure a local MCP server in Copilot Chat / agent mode. Official docs: https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp
+- **Gemini CLI**: add the server under `mcpServers` in your Gemini CLI settings. Official docs: https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md
+
+Below are full examples for the most common local SAP GUI setup paths.
+
+For a client-by-client setup guide, see **[docs/CLIENTS.md](docs/CLIENTS.md)**.
 
 ---
 
@@ -120,7 +199,7 @@ If you want to configure it globally for Claude Code (available in any project),
       "type": "stdio",
       "command": "uv",
       "args": ["run", "python", "-m", "mcp_sap_gui.server"],
-      "cwd": "D:\\mcp-sap-gui"
+      "cwd": "<path-to-mcp-sap-gui>"
     }
   }
 }
@@ -143,7 +222,7 @@ Add to your Claude Desktop config file:
     "sap-gui": {
       "command": "uv",
       "args": ["run", "python", "-m", "mcp_sap_gui.server"],
-      "cwd": "D:\\mcp-sap-gui"
+      "cwd": "<path-to-mcp-sap-gui>"
     }
   }
 }
@@ -157,7 +236,7 @@ Add to your Claude Desktop config file:
     "sap-gui": {
       "command": "uv",
       "args": ["run", "python", "-m", "mcp_sap_gui.server", "--read-only"],
-      "cwd": "D:\\mcp-sap-gui"
+      "cwd": "<path-to-mcp-sap-gui>"
     }
   }
 }
@@ -174,7 +253,7 @@ Add to your Claude Desktop config file:
         "run", "python", "-m", "mcp_sap_gui.server",
         "--allowed-transactions", "MM03", "VA03", "ME23N"
       ],
-      "cwd": "D:\\mcp-sap-gui"
+      "cwd": "<path-to-mcp-sap-gui>"
     }
   }
 }
@@ -212,6 +291,14 @@ Claude should respond with the full list of `sap_*` tools. If SAP GUI is running
 "Connect to my open SAP session and tell me what system I'm on"
 ```
 
+Then try:
+
+```
+"Show me the current screen info"
+"List all editable fields on this screen"
+"Read the first 20 rows from the visible table"
+```
+
 ## Built-in Agent Guidance
 
 The server includes built-in navigation knowledge that helps any MCP client (Claude Code, Copilot, Cursor, Cline, etc.) use SAP GUI effectively:
@@ -221,127 +308,27 @@ The server includes built-in navigation knowledge that helps any MCP client (Cla
 
 These prevent common agent mistakes like guessing element IDs, ignoring popups, pressing F5 (="New Entries") when meaning to refresh, or using `double_click_tree_node` in SPRO (which opens docs instead of executing the activity).
 
-## Available Tools (50 total)
+## Available Tools
 
-### Connection Tools
-| Tool | Description |
-|------|-------------|
-| `sap_connect` | Connect to SAP system by name (with optional credentials) |
-| `sap_connect_existing` | Attach to an already open SAP session |
-| `sap_list_connections` | List all open SAP connections/sessions |
-| `sap_get_session_info` | Get current session info (system, user, transaction) |
+The server currently exposes **52 MCP tools**.
 
-### Navigation Tools
-| Tool | Description |
-|------|-------------|
-| `sap_execute_transaction` | Execute a transaction code (MM03, VA01, etc.) |
-| `sap_send_key` | Send keyboard keys (Enter, F1-F12, Shift+F1-F9, Ctrl+F/G/P, Back, Save, etc.) |
-| `sap_get_screen_info` | Get current screen info — reports `active_window` (wnd[0] or wnd[1] if popup) and title of the focused window |
+| Category | Count | What it covers |
+|---|---:|---|
+| Connection | 4 | Connect to SAP, attach to open sessions, inspect sessions |
+| Navigation | 3 | Execute transactions, send keys, inspect current screen |
+| Fields & UI | 13 | Read/write fields, buttons, tabs, comboboxes, textedit, focus |
+| Tables & Grids | 17 | ALV grids, TableControls, row selection, column info, cell ops |
+| Popup / Toolbar / Shell | 3 | Popup inspection, toolbar discovery, shell content |
+| Trees | 10 | Read/search/expand/select/click SAP tree controls |
+| Discovery | 2 | Screen element discovery and screenshots |
 
-### Field & UI Element Tools
-| Tool | Description |
-|------|-------------|
-| `sap_read_field` | Read a field value (includes metadata: required, max_length, labels) |
-| `sap_set_field` | Set a field value |
-| `sap_set_batch_fields` | Set multiple field values at once (dict of field_id -> value) |
-| `sap_press_button` | Press a button |
-| `sap_select_menu` | Select a menu item from the menu bar |
-| `sap_select_checkbox` | Select or deselect a checkbox |
-| `sap_select_radio_button` | Select a radio button |
-| `sap_select_combobox_entry` | Select a combobox/dropdown entry by key or value |
-| `sap_get_combobox_entries` | List all entries in a combobox (key-value pairs) |
-| `sap_select_tab` | Select a tab in a tab strip |
-| `sap_read_textedit` | Read content of a multiline text editor (GuiTextedit) |
-| `sap_set_textedit` | Set content of a multiline text editor (GuiTextedit) |
-| `sap_set_focus` | Set focus to any screen element by its ID |
+The most important patterns:
+- `sap_get_screen_elements` to discover IDs instead of guessing
+- `sap_read_table` to start with any SAP table/grid
+- `sap_get_popup_window` when `active_window` reports a popup
+- `sap_read_tree` plus search/expand helpers for SPRO-style navigation
 
-### Table/Grid Tools
-
-SAP has two different table types. **All table tools auto-detect the type**, and `sap_read_table` returns a `table_type` field (`"GuiGridView"` or `"GuiTableControl"`) so you know which type-specific tools to use.
-
-#### Both Types (auto-detected)
-| Tool | Description |
-|------|-------------|
-| `sap_read_table` | Read data (returns `table_type` to identify ALV vs TableControl) |
-| `sap_select_table_row` | Select a row |
-| `sap_double_click_cell` | Double-click a cell (often opens details) |
-| `sap_modify_cell` | Modify an editable cell value |
-| `sap_set_current_cell` | Set the focused cell |
-| `sap_get_column_info` | Get column names, titles, and tooltips |
-| `sap_get_current_cell` | Get the currently focused cell position |
-| `sap_select_multiple_rows` | Select multiple rows at once (list of row indices) |
-
-#### ALV Grid Only (GuiGridView)
-| Tool | Description |
-|------|-------------|
-| `sap_get_alv_toolbar` | List all toolbar buttons on an ALV grid |
-| `sap_press_alv_toolbar_button` | Press an ALV toolbar button |
-| `sap_select_alv_context_menu_item` | Select from ALV context menu (by function code, text, or position) |
-| `sap_get_cell_info` | Get detailed cell metadata (color, tooltip, style, max_length) |
-| `sap_press_column_header` | Click a column header (triggers sort) |
-| `sap_select_all_rows` | Select all rows |
-
-#### TableControl Only (GuiTableControl)
-| Tool | Description |
-|------|-------------|
-| `sap_scroll_table_control` | Scroll to a specific row position |
-| `sap_get_table_control_row_info` | Get row metadata (selected, changeable) |
-| `sap_select_all_table_control_columns` | Select/deselect all column headers |
-
-### ALV Grid vs TableControl — When to Use What
-
-Both table types are found throughout SAP, but in different contexts:
-
-| | **ALV Grid** (GuiGridView) | **TableControl** (GuiTableControl) |
-|---|---|---|
-| **Where** | Reports, list displays (ME2M, VA05, etc.) | Customizing (SPRO), table maintenance (SM30) |
-| **Element ID pattern** | `wnd[0]/usr/cntl.../shellcont/shell` | `wnd[0]/usr/tblSAPL...` |
-| **Scrolling** | Automatic — all rows accessible in one read | Manual — use `sap_scroll_table_control` to page |
-| **Toolbar** | Built-in ALV toolbar (`sap_get_alv_toolbar`) | Standard menu bar + toolbar buttons |
-| **Sorting** | `sap_press_column_header` | Use menu bar (Table View > Sort) |
-
-**Workflow:**
-1. Call `sap_read_table(table_id)` — works for both types
-2. Check `table_type` in the response
-3. Use the appropriate type-specific tools for further interaction
-
-### Popup & Dialog Tools
-
-Every action tool automatically reports `active_window` in its response (e.g. `"wnd[1]"` when a popup opens). Use `sap_get_popup_window` when you need full details.
-
-| Tool | Description |
-|------|-------------|
-| `sap_get_popup_window` | Get full popup content: title, text elements, and buttons |
-
-### Toolbar Discovery Tools
-| Tool | Description |
-|------|-------------|
-| `sap_get_toolbar_buttons` | List buttons on system and application toolbars (not ALV) |
-
-### Shell Content Tools
-| Tool | Description |
-|------|-------------|
-| `sap_read_shell_content` | Read content from GuiShell subtypes (HTMLViewer, etc.) |
-
-### Tree Tools
-| Tool | Description |
-|------|-------------|
-| `sap_read_tree` | Read tree control nodes, hierarchy, and column values |
-| `sap_expand_tree_node` | Expand a tree folder node |
-| `sap_collapse_tree_node` | Collapse a tree folder node |
-| `sap_select_tree_node` | Select a tree node |
-| `sap_double_click_tree_node` | Double-click a tree node (drill down) |
-| `sap_double_click_tree_item` | Double-click a specific column cell in a tree row |
-| `sap_click_tree_link` | Click a hyperlink in a tree node |
-| `sap_find_tree_node_by_path` | Find a node key by path (e.g., '2\\1\\2') |
-| `sap_search_tree_nodes` | Search nodes by text, returns matches with full ancestor paths |
-| `sap_get_tree_node_children` | Get direct children of a node (with optional expand) |
-
-### Discovery Tools
-| Tool | Description |
-|------|-------------|
-| `sap_get_screen_elements` | List all elements on current screen (or a container) |
-| `sap_screenshot` | Capture screenshot of SAP window |
+For the full tool catalog, grouped by category with short descriptions, see **[docs/TOOLS.md](docs/TOOLS.md)**.
 
 ## Security Considerations
 
@@ -361,7 +348,7 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 4. **Transaction Whitelist** - `--allowed-transactions` limits to specific t-codes
 
-5. **MCP Tool Annotations** - All 50 tools are annotated with `readOnlyHint`/`destructiveHint` per the MCP spec, so clients can display appropriate UI hints
+5. **MCP Tool Annotations** - All 52 tools are annotated with `readOnlyHint`/`destructiveHint` per the MCP spec, so clients can display appropriate UI hints
 
 ### Recommendations for Production Use
 
@@ -385,7 +372,7 @@ Consult your SAP licensing agreement regarding:
 
 ```python
 # Claude would execute these tools:
-sap_connect("DEV - Development System")
+sap_connect("D01 - Development System")
 sap_execute_transaction("MM03")
 sap_set_field("wnd[0]/usr/ctxtRMMG1-MATNR", "MAT-001")
 sap_send_key("Enter")
@@ -425,7 +412,7 @@ sap_select_menu("wnd[0]/mbar/menu[3]/menu[0]")    # Selection > By Contents
 # Select the field to filter on, enter value
 sap_select_table_row("wnd[1]/usr/tblSAPLSVIXTCTRL_SEL_FLDS", 0)
 sap_send_key("Enter")
-sap_set_field("wnd[1]/usr/.../txtQUERY_TAB-BUFFER[3,0]", "OUTRIDER")
+sap_set_field("wnd[1]/usr/.../txtQUERY_TAB-BUFFER[3,0]", "EXTSYS001")
 sap_send_key("Execute")
 # Read the filtered table
 data = sap_read_table("wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS")
@@ -435,6 +422,12 @@ data = sap_read_table("wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS")
 
 ```
 mcp-sap-gui/
+├── docs/
+│   ├── CLIENTS.md             # Client-specific MCP setup notes
+│   ├── OVERVIEW.md            # Product overview and roadmap direction
+│   └── TOOLS.md               # Full MCP tool catalog
+├── scripts/
+│   └── check_docs.py          # Markdown link checker used by docs workflows
 ├── src/
 │   └── mcp_sap_gui/
 │       ├── __init__.py        # Package exports
@@ -450,12 +443,13 @@ mcp-sap-gui/
 │   ├── test_sap_controller.py # Controller unit tests
 │   └── test_server.py         # Server security & routing tests
 ├── examples/
-│   └── ...
+│   └── basic_usage.py         # Direct controller example
 ├── .mcp.json                  # MCP server config (auto-detected by Claude Code)
+├── CONTRIBUTING.md            # Contribution guidelines for public changes
+├── LICENSE                    # MIT license
 ├── pyproject.toml
 ├── uv.lock                    # Dependency lock file (managed by uv)
-├── README.md
-└── CLAUDE.md                  # Development context for Claude Code
+└── README.md
 ```
 
 ## Troubleshooting
@@ -476,6 +470,16 @@ mcp-sap-gui/
 - Ensure dependencies are installed: `uv sync`
 - Run `uv run python -m win32com.client.makepy` if COM registration issues occur
 
+### "No SAP tools appear in my MCP client"
+- Confirm the client is launching the server from the project root
+- Restart the MCP client after changing its MCP configuration
+- Run `uv sync` first so the environment and dependencies exist
+
+### "The tool is available, but the action is blocked"
+- Check whether the server is running with `--read-only`
+- Check whether the transaction is blocked by the default blocklist
+- Check whether you started the server with `--allowed-transactions`
+
 ## Development
 
 ```bash
@@ -492,18 +496,18 @@ uv run mypy src/
 uv run ruff check src/
 ```
 
-## Overview & Vision
-
-For a high-level overview of capabilities, use cases, and roadmap — see **[docs/OVERVIEW.md](docs/OVERVIEW.md)**.
-
 ## Related
 
 - [SAP GUI Scripting API Documentation](https://help.sap.com/docs/sap_gui_for_windows)
 - [MCP Specification](https://modelcontextprotocol.io/docs)
+- [Contributing Guide](CONTRIBUTING.md)
+- [Client Setup Guide](docs/CLIENTS.md)
+- [Tool Catalog](docs/TOOLS.md)
+- [Project Overview](docs/OVERVIEW.md)
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT. See [LICENSE](LICENSE).
 
 ## Disclaimer
 

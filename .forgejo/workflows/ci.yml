@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    # Adjust this label if your Forgejo runner uses something other than "docker".
+    runs-on: docker
+    container:
+      image: node:20-bookworm
+
+    steps:
+      - name: Check out repository
+        uses: https://data.forgejo.org/actions/checkout@v4
+
+      - name: Install Python and uv
+        run: |
+          apt-get update
+          apt-get install -y python3 python3-pip python3-venv
+          python3 -m pip install --break-system-packages --upgrade pip uv
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra screenshots
+
+      - name: Run Ruff
+        run: uv run ruff check src tests
+
+      - name: Run pytest
+        run: uv run pytest -q
+
+      - name: Smoke test CLI help
+        run: uv run python -m mcp_sap_gui.server --help
+
+      - name: Build package
+        run: uv build

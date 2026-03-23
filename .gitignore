@@ -43,3 +43,15 @@ config.local.json
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Local roadmap / vision drafts
+docs/ROADMAP_VISION.local.md
+SAP_GUI_Scripting_Technical_Guide.md
+
+# Local workspace artifacts
+.tasks/
+.claude/worktrees/
+.dev/
+codex_prompt.txt
+copilot_all_prompts_*.chatreplay.json
+sap_gui_scripting_api.pdf

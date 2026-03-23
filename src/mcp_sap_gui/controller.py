@@ -36,6 +36,7 @@ class SAPGUIControllerBase:
         self._application = None
         self._connection = None
         self._session = None
+        self._owns_session = False
         self._check_dependencies()
 
     def _check_dependencies(self):
@@ -87,6 +88,14 @@ class SAPGUIControllerBase:
                 )
         return self._application
 
+    def _normalize_window_id(self, window_id: Any) -> str:
+        """Normalize SAP window IDs to the short form used by findById()."""
+        if not isinstance(window_id, str):
+            return "wnd[0]"
+        if "wnd[" in window_id:
+            return "wnd[" + window_id.split("wnd[", 1)[1]
+        return window_id
+
     def _require_session(self):
         """Ensure we have an active session that is not busy."""
         if not self.is_connected:
@@ -135,6 +144,7 @@ class SAPGUIControllerBase:
 
             logger.info("Opening connection to: %s", system_description)
             self._connection = app.OpenConnection(system_description, True)
+            self._owns_session = True
 
             if self._connection is None:
                 raise SAPGUIError(f"Failed to open connection to '{system_description}'")
@@ -201,6 +211,7 @@ class SAPGUIControllerBase:
                 )
 
             self._session = self._connection.Children(session_index)
+            self._owns_session = False
 
             logger.info(f"Connected to existing session {connection_index}/{session_index}")
             return self.get_session_info()
@@ -211,15 +222,57 @@ class SAPGUIControllerBase:
             raise SAPGUIError(f"Failed to connect to existing session: {e}")
 
     def disconnect(self):
-        """Close the current SAP session."""
-        if self._session:
+        """Detach from the current SAP session.
+
+        Sessions opened by this controller are closed on disconnect. Sessions
+        attached via connect_to_existing_session() are left open.
+        """
+        if self._session and self._owns_session and self._connection:
             try:
                 self._connection.CloseSession(self._session.Id)
             except Exception:
                 pass
         self._session = None
         self._connection = None
+        self._owns_session = False
         logger.info("Disconnected")
+
+    def _find_session_by_id(self, session_id: str):
+        """Locate a session by ID and return its connection plus session object."""
+        app = self._get_application()
+        for connection_index in range(app.Children.Count):
+            connection = app.Children(connection_index)
+            for session_index in range(connection.Children.Count):
+                session = connection.Children(session_index)
+                if getattr(session, "Id", None) == session_id:
+                    return connection, session
+        return None, None
+
+    def _rebind_after_new_session(
+        self, previous_session_id: str, previous_session_count: int | None,
+    ) -> None:
+        """Rebind to the newest session after a /o command opens a new window."""
+        try:
+            active_session = self._get_application().ActiveSession
+            active_session_id = getattr(active_session, "Id", None)
+            if active_session_id and active_session_id != previous_session_id:
+                connection, session = self._find_session_by_id(active_session_id)
+                if session is not None:
+                    self._connection = connection
+                    self._session = session
+                    return
+        except Exception:
+            pass
+
+        if self._connection is None or previous_session_count is None:
+            return
+
+        try:
+            current_session_count = self._connection.Children.Count
+            if current_session_count > previous_session_count:
+                self._session = self._connection.Children(current_session_count - 1)
+        except Exception:
+            pass
 
     def get_session_info(self) -> SessionInfo:
         """Get information about the current session."""
@@ -313,9 +366,22 @@ class SAPGUIControllerBase:
 
         # /o and /* prefixes must use okcd approach (not StartTransaction)
         upper = tcode.upper()
-        if upper.startswith("/O") or upper.startswith("/*"):
+        opens_new_session = upper.startswith("/O")
+        previous_session_id = getattr(self._session, "Id", "")
+        previous_session_count = None
+        if opens_new_session and self._connection is not None:
+            try:
+                previous_session_count = self._connection.Children.Count
+            except Exception:
+                previous_session_count = None
+
+        if opens_new_session or upper.startswith("/*"):
             self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
             self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
+            if opens_new_session and previous_session_id:
+                self._rebind_after_new_session(
+                    previous_session_id, previous_session_count,
+                )
         else:
             # Use StartTransaction for /n prefix (preferred API)
             plain_tcode = tcode.removeprefix("/n").removeprefix("/N")
@@ -392,9 +458,7 @@ class SAPGUIControllerBase:
             try:
                 active = self._session.ActiveWindow
                 if active is not None:
-                    full_id = active.Id  # e.g. /app/con[0]/ses[0]/wnd[1]
-                    if "wnd[" in full_id:
-                        active_wnd_id = "wnd[" + full_id.split("wnd[")[1]
+                    active_wnd_id = self._normalize_window_id(active.Id)
             except Exception:
                 pass
 

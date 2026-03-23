@@ -1,0 +1,32 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "README.md"
+      - "docs/**"
+      - "scripts/check_docs.py"
+      - ".forgejo/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "README.md"
+      - "docs/**"
+      - "scripts/check_docs.py"
+      - ".forgejo/workflows/docs.yml"
+  workflow_dispatch:
+
+jobs:
+  docs:
+    runs-on: docker
+    container:
+      image: python:3.12-bookworm
+
+    steps:
+      - name: Check out repository
+        uses: https://data.forgejo.org/actions/checkout@v4
+
+      - name: Check internal documentation links
+        run: python scripts/check_docs.py

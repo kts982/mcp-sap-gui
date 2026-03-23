@@ -8,7 +8,7 @@ screenshot capabilities for the SAP GUI controller.
 import logging
 from typing import Any, Dict, List
 
-from .models import ScreenElement
+from .models import SAPGUIError, ScreenElement
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +265,9 @@ class DiscoveryMixin:
             return elements
         except Exception as e:
             logger.error(f"Failed to enumerate elements: {e}")
-            return []
+            raise SAPGUIError(
+                f"Failed to enumerate elements in '{container_id}': {e}"
+            )
 
     def _enumerate_elements(self, container, max_depth: int,
                             current_depth: int = 0,
@@ -328,7 +330,7 @@ class DiscoveryMixin:
         try:
             active = self._session.ActiveWindow
             if active is not None:
-                return active.Id
+                return self._normalize_window_id(active.Id)
         except Exception:
             pass
 

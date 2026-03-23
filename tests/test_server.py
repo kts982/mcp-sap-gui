@@ -206,6 +206,15 @@ class TestOkCodeBypassPrevention:
                 "wnd[0]/tbar[0]/okcd": "/NSU01",
             })
 
+    @pytest.mark.asyncio
+    async def test_screen_elements_surfaces_discovery_errors(self, srv):
+        """sap_get_screen_elements should surface invalid-container errors."""
+        srv.controller = MagicMock()
+        srv.controller.get_screen_elements.side_effect = RuntimeError("bad container")
+
+        with pytest.raises(RuntimeError, match="bad container"):
+            await srv.sap_get_screen_elements("wnd[0]/bad")
+
 
 # ===========================================================================
 # Read-Only Mode Tests

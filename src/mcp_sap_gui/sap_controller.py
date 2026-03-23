@@ -57,7 +57,7 @@ class SAPGUIController(
 
     Example usage:
         controller = SAPGUIController()
-        controller.connect("DEV - Development System")
+        controller.connect("D01 - Development System")
         controller.execute_transaction("MM03")
         controller.set_field("wnd[0]/usr/ctxtRMMG1-MATNR", "MAT-001")
         controller.send_vkey(VKey.ENTER)

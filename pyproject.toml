@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "mcp-sap-gui contributors" }
 ]
 keywords = ["mcp", "sap", "gui", "automation", "scripting", "claude"]
 classifiers = [
@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=1.20,<2.0",
-    "pywin32>=306",
+    "pywin32>=306; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]
@@ -47,11 +47,6 @@ agent = [
 
 [project.scripts]
 mcp-sap-gui = "mcp_sap_gui.server:main"
-
-[project.urls]
-Homepage = "https://git.tsioumpris.de/Kostas/mcp-sap-gui"
-Repository = "https://git.tsioumpris.de/Kostas/mcp-sap-gui"
-Issues = "https://git.tsioumpris.de/Kostas/mcp-sap-gui/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_sap_gui"]

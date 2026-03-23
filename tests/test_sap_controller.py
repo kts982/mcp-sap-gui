@@ -1143,6 +1143,81 @@ class TestExecuteTransactionImproved:
         controller._session.StartTransaction.assert_not_called()
         assert mock_okcd.text == "/oMM03"
 
+    def test_o_prefix_rebinds_to_new_active_session(self):
+        """After /o, the controller should target the newly opened session."""
+        controller = self._make_controller_with_session()
+        old_session = controller._session
+        old_session.Id = "ses[0]"
+
+        new_session = MagicMock()
+        new_session.Id = "ses[1]"
+
+        mock_connection = MagicMock()
+        mock_connection.Children.Count = 2
+        mock_connection.Children.side_effect = lambda i: [old_session, new_session][i]
+        controller._connection = mock_connection
+
+        mock_app = MagicMock()
+        mock_app.ActiveSession = new_session
+        mock_app.Children.Count = 1
+        mock_app.Children.side_effect = lambda i: [mock_connection][i]
+        controller._application = mock_app
+
+        mock_okcd = MagicMock()
+        mock_window = MagicMock()
+        old_session.findById.side_effect = (
+            lambda id: mock_okcd if "okcd" in id else mock_window
+        )
+        controller.get_screen_info = MagicMock(return_value={"transaction": "MM03"})
+
+        controller.execute_transaction("/oMM03")
+
+        assert controller._session is new_session
+        assert controller._connection is mock_connection
+
+    def test_o_prefix_falls_back_to_latest_connection_child(self):
+        """If ActiveSession is unavailable, /o should fall back to the new child session."""
+        controller = self._make_controller_with_session()
+        old_session = controller._session
+        old_session.Id = "ses[0]"
+
+        new_session = MagicMock()
+        new_session.Id = "ses[1]"
+
+        mock_connection = MagicMock()
+        child_count = {"value": 1}
+
+        def connection_child(index):
+            return [old_session, new_session][index]
+
+        type(mock_connection.Children).Count = property(lambda self: child_count["value"])
+        mock_connection.Children.side_effect = connection_child
+        controller._connection = mock_connection
+
+        mock_app = MagicMock()
+        mock_app.Children.Count = 1
+        mock_app.Children.side_effect = lambda i: [mock_connection][i]
+        type(mock_app).ActiveSession = property(
+            lambda self: (_ for _ in ()).throw(Exception("Not supported"))
+        )
+        controller._application = mock_app
+
+        mock_okcd = MagicMock()
+        mock_window = MagicMock()
+
+        def find_by_id(element_id):
+            if "okcd" in element_id:
+                return mock_okcd
+            child_count["value"] = 2
+            return mock_window
+
+        old_session.findById.side_effect = find_by_id
+        controller.get_screen_info = MagicMock(return_value={"transaction": "MM03"})
+
+        controller.execute_transaction("/oMM03")
+
+        assert controller._session is new_session
+
     def test_uppercase_n_prefix_stripped(self):
         """Uppercase /N prefix is stripped from the returned transaction."""
         controller = self._make_controller_with_session()
@@ -1195,6 +1270,17 @@ class TestActiveWindowImproved:
 
         assert result == "wnd[1]"
 
+    def test_normalizes_full_active_window_id(self):
+        """Full ActiveWindow IDs should be normalized to wnd[N]."""
+        controller = self._make_controller_with_session()
+        mock_window = MagicMock()
+        mock_window.Id = "/app/con[0]/ses[0]/wnd[2]"
+        controller._session.ActiveWindow = mock_window
+
+        result = controller._find_topmost_window()
+
+        assert result == "wnd[2]"
+
     def test_falls_back_to_loop(self):
         """Falls back to loop when ActiveWindow not available."""
         controller = self._make_controller_with_session()
@@ -1211,6 +1297,83 @@ class TestActiveWindowImproved:
         result = controller._find_topmost_window()
 
         assert result == "wnd[0]"
+
+    def test_take_screenshot_uses_normalized_active_window_id(self):
+        """take_screenshot should use the normalized wnd[N] form with findById()."""
+        controller = self._make_controller_with_session()
+        mock_window = MagicMock()
+        mock_window.Id = "/app/con[0]/ses[0]/wnd[2]"
+        controller._session.ActiveWindow = mock_window
+
+        hardcopy_target = MagicMock()
+        controller._session.findById.return_value = hardcopy_target
+        controller._optimize_screenshot = MagicMock()
+
+        result = controller.take_screenshot("test.png")
+
+        controller._session.findById.assert_called_once_with("wnd[2]")
+        hardcopy_target.HardCopy.assert_called_once_with("test.png", "PNG")
+        assert result["window"] == "wnd[2]"
+
+
+class TestDisconnectOwnership:
+    """Tests for session ownership during disconnect."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        controller._connection = MagicMock()
+        return controller
+
+    def test_disconnect_closes_owned_session(self):
+        """Sessions opened by the controller should be closed on disconnect."""
+        controller = self._make_controller_with_session()
+        controller._session.Id = "ses[0]"
+        controller._owns_session = True
+        connection = controller._connection
+
+        controller.disconnect()
+
+        connection.CloseSession.assert_called_once_with("ses[0]")
+        assert controller._session is None
+        assert controller._connection is None
+        assert controller._owns_session is False
+
+    def test_disconnect_does_not_close_attached_session(self):
+        """Sessions attached via connect_existing should be left open on disconnect."""
+        controller = self._make_controller_with_session()
+        controller._session.Id = "ses[0]"
+        controller._owns_session = False
+        connection = controller._connection
+
+        controller.disconnect()
+
+        connection.CloseSession.assert_not_called()
+        assert controller._session is None
+        assert controller._connection is None
+        assert controller._owns_session is False
+
+    def test_connect_existing_marks_session_unowned(self):
+        """connect_to_existing_session should mark the session as attached, not owned."""
+        from mcp_sap_gui.sap_controller import SAPGUIController
+
+        controller = SAPGUIController()
+        mock_session = MagicMock()
+        mock_connection = MagicMock()
+        mock_connection.Children.Count = 1
+        mock_connection.Children.side_effect = lambda i: [mock_session][i]
+
+        mock_app = MagicMock()
+        mock_app.Children.Count = 1
+        mock_app.Children.side_effect = lambda i: [mock_connection][i]
+
+        controller._application = mock_app
+        controller.get_session_info = MagicMock(return_value={"system_name": "DEV"})
+
+        controller.connect_to_existing_session()
+
+        assert controller._owns_session is False
 
 
 class TestTreeParentKeyFix:
@@ -2981,6 +3144,16 @@ class TestGetScreenElementsFiltering:
         types_deep = [e.type for e in result_deep]
         assert "GuiTextField" in types_deep
         assert len(result_deep) == 3  # container + button + textfield
+
+    def test_invalid_container_raises_error(self):
+        """Invalid container IDs should raise instead of looking like empty screens."""
+        from mcp_sap_gui.sap_controller import SAPGUIError
+
+        controller = self._make_controller_with_session()
+        controller._session.findById.side_effect = Exception("not found")
+
+        with pytest.raises(SAPGUIError, match="wnd\\[0\\]/bad"):
+            controller.get_screen_elements("wnd[0]/bad")
 
 
 # ===========================================================================
