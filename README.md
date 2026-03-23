@@ -6,19 +6,15 @@ It is client-agnostic: if your MCP client can launch a local `stdio` server, it 
 
 Current release target: `0.1.0` alpha for local Windows use over MCP `stdio`.
 
+[![CI](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml)
+[![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
+[![Release](https://img.shields.io/github/v/release/kts982/mcp-sap-gui)](https://github.com/kts982/mcp-sap-gui/releases)
+
 ## Status
 
 - GitHub workflows are included for `CI`, `Docs`, and tag-based `Release`.
 - Forgejo workflows are included for `CI` and `Docs`.
-- Live GitHub badges can be enabled once the public GitHub mirror slug is known.
-
-<!--
-Replace <owner>/<repo> after publishing the GitHub mirror:
-
-[![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<owner>/<repo>/actions/workflows/ci.yml)
-[![Docs](https://github.com/<owner>/<repo>/actions/workflows/docs.yml/badge.svg)](https://github.com/<owner>/<repo>/actions/workflows/docs.yml)
-[![Release](https://img.shields.io/github/v/release/<owner>/<repo>)](https://github.com/<owner>/<repo>/releases)
--->
+- GitHub is the public mirror: `kts982/mcp-sap-gui`.
 
 ## What This Does
 
