@@ -55,7 +55,6 @@ class ServerConfig:
         "SM21", "ST22",           # System logs
         "SE16N",                  # Table maintenance
     ])
-    require_confirmation_for_writes: bool = True
 
     # Behavior settings
     auto_connect_existing: bool = True
@@ -383,9 +382,15 @@ def _check_write():
         raise ValueError("Write operations disabled in read-only mode")
 
 
+def _is_okcode_field(field_id: str) -> bool:
+    """Return True when a field ID targets an SAP command field."""
+    normalized = field_id.replace("\\", "/").strip().lower()
+    return normalized.endswith("/okcd")
+
+
 def _check_okcode_bypass(field_id: str, value: str):
     """Block attempts to execute blocked transactions via the OK-code field."""
-    if field_id.endswith("/tbar[0]/okcd") and _is_transaction_blocked(value):
+    if _is_okcode_field(field_id) and _is_transaction_blocked(value):
         raise ValueError(
             f"Transaction {value} is blocked by security policy "
             f"(attempted via OK-code field)"
@@ -451,16 +456,14 @@ async def sap_connect(
     system_description: str,
     client: str | None = None,
     user: str | None = None,
-    password: str | None = None,
     language: str | None = None,
 ) -> dict:
     """Connect to an SAP system by its name in SAP Logon Pad.
 
-    Optionally provide credentials for automatic login.
+    For security, this tool does not accept a password parameter.
     If SAP is already open and logged in, use sap_connect_existing instead."""
     kwargs: dict[str, str] = {"system_description": system_description}
-    for key, val in [("client", client), ("user", user),
-                     ("password", password), ("language", language)]:
+    for key, val in [("client", client), ("user", user), ("language", language)]:
         if val is not None:
             kwargs[key] = val
     return _to_dict(await _com(lambda: controller.connect(**kwargs)))

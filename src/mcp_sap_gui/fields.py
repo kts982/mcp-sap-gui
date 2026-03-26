@@ -72,7 +72,11 @@ class FieldsMixin:
 
             return result
         except Exception as e:
-            return {"field_id": field_id, "error": str(e)}
+            return self._error_result(
+                {"field_id": field_id},
+                e,
+                "Could not read field",
+            )
 
     def set_field(self, field_id: str, value: str) -> Dict[str, Any]:
         """
@@ -91,14 +95,18 @@ class FieldsMixin:
             element = self._session.findById(field_id)
             element.text = value
 
-            logger.debug(f"Set {field_id} = {value}")
+            logger.debug("Set %s = %s", field_id, self._mask_field_value(field_id, value))
             return {
                 "field_id": field_id,
                 "value": value,
                 "status": "success",
             }
         except Exception as e:
-            return {"field_id": field_id, "error": str(e)}
+            return self._error_result(
+                {"field_id": field_id},
+                e,
+                "Could not set field",
+            )
 
     def press_button(self, button_id: str) -> Dict[str, Any]:
         """
@@ -122,7 +130,11 @@ class FieldsMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"button_id": button_id, "error": str(e)}
+            return self._error_result(
+                {"button_id": button_id},
+                e,
+                "Could not press button",
+            )
 
     def select_menu(self, menu_id: str) -> Dict[str, Any]:
         """
@@ -145,7 +157,11 @@ class FieldsMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"menu_id": menu_id, "error": str(e)}
+            return self._error_result(
+                {"menu_id": menu_id},
+                e,
+                "Could not select menu item",
+            )
 
     def select_checkbox(self, checkbox_id: str, selected: bool = True) -> Dict[str, Any]:
         """
@@ -167,7 +183,11 @@ class FieldsMixin:
                 "status": "success",
             }
         except Exception as e:
-            return {"checkbox_id": checkbox_id, "error": str(e)}
+            return self._error_result(
+                {"checkbox_id": checkbox_id},
+                e,
+                "Could not change checkbox",
+            )
 
     def select_radio_button(self, radio_id: str) -> Dict[str, Any]:
         """
@@ -190,7 +210,11 @@ class FieldsMixin:
                 "status": "success",
             }
         except Exception as e:
-            return {"radio_id": radio_id, "error": str(e)}
+            return self._error_result(
+                {"radio_id": radio_id},
+                e,
+                "Could not select radio button",
+            )
 
     def select_combobox_entry(self, combobox_id: str, key_or_value: str) -> Dict[str, Any]:
         """
@@ -240,7 +264,11 @@ class FieldsMixin:
                 "error": f"Entry '{key_or_value}' not found in combobox",
             }
         except Exception as e:
-            return {"combobox_id": combobox_id, "error": str(e)}
+            return self._error_result(
+                {"combobox_id": combobox_id},
+                e,
+                "Could not select combobox entry",
+            )
 
     def select_tab(self, tab_id: str) -> Dict[str, Any]:
         """
@@ -264,7 +292,11 @@ class FieldsMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"tab_id": tab_id, "error": str(e)}
+            return self._error_result(
+                {"tab_id": tab_id},
+                e,
+                "Could not select tab",
+            )
 
     def get_combobox_entries(self, combobox_id: str) -> Dict[str, Any]:
         """
@@ -297,7 +329,11 @@ class FieldsMixin:
                 "entries": entries,
             }
         except Exception as e:
-            return {"combobox_id": combobox_id, "error": str(e)}
+            return self._error_result(
+                {"combobox_id": combobox_id},
+                e,
+                "Could not read combobox entries",
+            )
 
     def set_batch_fields(self, fields: Dict[str, str]) -> Dict[str, Any]:
         """
@@ -320,7 +356,10 @@ class FieldsMixin:
                 self._session.findById(field_id).text = value
                 results[field_id] = "success"
             except Exception as e:
-                results[field_id] = f"error: {e}"
+                results[field_id] = (
+                    "error: "
+                    + self._sanitize_error_message(e, "Could not set field")
+                )
 
         succeeded = sum(1 for v in results.values() if v == "success")
         return {
@@ -371,7 +410,11 @@ class FieldsMixin:
                 result["total_lines"] = line_count
             return result
         except Exception as e:
-            return {"textedit_id": textedit_id, "error": str(e)}
+            return self._error_result(
+                {"textedit_id": textedit_id},
+                e,
+                "Could not read text editor",
+            )
 
     def set_textedit(self, textedit_id: str, text: str) -> Dict[str, Any]:
         """
@@ -402,7 +445,11 @@ class FieldsMixin:
                 "status": "success",
             }
         except Exception as e:
-            return {"textedit_id": textedit_id, "error": str(e)}
+            return self._error_result(
+                {"textedit_id": textedit_id},
+                e,
+                "Could not set text editor",
+            )
 
     def set_focus(self, element_id: str) -> Dict[str, Any]:
         """
@@ -420,4 +467,8 @@ class FieldsMixin:
             self._session.findById(element_id).SetFocus()
             return {"element_id": element_id, "status": "success"}
         except Exception as e:
-            return {"element_id": element_id, "error": str(e)}
+            return self._error_result(
+                {"element_id": element_id},
+                e,
+                "Could not set focus",
+            )

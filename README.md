@@ -72,6 +72,8 @@ List all editable fields on this screen
 Read the first 20 rows of the visible table
 ```
 
+`sap_connect` intentionally does not accept a password parameter. The safer pattern is to log in through SAP GUI first and then attach with `sap_connect_existing`.
+
 ## Requirements
 
 - **Windows** (SAP GUI only runs on Windows)
@@ -130,6 +132,8 @@ uv sync --extra dev --extra screenshots
 ```
 
 ## Usage
+
+Connection recommendation: prefer `sap_connect_existing` for already authenticated sessions. Use `sap_connect` mainly for SSO flows or to open the SAP login screen before the user completes manual login.
 
 ### Running the MCP Server Directly
 
@@ -346,6 +350,8 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 5. **MCP Tool Annotations** - All 52 tools are annotated with `readOnlyHint`/`destructiveHint` per the MCP spec, so clients can display appropriate UI hints
 
+6. **No MCP Password Parameter** - `sap_connect` does not accept a password parameter, avoiding secret exposure in MCP tool-call history and client logs
+
 ### Recommendations for Production Use
 
 - **Never expose to untrusted users**
@@ -497,6 +503,7 @@ uv run ruff check src/
 - [SAP GUI Scripting API Documentation](https://help.sap.com/docs/sap_gui_for_windows)
 - [MCP Specification](https://modelcontextprotocol.io/docs)
 - [Contributing Guide](CONTRIBUTING.md)
+- [Security Policy](SECURITY.md)
 - [Client Setup Guide](docs/CLIENTS.md)
 - [Tool Catalog](docs/TOOLS.md)
 - [Project Overview](docs/OVERVIEW.md)

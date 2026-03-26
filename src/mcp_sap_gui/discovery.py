@@ -224,7 +224,11 @@ class DiscoveryMixin:
 
             return result
         except Exception as e:
-            return {"shell_id": shell_id, "error": str(e)}
+            return self._error_result(
+                {"shell_id": shell_id},
+                e,
+                "Could not read shell content",
+            )
 
     # =========================================================================
     # Screen Element Discovery
@@ -264,10 +268,13 @@ class DiscoveryMixin:
             )
             return elements
         except Exception as e:
-            logger.error(f"Failed to enumerate elements: {e}")
-            raise SAPGUIError(
-                f"Failed to enumerate elements in '{container_id}': {e}"
+            logger.warning(
+                "Failed to enumerate elements in %s: %s",
+                container_id,
+                e,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
             )
+            raise SAPGUIError(f"Failed to enumerate elements in '{container_id}'")
 
     def _enumerate_elements(self, container, max_depth: int,
                             current_depth: int = 0,
@@ -358,9 +365,17 @@ class DiscoveryMixin:
         import os
         import tempfile
 
+        temp_filepath = None
         try:
             if filepath is None:
-                filepath = os.path.join(tempfile.gettempdir(), "sap_screenshot.png")
+                temp_file = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    prefix="sap_screenshot_",
+                    suffix=".png",
+                )
+                temp_filepath = temp_file.name
+                temp_file.close()
+                filepath = temp_filepath
                 return_base64 = True
             else:
                 return_base64 = False
@@ -392,7 +407,9 @@ class DiscoveryMixin:
                 }
 
         except Exception as e:
-            return {"error": str(e)}
+            if temp_filepath and os.path.exists(temp_filepath):
+                os.remove(temp_filepath)
+            return self._error_result({}, e, "Could not capture screenshot")
 
     def _optimize_screenshot(self, filepath: str) -> None:
         """

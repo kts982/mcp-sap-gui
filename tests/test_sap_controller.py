@@ -1,5 +1,7 @@
 """Tests for SAP GUI Controller."""
 
+import base64
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,6 +35,19 @@ class TestSAPGUIController:
 
         with pytest.raises(SAPGUINotConnectedError):
             controller.get_session_info()
+
+    def test_get_sap_gui_sanitizes_unavailable_errors(self):
+        """Bootstrap errors should not leak raw COM details."""
+        from mcp_sap_gui.sap_controller import SAPGUIController, SAPGUINotAvailableError
+
+        controller = SAPGUIController()
+        controller._win32com.GetObject.side_effect = Exception("host=ha9.internal path=C:\\secret")
+
+        with pytest.raises(SAPGUINotAvailableError) as exc_info:
+            controller._get_sap_gui()
+
+        assert "ha9.internal" not in str(exc_info.value)
+        assert "C:\\secret" not in str(exc_info.value)
 
 
 class TestVKey:
@@ -1315,6 +1330,41 @@ class TestActiveWindowImproved:
         hardcopy_target.HardCopy.assert_called_once_with("test.png", "PNG")
         assert result["window"] == "wnd[2]"
 
+    def test_take_screenshot_uses_unique_temp_file_when_no_path(self, tmp_path):
+        """Base64 screenshots should use a unique temp file instead of a fixed name."""
+        controller = self._make_controller_with_session()
+        mock_window = MagicMock()
+        mock_window.Id = "wnd[0]"
+        controller._session.ActiveWindow = mock_window
+
+        screenshot_path = tmp_path / "generated.png"
+
+        class DummyTempFile:
+            def __init__(self, name):
+                self.name = str(name)
+
+            def close(self):
+                return None
+
+        def hardcopy(filepath, _format):
+            screenshot_path.write_bytes(b"png-bytes")
+
+        hardcopy_target = MagicMock()
+        hardcopy_target.HardCopy.side_effect = hardcopy
+        controller._session.findById.return_value = hardcopy_target
+        controller._optimize_screenshot = MagicMock()
+
+        with patch(
+            "tempfile.NamedTemporaryFile",
+            return_value=DummyTempFile(screenshot_path),
+        ) as mock_temp:
+            result = controller.take_screenshot()
+
+        mock_temp.assert_called_once()
+        hardcopy_target.HardCopy.assert_called_once_with(str(screenshot_path), "PNG")
+        assert result["data"] == base64.b64encode(b"png-bytes").decode()
+        assert not screenshot_path.exists()
+
 
 class TestDisconnectOwnership:
     """Tests for session ownership during disconnect."""
@@ -1374,6 +1424,38 @@ class TestDisconnectOwnership:
         controller.connect_to_existing_session()
 
         assert controller._owns_session is False
+
+
+class TestSensitiveLogging:
+    """Tests for secret handling in logging and client-facing errors."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_set_field_masks_sensitive_values_in_debug_logs(self, caplog):
+        """Password-like fields should be redacted in debug logging."""
+        controller = self._make_controller_with_session()
+        controller._session.findById.return_value = MagicMock()
+
+        with caplog.at_level(logging.DEBUG):
+            controller.set_field("wnd[0]/usr/pwdRSYST-BCODE", "Secret123!")
+
+        assert "Secret123!" not in caplog.text
+        assert "***" in caplog.text
+
+    def test_read_field_sanitizes_client_error_message(self):
+        """Field read errors should not expose raw COM details."""
+        controller = self._make_controller_with_session()
+        controller._session.findById.side_effect = Exception("host=ha9.internal path=C:\\secret")
+
+        result = controller.read_field("wnd[0]/usr/txtFIELD")
+
+        assert result["error"] == "Could not read field"
+        assert "ha9.internal" not in result["error"]
 
 
 class TestTreeParentKeyFix:

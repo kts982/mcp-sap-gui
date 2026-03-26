@@ -6,6 +6,7 @@ transaction execution, and screen information retrieval.
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from .models import (
@@ -70,8 +71,13 @@ class SAPGUIControllerBase:
             try:
                 self._sap_gui_auto = self._win32com.GetObject("SAPGUI")
             except Exception as e:
+                logger.warning(
+                    "Failed to get SAP GUI automation object: %s",
+                    e,
+                    exc_info=logger.isEnabledFor(logging.DEBUG),
+                )
                 raise SAPGUINotAvailableError(
-                    f"Cannot connect to SAP GUI. Is SAP Logon Pad running? Error: {e}"
+                    "Cannot connect to SAP GUI. Ensure SAP Logon Pad is running."
                 )
         return self._sap_gui_auto
 
@@ -95,6 +101,64 @@ class SAPGUIControllerBase:
         if "wnd[" in window_id:
             return "wnd[" + window_id.split("wnd[", 1)[1]
         return window_id
+
+    def _is_sensitive_field_id(self, field_id: str) -> bool:
+        """Return True when a field ID likely refers to a secret input."""
+        normalized = (field_id or "").upper()
+        return any(token in normalized for token in ("PWD", "BCODE", "PASSWORD"))
+
+    def _mask_field_value(self, field_id: str, value: Any) -> str:
+        """Mask sensitive field values before logging them."""
+        if self._is_sensitive_field_id(field_id):
+            return "***"
+        return str(value)
+
+    def _sanitize_error_message(self, exc: Exception, fallback: str) -> str:
+        """Return a client-safe error message without raw COM details."""
+        message = str(exc).strip()
+        if isinstance(exc, SAPGUINotAvailableError):
+            return (
+                "Cannot connect to SAP GUI. Ensure SAP Logon Pad is running "
+                "and SAP GUI Scripting is enabled."
+            )
+        if isinstance(exc, (SAPGUINotConnectedError, SAPGUIError, ValueError)):
+            return message or fallback
+        if message:
+            lower = message.lower()
+            blocked_tokens = (
+                "host=",
+                "server=",
+                "path=",
+                "traceback",
+                "clsid",
+                "progid",
+                "c:\\",
+                "\\",
+                "/app/",
+                "/con[",
+                "/ses[",
+                ".dll",
+                ".exe",
+                "0x",
+            )
+            if not any(token in lower for token in blocked_tokens):
+                if re.fullmatch(r"[A-Za-z0-9 _.,'()/-]{1,120}", message):
+                    return message
+        return fallback
+
+    def _error_result(
+        self, context: Dict[str, Any], exc: Exception, fallback: str,
+    ) -> Dict[str, Any]:
+        """Log full error details server-side and return a safe client payload."""
+        logger.warning(
+            "%s: %s",
+            fallback,
+            exc,
+            exc_info=logger.isEnabledFor(logging.DEBUG),
+        )
+        result = dict(context)
+        result["error"] = self._sanitize_error_message(exc, fallback)
+        return result
 
     def _require_session(self):
         """Ensure we have an active session that is not busy."""
@@ -176,7 +240,15 @@ class SAPGUIControllerBase:
         except SAPGUIError:
             raise
         except Exception as e:
-            raise SAPGUIError(f"Connection failed: {e}")
+            logger.warning(
+                "Connection failed for '%s': %s",
+                system_description,
+                e,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            raise SAPGUIError(
+                "Connection failed. Verify the SAP Logon entry and login screen state."
+            )
 
     def connect_to_existing_session(self, connection_index: int = 0,
                                      session_index: int = 0) -> SessionInfo:
@@ -219,7 +291,14 @@ class SAPGUIControllerBase:
         except SAPGUIError:
             raise
         except Exception as e:
-            raise SAPGUIError(f"Failed to connect to existing session: {e}")
+            logger.warning(
+                "Failed to connect to existing session %s/%s: %s",
+                connection_index,
+                session_index,
+                e,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            raise SAPGUIError("Failed to connect to the requested SAP session.")
 
     def disconnect(self):
         """Detach from the current SAP session.
@@ -323,10 +402,13 @@ class SAPGUIControllerBase:
                         "client": info.Client,
                     })
                 except Exception as e:
-                    sessions.append({
-                        "index": j,
-                        "error": str(e),
-                    })
+                    sessions.append(
+                        self._error_result(
+                            {"index": j},
+                            e,
+                            "Could not inspect SAP session",
+                        )
+                    )
 
             connections.append({
                 "index": i,
@@ -357,45 +439,51 @@ class SAPGUIControllerBase:
             Dict with transaction and screen info
         """
         self._require_session()
+        try:
+            # Ensure proper format
+            if not tcode.startswith("/"):
+                tcode = f"/n{tcode}"
 
-        # Ensure proper format
-        if not tcode.startswith("/"):
-            tcode = f"/n{tcode}"
+            logger.info("Executing transaction: %s", tcode)
 
-        logger.info(f"Executing transaction: {tcode}")
+            # /o and /* prefixes must use okcd approach (not StartTransaction)
+            upper = tcode.upper()
+            opens_new_session = upper.startswith("/O")
+            previous_session_id = getattr(self._session, "Id", "")
+            previous_session_count = None
+            if opens_new_session and self._connection is not None:
+                try:
+                    previous_session_count = self._connection.Children.Count
+                except Exception:
+                    previous_session_count = None
 
-        # /o and /* prefixes must use okcd approach (not StartTransaction)
-        upper = tcode.upper()
-        opens_new_session = upper.startswith("/O")
-        previous_session_id = getattr(self._session, "Id", "")
-        previous_session_count = None
-        if opens_new_session and self._connection is not None:
-            try:
-                previous_session_count = self._connection.Children.Count
-            except Exception:
-                previous_session_count = None
-
-        if opens_new_session or upper.startswith("/*"):
-            self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
-            self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
-            if opens_new_session and previous_session_id:
-                self._rebind_after_new_session(
-                    previous_session_id, previous_session_count,
-                )
-        else:
-            # Use StartTransaction for /n prefix (preferred API)
-            plain_tcode = tcode.removeprefix("/n").removeprefix("/N")
-            try:
-                self._session.StartTransaction(plain_tcode)
-            except Exception:
-                # Fallback to okcd approach
+            if opens_new_session or upper.startswith("/*"):
                 self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
                 self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
+                if opens_new_session and previous_session_id:
+                    self._rebind_after_new_session(
+                        previous_session_id, previous_session_count,
+                    )
+            else:
+                # Use StartTransaction for /n prefix (preferred API)
+                plain_tcode = tcode.removeprefix("/n").removeprefix("/N")
+                try:
+                    self._session.StartTransaction(plain_tcode)
+                except Exception:
+                    # Fallback to okcd approach
+                    self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
+                    self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
 
-        return {
-            "transaction": _strip_tcode_prefix(tcode),
-            "screen": self.get_screen_info(),
-        }
+            return {
+                "transaction": _strip_tcode_prefix(tcode),
+                "screen": self.get_screen_info(),
+            }
+        except Exception as e:
+            return self._error_result(
+                {"transaction": _strip_tcode_prefix(tcode)},
+                e,
+                "Could not execute transaction",
+            )
 
     def send_vkey(self, vkey: int, window: str = "wnd[0]") -> Dict[str, Any]:
         """
@@ -410,10 +498,16 @@ class SAPGUIControllerBase:
         """
         self._require_session()
 
-        logger.debug(f"Sending VKey {vkey} to {window}")
-        self._session.findById(window).sendVKey(vkey)
-
-        return {"vkey": vkey, "screen": self.get_screen_info()}
+        try:
+            logger.debug("Sending VKey %s to %s", vkey, window)
+            self._session.findById(window).sendVKey(vkey)
+            return {"vkey": vkey, "screen": self.get_screen_info()}
+        except Exception as e:
+            return self._error_result(
+                {"vkey": vkey, "window": window},
+                e,
+                "Could not send SAP key",
+            )
 
     def press_enter(self) -> Dict[str, Any]:
         """Press Enter key."""
@@ -485,7 +579,7 @@ class SAPGUIControllerBase:
 
             return result
         except Exception as e:
-            return {"error": str(e)}
+            return self._error_result({}, e, "Could not read screen information")
 
     def _get_status_bar_info(
         self, window_id: str = "wnd[0]",

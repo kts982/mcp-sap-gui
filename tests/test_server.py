@@ -182,6 +182,14 @@ class TestOkCodeBypassPrevention:
         with pytest.raises(ValueError, match="blocked by security policy"):
             await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "su01")
 
+    def test_check_okcode_bypass_matches_full_session_paths(self, srv):
+        """Full SAP element IDs ending in okcd should also be protected."""
+        with pytest.raises(ValueError, match="blocked by security policy"):
+            srv._check_okcode_bypass(
+                "/app/con[0]/ses[0]/wnd[0]/tbar[0]/OKCD",
+                "/nSU01",
+            )
+
     @pytest.mark.asyncio
     async def test_set_field_allows_mm03_on_okcd(self, srv):
         """sap_set_field allows non-blocked transactions on OK-code field."""
@@ -545,6 +553,23 @@ class TestToolRegistration:
         assert "Enter" in key_schema["enum"]
         assert "F8" in key_schema["enum"]
         assert len(key_schema["enum"]) == 30
+
+    def test_sap_connect_schema_excludes_password(self, srv):
+        """sap_connect should not expose a password parameter through MCP."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        connect_tool = next(t for t in tools if t.name == "sap_connect")
+        properties = connect_tool.inputSchema["properties"]
+
+        assert "password" not in properties
+        assert "system_description" in properties
+        assert "client" in properties
+        assert "user" in properties
+        assert "language" in properties
 
     def test_tool_annotations_present(self, srv):
         """All tools have annotations with readOnlyHint set."""

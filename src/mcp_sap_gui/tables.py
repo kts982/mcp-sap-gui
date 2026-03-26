@@ -168,7 +168,11 @@ class TablesMixin:
                 table, table_id, max_rows, col_filter, columns_only, start_row,
             )
         except Exception as e:
-            return {"table_id": table_id, "error": str(e)}
+            return self._error_result(
+                {"table_id": table_id},
+                e,
+                "Could not read table",
+            )
 
     def _read_alv_grid(self, grid, table_id: str, max_rows: int,
                        col_filter: List[str] = None,
@@ -382,7 +386,11 @@ class TablesMixin:
                 "buttons": buttons,
             }
         except Exception as e:
-            return {"grid_id": grid_id, "error": str(e)}
+            return self._error_result(
+                {"grid_id": grid_id},
+                e,
+                "Could not read ALV toolbar",
+            )
 
     def press_alv_toolbar_button(self, grid_id: str, button_id: str) -> Dict[str, Any]:
         """
@@ -431,7 +439,11 @@ class TablesMixin:
                     "screen": self.get_screen_info(),
                 }
         except Exception as e:
-            return {"grid_id": grid_id, "button_id": button_id, "error": str(e)}
+            return self._error_result(
+                {"grid_id": grid_id, "button_id": button_id},
+                e,
+                "Could not press ALV toolbar button",
+            )
 
     def select_alv_context_menu_item(
         self,
@@ -507,7 +519,11 @@ class TablesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"grid_id": grid_id, "menu_item_id": menu_item_id, "error": str(e)}
+            return self._error_result(
+                {"grid_id": grid_id, "menu_item_id": menu_item_id},
+                e,
+                "Could not select ALV context menu item",
+            )
 
     def select_table_row(self, table_id: str, row: int) -> Dict[str, Any]:
         """Select a row in a table/grid.
@@ -544,7 +560,11 @@ class TablesMixin:
                 "status": "success",
             }
         except Exception as e:
-            return {"table_id": table_id, "error": str(e)}
+            return self._error_result(
+                {"table_id": table_id},
+                e,
+                "Could not select table row",
+            )
 
     def double_click_table_cell(self, table_id: str, row: int, column: str) -> Dict[str, Any]:
         """Double-click a cell in a table/grid.
@@ -580,7 +600,11 @@ class TablesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"table_id": table_id, "error": str(e)}
+            return self._error_result(
+                {"table_id": table_id, "row": row, "column": column},
+                e,
+                "Could not double-click table cell",
+            )
 
     def modify_cell(self, grid_id: str, row: int, column: str, value: str) -> Dict[str, Any]:
         """
@@ -616,7 +640,11 @@ class TablesMixin:
                 "status": "success",
             }
         except Exception as e:
-            return {"grid_id": grid_id, "row": row, "column": column, "error": str(e)}
+            return self._error_result(
+                {"grid_id": grid_id, "row": row, "column": column},
+                e,
+                "Could not modify cell",
+            )
 
     def set_current_cell(self, grid_id: str, row: int, column: str) -> Dict[str, Any]:
         """
@@ -650,7 +678,11 @@ class TablesMixin:
                 "status": "success",
             }
         except Exception as e:
-            return {"grid_id": grid_id, "row": row, "column": column, "error": str(e)}
+            return self._error_result(
+                {"grid_id": grid_id, "row": row, "column": column},
+                e,
+                "Could not set current cell",
+            )
 
     def get_column_info(self, grid_id: str) -> Dict[str, Any]:
         """
@@ -702,7 +734,11 @@ class TablesMixin:
                 "columns": columns,
             }
         except Exception as e:
-            return {"grid_id": grid_id, "error": str(e)}
+            return self._error_result(
+                {"grid_id": grid_id},
+                e,
+                "Could not read column information",
+            )
 
     # ---- TableControl-specific operations ----
 
@@ -742,7 +778,10 @@ class TablesMixin:
                 # navigation buttons or Position... dialog instead.
                 return {
                     "table_id": table_id,
-                    "error": str(scroll_err),
+                    "error": self._sanitize_error_message(
+                        scroll_err,
+                        "Could not scroll table control",
+                    ),
                     "requested_position": position,
                     "clamped_position": new_pos,
                     "scroll_max": scroll_max,
@@ -759,7 +798,11 @@ class TablesMixin:
                 "scroll_max": scroll_max,
             }
         except Exception as e:
-            return {"table_id": table_id, "error": str(e)}
+            return self._error_result(
+                {"table_id": table_id},
+                e,
+                "Could not scroll table control",
+            )
 
     def get_table_control_row_info(self, table_id: str,
                                     rows: Optional[List[int]] = None) -> Dict[str, Any]:
@@ -796,7 +839,10 @@ class TablesMixin:
                     info["selectable"] = getattr(abs_row, 'Selectable', True)
                     info["selected"] = getattr(abs_row, 'Selected', False)
                 except Exception as e:
-                    info["error"] = str(e)
+                    info["error"] = self._sanitize_error_message(
+                        e,
+                        "Could not inspect table row",
+                    )
                 row_info.append(info)
 
             return {
@@ -805,7 +851,11 @@ class TablesMixin:
                 "rows": row_info,
             }
         except Exception as e:
-            return {"table_id": table_id, "error": str(e)}
+            return self._error_result(
+                {"table_id": table_id},
+                e,
+                "Could not read table row info",
+            )
 
     def select_all_table_control_columns(self, table_id: str,
                                           select: bool = True) -> Dict[str, Any]:
@@ -836,7 +886,11 @@ class TablesMixin:
                 "status": "all_selected" if select else "all_deselected",
             }
         except Exception as e:
-            return {"table_id": table_id, "error": str(e)}
+            return self._error_result(
+                {"table_id": table_id},
+                e,
+                "Could not change table column selection",
+            )
 
     # ---- ALV-specific operations ----
 
@@ -880,7 +934,11 @@ class TablesMixin:
 
             return info
         except Exception as e:
-            return {"grid_id": grid_id, "row": row, "column": column, "error": str(e)}
+            return self._error_result(
+                {"grid_id": grid_id, "row": row, "column": column},
+                e,
+                "Could not read cell information",
+            )
 
     def press_column_header(self, grid_id: str,
                              column: str) -> Dict[str, Any]:
@@ -906,7 +964,11 @@ class TablesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"grid_id": grid_id, "column": column, "error": str(e)}
+            return self._error_result(
+                {"grid_id": grid_id, "column": column},
+                e,
+                "Could not press column header",
+            )
 
     def select_all_rows(self, grid_id: str) -> Dict[str, Any]:
         """
@@ -925,7 +987,11 @@ class TablesMixin:
             grid.SelectAll()
             return {"grid_id": grid_id, "status": "all_selected"}
         except Exception as e:
-            return {"grid_id": grid_id, "error": str(e)}
+            return self._error_result(
+                {"grid_id": grid_id},
+                e,
+                "Could not select all rows",
+            )
 
     # ---- Operations for both table types ----
 
@@ -959,7 +1025,11 @@ class TablesMixin:
                     "current_column": getattr(table, 'CurrentCellColumn', ''),
                 }
         except Exception as e:
-            return {"table_id": table_id, "error": str(e)}
+            return self._error_result(
+                {"table_id": table_id},
+                e,
+                "Could not read current cell",
+            )
 
     # =========================================================================
     # Multi-Row Selection
@@ -1004,4 +1074,8 @@ class TablesMixin:
                 "status": "success",
             }
         except Exception as e:
-            return {"table_id": table_id, "error": str(e)}
+            return self._error_result(
+                {"table_id": table_id},
+                e,
+                "Could not select multiple rows",
+            )

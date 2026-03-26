@@ -9,9 +9,11 @@ Two practical rules:
 
 ## Connection
 
+Preferred usage: use `sap_connect_existing` when the user is already logged in to SAP. Use `sap_connect` mainly for SSO flows or to open the SAP login screen before the user completes manual login.
+
 | Tool | Description |
 |------|-------------|
-| `sap_connect` | Connect to an SAP system by SAP Logon entry name, with optional credentials |
+| `sap_connect` | Connect to an SAP system by SAP Logon entry name, without exposing a password through MCP |
 | `sap_connect_existing` | Attach to an already open SAP session |
 | `sap_list_connections` | List all currently open SAP connections and sessions |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen |

@@ -74,6 +74,7 @@ If a change touches SAP interaction behavior, mention whether it was validated o
 
 ## Security and Privacy
 
+- For vulnerability reports, use the process in `SECURITY.md` rather than opening a public issue.
 - Never include credentials, connection details, or real business data in commits, issues, or screenshots.
 - Be careful with SAP screenshots: they often contain sensitive information.
 - Changes that weaken the current safety checks should come with a strong justification.

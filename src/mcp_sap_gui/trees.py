@@ -160,7 +160,11 @@ class TreesMixin:
                             break
                         node_keys.append(key)
             except Exception as e:
-                return {"tree_id": tree_id, "error": f"Cannot read node keys: {e}"}
+                return self._error_result(
+                    {"tree_id": tree_id},
+                    e,
+                    "Cannot read tree node keys",
+                )
 
             # Read each node
             nodes = []
@@ -236,7 +240,11 @@ class TreesMixin:
             }
 
         except Exception as e:
-            return {"tree_id": tree_id, "error": str(e)}
+            return self._error_result(
+                {"tree_id": tree_id},
+                e,
+                "Could not read tree",
+            )
 
     def expand_tree_node(self, tree_id: str, node_key: str) -> Dict[str, Any]:
         """
@@ -262,7 +270,11 @@ class TreesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"tree_id": tree_id, "node_key": node_key, "error": str(e)}
+            return self._error_result(
+                {"tree_id": tree_id, "node_key": node_key},
+                e,
+                "Could not expand tree node",
+            )
 
     def collapse_tree_node(self, tree_id: str, node_key: str) -> Dict[str, Any]:
         """
@@ -288,7 +300,11 @@ class TreesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"tree_id": tree_id, "node_key": node_key, "error": str(e)}
+            return self._error_result(
+                {"tree_id": tree_id, "node_key": node_key},
+                e,
+                "Could not collapse tree node",
+            )
 
     def select_tree_node(self, tree_id: str, node_key: str) -> Dict[str, Any]:
         """
@@ -314,7 +330,11 @@ class TreesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"tree_id": tree_id, "node_key": node_key, "error": str(e)}
+            return self._error_result(
+                {"tree_id": tree_id, "node_key": node_key},
+                e,
+                "Could not select tree node",
+            )
 
     def double_click_tree_node(self, tree_id: str, node_key: str) -> Dict[str, Any]:
         """
@@ -340,7 +360,11 @@ class TreesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {"tree_id": tree_id, "node_key": node_key, "error": str(e)}
+            return self._error_result(
+                {"tree_id": tree_id, "node_key": node_key},
+                e,
+                "Could not double-click tree node",
+            )
 
     def double_click_tree_item(self, tree_id: str, node_key: str,
                                item_name: str) -> Dict[str, Any]:
@@ -372,10 +396,15 @@ class TreesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {
-                "tree_id": tree_id, "node_key": node_key,
-                "item_name": item_name, "error": str(e),
-            }
+            return self._error_result(
+                {
+                    "tree_id": tree_id,
+                    "node_key": node_key,
+                    "item_name": item_name,
+                },
+                e,
+                "Could not double-click tree item",
+            )
 
     def click_tree_link(self, tree_id: str, node_key: str,
                         item_name: str) -> Dict[str, Any]:
@@ -404,10 +433,15 @@ class TreesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return {
-                "tree_id": tree_id, "node_key": node_key,
-                "item_name": item_name, "error": str(e),
-            }
+            return self._error_result(
+                {
+                    "tree_id": tree_id,
+                    "node_key": node_key,
+                    "item_name": item_name,
+                },
+                e,
+                "Could not click tree link",
+            )
 
     def _get_node_text(self, tree, key, column_names):
         """Get searchable text for a node, with column fallback."""
@@ -486,7 +520,11 @@ class TreesMixin:
                 elif hasattr(keys, '__iter__'):
                     node_keys = list(keys)
             except Exception as e:
-                return {"tree_id": tree_id, "error": f"Cannot read node keys: {e}"}
+                return self._error_result(
+                    {"tree_id": tree_id},
+                    e,
+                    "Cannot read tree node keys",
+                )
 
             needle = search_text.lower()
             matches = []
@@ -534,7 +572,11 @@ class TreesMixin:
             }
 
         except Exception as e:
-            return {"tree_id": tree_id, "search_text": search_text, "error": str(e)}
+            return self._error_result(
+                {"tree_id": tree_id, "search_text": search_text},
+                e,
+                "Could not search tree nodes",
+            )
 
     def get_tree_node_children(self, tree_id: str, node_key: str = "",
                                expand: bool = False) -> Dict[str, Any]:
@@ -565,7 +607,10 @@ class TreesMixin:
                 try:
                     tree.ExpandNode(node_key)
                 except Exception as e:
-                    expand_error = str(e)
+                    expand_error = self._sanitize_error_message(
+                        e,
+                        "Could not expand tree node",
+                    )
                     logger.debug("ExpandNode failed for %s: %s", node_key, e)
 
             # Get all node keys and filter to direct children
@@ -578,7 +623,11 @@ class TreesMixin:
                 elif hasattr(keys, '__iter__'):
                     all_keys = list(keys)
             except Exception as e:
-                return {"tree_id": tree_id, "error": f"Cannot read node keys: {e}"}
+                return self._error_result(
+                    {"tree_id": tree_id},
+                    e,
+                    "Cannot read tree node keys",
+                )
 
             children = []
             for key in all_keys:
@@ -644,7 +693,11 @@ class TreesMixin:
             return result
 
         except Exception as e:
-            return {"tree_id": tree_id, "node_key": node_key, "error": str(e)}
+            return self._error_result(
+                {"tree_id": tree_id, "node_key": node_key},
+                e,
+                "Could not read tree node children",
+            )
 
     def find_tree_node_by_path(self, tree_id: str, path: str) -> Dict[str, Any]:
         """
@@ -673,4 +726,8 @@ class TreesMixin:
                 "status": "found",
             }
         except Exception as e:
-            return {"tree_id": tree_id, "path": path, "error": str(e)}
+            return self._error_result(
+                {"tree_id": tree_id, "path": path},
+                e,
+                "Could not find tree node by path",
+            )
