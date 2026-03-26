@@ -45,7 +45,7 @@ config.local.json
 .claude/settings.local.json
 
 # Local roadmap / vision drafts
-docs/ROADMAP_VISION.local.md
+.dev/ROADMAP_VISION.local.md
 SAP_GUI_Scripting_Technical_Guide.md
 
 # Local workspace artifacts
