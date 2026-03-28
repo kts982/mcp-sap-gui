@@ -8,6 +8,11 @@ import pytest
 # Helpers to import server module with mocked win32com
 # ---------------------------------------------------------------------------
 
+def _make_mock_ctx():
+    """Create a mock MCP Context for direct tool calls in tests."""
+    return MagicMock()
+
+
 @pytest.fixture
 def mock_win32com():
     """Mock win32com so SAPGUIController can be instantiated on any OS."""
@@ -18,15 +23,15 @@ def mock_win32com():
 
 @pytest.fixture
 def srv(mock_win32com):
-    """Import and configure the server module with a fresh controller."""
+    """Import and configure the server module with a SessionManager."""
     import importlib
 
     import mcp_sap_gui.server as _srv
     # Reload to pick up mocked win32com
     importlib.reload(_srv)
 
-    from mcp_sap_gui.sap_controller import SAPGUIController
-    _srv.controller = SAPGUIController()
+    from mcp_sap_gui.session_manager import SessionManager
+    _srv._session_mgr = SessionManager()
     _srv.config = _srv.ServerConfig()
     yield _srv
 
@@ -39,8 +44,8 @@ def readonly_srv(mock_win32com):
     import mcp_sap_gui.server as _srv
     importlib.reload(_srv)
 
-    from mcp_sap_gui.sap_controller import SAPGUIController
-    _srv.controller = SAPGUIController()
+    from mcp_sap_gui.session_manager import SessionManager
+    _srv._session_mgr = SessionManager()
     _srv.config = _srv.ServerConfig(read_only=True)
     yield _srv
 
@@ -156,10 +161,11 @@ class TestTransactionBlocking:
 
     def test_blocked_transaction_raises_valueerror(self, srv):
         """sap_execute_transaction raises ValueError (not returns dict) for blocked tcodes."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="blocked by security policy"):
             import asyncio
             asyncio.new_event_loop().run_until_complete(
-                srv.sap_execute_transaction("SU01")
+                srv.sap_execute_transaction("SU01", ctx)
             )
 
 
@@ -173,14 +179,16 @@ class TestOkCodeBypassPrevention:
     @pytest.mark.asyncio
     async def test_set_field_blocks_su01_on_okcd(self, srv):
         """sap_set_field blocks SU01 when targeting the OK-code field."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="blocked by security policy"):
-            await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "/nSU01")
+            await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "/nSU01", ctx)
 
     @pytest.mark.asyncio
     async def test_set_field_blocks_okcd_case_insensitive(self, srv):
         """OK-code bypass check is case-insensitive."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="blocked by security policy"):
-            await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "su01")
+            await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "su01", ctx)
 
     def test_check_okcode_bypass_matches_full_session_paths(self, srv):
         """Full SAP element IDs ending in okcd should also be protected."""
@@ -193,35 +201,40 @@ class TestOkCodeBypassPrevention:
     @pytest.mark.asyncio
     async def test_set_field_allows_mm03_on_okcd(self, srv):
         """sap_set_field allows non-blocked transactions on OK-code field."""
-        # Should not raise - it will fail on the COM call, but not on security check
-        srv.controller = MagicMock()
-        srv.controller.set_field.return_value = {"status": "success"}
-        await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "MM03")
+        ctx = _make_mock_ctx()
+        mock_ctrl = MagicMock()
+        mock_ctrl.set_field.return_value = {"status": "success"}
+        with patch.object(srv, '_ctrl', return_value=mock_ctrl):
+            await srv.sap_set_field("wnd[0]/tbar[0]/okcd", "MM03", ctx)
 
     @pytest.mark.asyncio
     async def test_set_field_allows_su01_on_non_okcd(self, srv):
         """sap_set_field allows blocked tcode strings on regular fields."""
-        srv.controller = MagicMock()
-        srv.controller.set_field.return_value = {"status": "success"}
-        await srv.sap_set_field("wnd[0]/usr/txtFIELD", "SU01")
+        ctx = _make_mock_ctx()
+        mock_ctrl = MagicMock()
+        mock_ctrl.set_field.return_value = {"status": "success"}
+        with patch.object(srv, '_ctrl', return_value=mock_ctrl):
+            await srv.sap_set_field("wnd[0]/usr/txtFIELD", "SU01", ctx)
 
     @pytest.mark.asyncio
     async def test_batch_fields_blocks_okcd(self, srv):
         """sap_set_batch_fields blocks blocked transactions on OK-code field."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="blocked by security policy"):
             await srv.sap_set_batch_fields({
                 "wnd[0]/usr/txtFIELD": "hello",
                 "wnd[0]/tbar[0]/okcd": "/NSU01",
-            })
+            }, ctx)
 
     @pytest.mark.asyncio
     async def test_screen_elements_surfaces_discovery_errors(self, srv):
         """sap_get_screen_elements should surface invalid-container errors."""
-        srv.controller = MagicMock()
-        srv.controller.get_screen_elements.side_effect = RuntimeError("bad container")
-
-        with pytest.raises(RuntimeError, match="bad container"):
-            await srv.sap_get_screen_elements("wnd[0]/bad")
+        ctx = _make_mock_ctx()
+        mock_ctrl = MagicMock()
+        mock_ctrl.get_screen_elements.side_effect = RuntimeError("bad container")
+        with patch.object(srv, '_ctrl', return_value=mock_ctrl):
+            with pytest.raises(RuntimeError, match="bad container"):
+                await srv.sap_get_screen_elements(ctx, "wnd[0]/bad")
 
 
 # ===========================================================================
@@ -243,184 +256,217 @@ class TestReadOnlyMode:
     @pytest.mark.asyncio
     async def test_readonly_blocks_set_field(self, readonly_srv):
         """sap_set_field raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_set_field("wnd[0]/usr/txt", "test")
+            await readonly_srv.sap_set_field("wnd[0]/usr/txt", "test", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_press_button(self, readonly_srv):
         """sap_press_button raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_press_button("wnd[0]/tbar[1]/btn[8]")
+            await readonly_srv.sap_press_button("wnd[0]/tbar[1]/btn[8]", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_select_checkbox(self, readonly_srv):
         """sap_select_checkbox raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_checkbox("wnd[0]/usr/chk", True)
+            await readonly_srv.sap_select_checkbox("wnd[0]/usr/chk", ctx, True)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_execute_transaction(self, readonly_srv):
         """sap_execute_transaction raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_execute_transaction("MM03")
+            await readonly_srv.sap_execute_transaction("MM03", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_send_key(self, readonly_srv):
         """sap_send_key raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_send_key("Enter")
+            await readonly_srv.sap_send_key("Enter", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_select_table_row(self, readonly_srv):
         """sap_select_table_row raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_table_row("wnd[0]/usr/tbl", 0)
+            await readonly_srv.sap_select_table_row("wnd[0]/usr/tbl", 0, ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_double_click_cell(self, readonly_srv):
         """sap_double_click_cell raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_double_click_cell("wnd[0]/usr/tbl", 0, "COL1")
+            await readonly_srv.sap_double_click_cell("wnd[0]/usr/tbl", 0, "COL1", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_alv_toolbar_button(self, readonly_srv):
         """sap_press_alv_toolbar_button raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_press_alv_toolbar_button("wnd[0]/usr/grid", "SORT")
+            await readonly_srv.sap_press_alv_toolbar_button("wnd[0]/usr/grid", "SORT", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_alv_context_menu(self, readonly_srv):
         """sap_select_alv_context_menu_item raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
             await readonly_srv.sap_select_alv_context_menu_item(
-                "wnd[0]/usr/grid", "ITEM1"
+                "wnd[0]/usr/grid", "ITEM1", ctx
             )
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_tree_expand(self, readonly_srv):
         """sap_expand_tree_node raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_expand_tree_node("wnd[0]/usr/tree", "1")
+            await readonly_srv.sap_expand_tree_node("wnd[0]/usr/tree", "1", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_tree_collapse(self, readonly_srv):
         """sap_collapse_tree_node raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_collapse_tree_node("wnd[0]/usr/tree", "1")
+            await readonly_srv.sap_collapse_tree_node("wnd[0]/usr/tree", "1", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_tree_select(self, readonly_srv):
         """sap_select_tree_node raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_tree_node("wnd[0]/usr/tree", "1")
+            await readonly_srv.sap_select_tree_node("wnd[0]/usr/tree", "1", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_tree_double_click(self, readonly_srv):
         """sap_double_click_tree_node raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_double_click_tree_node("wnd[0]/usr/tree", "1")
+            await readonly_srv.sap_double_click_tree_node("wnd[0]/usr/tree", "1", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_select_menu(self, readonly_srv):
         """sap_select_menu raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_menu("wnd[0]/mbar/menu[0]/menu[0]")
+            await readonly_srv.sap_select_menu("wnd[0]/mbar/menu[0]/menu[0]", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_radio_button(self, readonly_srv):
         """sap_select_radio_button raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_radio_button("wnd[0]/usr/radOPT1")
+            await readonly_srv.sap_select_radio_button("wnd[0]/usr/radOPT1", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_combobox(self, readonly_srv):
         """sap_select_combobox_entry raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_combobox_entry("wnd[0]/usr/cmb", "EN")
+            await readonly_srv.sap_select_combobox_entry("wnd[0]/usr/cmb", "EN", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_tab(self, readonly_srv):
         """sap_select_tab raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_tab("wnd[0]/usr/tabsTAB/tabpTAB1")
+            await readonly_srv.sap_select_tab("wnd[0]/usr/tabsTAB/tabpTAB1", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_modify_cell(self, readonly_srv):
         """sap_modify_cell raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_modify_cell("wnd[0]/usr/grid", 0, "COL", "val")
+            await readonly_srv.sap_modify_cell("wnd[0]/usr/grid", 0, "COL", "val", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_set_current_cell(self, readonly_srv):
         """sap_set_current_cell raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_set_current_cell("wnd[0]/usr/grid", 0, "COL")
+            await readonly_srv.sap_set_current_cell("wnd[0]/usr/grid", 0, "COL", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_double_click_tree_item(self, readonly_srv):
         """sap_double_click_tree_item raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_double_click_tree_item("wnd[0]/usr/tree", "1", "COL")
+            await readonly_srv.sap_double_click_tree_item("wnd[0]/usr/tree", "1", "COL", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_click_tree_link(self, readonly_srv):
         """sap_click_tree_link raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_click_tree_link("wnd[0]/usr/tree", "1", "LINK")
+            await readonly_srv.sap_click_tree_link("wnd[0]/usr/tree", "1", "LINK", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_get_tree_node_children_expand(self, readonly_srv):
         """sap_get_tree_node_children with expand=True raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_get_tree_node_children("wnd[0]/usr/tree", "1", expand=True)
+            await readonly_srv.sap_get_tree_node_children("wnd[0]/usr/tree", ctx, "1", expand=True)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_set_batch_fields(self, readonly_srv):
         """sap_set_batch_fields raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_set_batch_fields({"wnd[0]/usr/txt": "v"})
+            await readonly_srv.sap_set_batch_fields({"wnd[0]/usr/txt": "v"}, ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_set_textedit(self, readonly_srv):
         """sap_set_textedit raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_set_textedit("wnd[0]/usr/txt", "text")
+            await readonly_srv.sap_set_textedit("wnd[0]/usr/txt", "text", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_set_focus(self, readonly_srv):
         """sap_set_focus raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_set_focus("wnd[0]/usr/txt")
+            await readonly_srv.sap_set_focus("wnd[0]/usr/txt", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_scroll_table_control(self, readonly_srv):
         """sap_scroll_table_control raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_scroll_table_control("wnd[0]/usr/tbl", 10)
+            await readonly_srv.sap_scroll_table_control("wnd[0]/usr/tbl", 10, ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_select_all_table_control_columns(self, readonly_srv):
         """sap_select_all_table_control_columns raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_all_table_control_columns("wnd[0]/usr/tbl", True)
+            await readonly_srv.sap_select_all_table_control_columns("wnd[0]/usr/tbl", ctx, True)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_press_column_header(self, readonly_srv):
         """sap_press_column_header raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_press_column_header("wnd[0]/usr/grid", "COL")
+            await readonly_srv.sap_press_column_header("wnd[0]/usr/grid", "COL", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_select_all_rows(self, readonly_srv):
         """sap_select_all_rows raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_all_rows("wnd[0]/usr/grid")
+            await readonly_srv.sap_select_all_rows("wnd[0]/usr/grid", ctx)
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_select_multiple_rows(self, readonly_srv):
         """sap_select_multiple_rows raises in read-only mode."""
+        ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
-            await readonly_srv.sap_select_multiple_rows("wnd[0]/usr/grid", [0, 1])
+            await readonly_srv.sap_select_multiple_rows("wnd[0]/usr/grid", [0, 1], ctx)
+
+    # Note: sap_disconnect is intentionally NOT blocked in read-only mode.
+    # Disconnecting from a session should always be allowed.
 
 
 # ===========================================================================
@@ -495,9 +541,9 @@ class TestToolRegistration:
         tool_names = {t.name for t in tools}
 
         expected = {
-            # Connection
+            # Connection & lifecycle
             "sap_connect", "sap_connect_existing", "sap_list_connections",
-            "sap_get_session_info",
+            "sap_get_session_info", "sap_disconnect",
             # Navigation
             "sap_execute_transaction", "sap_send_key", "sap_get_screen_info",
             # Field
@@ -566,6 +612,7 @@ class TestToolRegistration:
         properties = connect_tool.inputSchema["properties"]
 
         assert "password" not in properties
+        assert "ctx" not in properties  # Context is injected, not exposed
         assert "system_description" in properties
         assert "client" in properties
         assert "user" in properties
@@ -582,7 +629,8 @@ class TestToolRegistration:
 
         read_only_tools = {
             "sap_connect", "sap_connect_existing", "sap_list_connections",
-            "sap_get_session_info", "sap_get_screen_info", "sap_read_field",
+            "sap_get_session_info", "sap_disconnect",
+            "sap_get_screen_info", "sap_read_field",
             "sap_get_combobox_entries", "sap_read_textedit", "sap_read_table",
             "sap_get_alv_toolbar", "sap_get_column_info", "sap_get_current_cell",
             "sap_get_table_control_row_info", "sap_get_cell_info",
