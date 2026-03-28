@@ -4,8 +4,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Import server module once at module level (avoids beartype circular import
+# issues that arise from repeated imports inside fixtures).
+import mcp_sap_gui.server as _server_mod
+from mcp_sap_gui.session_manager import SessionManager
+
 # ---------------------------------------------------------------------------
-# Helpers to import server module with mocked win32com
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _make_mock_ctx():
@@ -15,7 +20,7 @@ def _make_mock_ctx():
 
 @pytest.fixture
 def mock_win32com():
-    """Mock win32com so SAPGUIController can be instantiated on any OS."""
+    """Expose the conftest win32com mock for tests that reference it."""
     mock = MagicMock()
     with patch.dict("sys.modules", {"win32com": mock, "win32com.client": mock.client}):
         yield mock
@@ -23,31 +28,18 @@ def mock_win32com():
 
 @pytest.fixture
 def srv(mock_win32com):
-    """Import and configure the server module with a SessionManager."""
-    import importlib
-
-    import mcp_sap_gui.server as _srv
-    # Reload to pick up mocked win32com
-    importlib.reload(_srv)
-
-    from mcp_sap_gui.session_manager import SessionManager
-    _srv._session_mgr = SessionManager()
-    _srv.config = _srv.ServerConfig()
-    yield _srv
+    """Configure the server module with a fresh SessionManager."""
+    _server_mod._session_mgr = SessionManager()
+    _server_mod.config = _server_mod.ServerConfig()
+    yield _server_mod
 
 
 @pytest.fixture
 def readonly_srv(mock_win32com):
-    """Import and configure the server module in read-only mode."""
-    import importlib
-
-    import mcp_sap_gui.server as _srv
-    importlib.reload(_srv)
-
-    from mcp_sap_gui.session_manager import SessionManager
-    _srv._session_mgr = SessionManager()
-    _srv.config = _srv.ServerConfig(read_only=True)
-    yield _srv
+    """Configure the server module in read-only mode."""
+    _server_mod._session_mgr = SessionManager()
+    _server_mod.config = _server_mod.ServerConfig(read_only=True)
+    yield _server_mod
 
 
 # ===========================================================================
@@ -113,10 +105,7 @@ class TestTransactionBlocking:
 
     def test_allowlist_mode(self, mock_win32com):
         """When allowed_transactions is set, only those are allowed."""
-        import importlib
-
         import mcp_sap_gui.server as _srv
-        importlib.reload(_srv)
         _srv.config = _srv.ServerConfig(allowed_transactions=["MM03", "VA03"])
 
         assert _srv._is_transaction_blocked("MM03") is False
@@ -126,10 +115,7 @@ class TestTransactionBlocking:
 
     def test_allowlist_with_prefix(self, mock_win32com):
         """Allowlist works with /N and /O prefixes."""
-        import importlib
-
         import mcp_sap_gui.server as _srv
-        importlib.reload(_srv)
         _srv.config = _srv.ServerConfig(allowed_transactions=["MM03"])
 
         assert _srv._is_transaction_blocked("/NMM03") is False
@@ -138,10 +124,7 @@ class TestTransactionBlocking:
 
     def test_allowlist_case_insensitive(self, mock_win32com):
         """Allowlist is case-insensitive via __post_init__ normalization."""
-        import importlib
-
         import mcp_sap_gui.server as _srv
-        importlib.reload(_srv)
         _srv.config = _srv.ServerConfig(allowed_transactions=["mm03", "Va03"])
 
         assert _srv._is_transaction_blocked("MM03") is False
@@ -150,10 +133,7 @@ class TestTransactionBlocking:
 
     def test_blocklist_case_insensitive_config(self, mock_win32com):
         """Blocklist entries are uppercased by __post_init__."""
-        import importlib
-
         import mcp_sap_gui.server as _srv
-        importlib.reload(_srv)
         _srv.config = _srv.ServerConfig(blocked_transactions=["su01", "Se16n"])
 
         assert _srv._is_transaction_blocked("SU01") is True
@@ -593,7 +573,7 @@ class TestToolRegistration:
 
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
         send_key = next(t for t in tools if t.name == "sap_send_key")
-        key_schema = send_key.inputSchema["properties"]["key"]
+        key_schema = send_key.parameters["properties"]["key"]
 
         assert "enum" in key_schema
         assert "Enter" in key_schema["enum"]
@@ -609,7 +589,7 @@ class TestToolRegistration:
 
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
         connect_tool = next(t for t in tools if t.name == "sap_connect")
-        properties = connect_tool.inputSchema["properties"]
+        properties = connect_tool.parameters["properties"]
 
         assert "password" not in properties
         assert "ctx" not in properties  # Context is injected, not exposed

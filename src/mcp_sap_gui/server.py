@@ -21,13 +21,12 @@ import asyncio
 import base64
 import logging
 import time
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional
 
-from mcp.server.fastmcp import Context, FastMCP, Image
-from mcp.types import ToolAnnotations
+from fastmcp import Context, FastMCP
+from fastmcp.server.lifespan import lifespan
+from fastmcp.utilities.types import Image
 
 from .sap_controller import VKey
 from .session_manager import SessionManager
@@ -68,22 +67,22 @@ class ServerConfig:
 # Tool annotation presets
 # ---------------------------------------------------------------------------
 
-_READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False)
-_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False)
-_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+_READ_ONLY = {"readOnlyHint": True, "destructiveHint": False}
+_WRITE = {"readOnlyHint": False, "destructiveHint": False}
+_DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}
 
 
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 
-@asynccontextmanager
-async def _lifespan(server: FastMCP) -> AsyncIterator[None]:
+@lifespan
+async def _lifespan(server: FastMCP):
     """Create the session manager on startup, clean up on shutdown."""
     global _session_mgr
     _session_mgr = SessionManager()
     try:
-        yield
+        yield {"session_mgr": _session_mgr}
     finally:
         if _session_mgr is not None:
             try:
@@ -498,7 +497,8 @@ async def sap_connect_existing(
 async def sap_list_connections(ctx: Context) -> dict:
     """List all open SAP connections and sessions"""
     c = _ctrl(ctx)
-    return await _com(c.list_connections)
+    connections = await _com(c.list_connections)
+    return {"connections": connections}
 
 
 @mcp.tool(annotations=_READ_ONLY)

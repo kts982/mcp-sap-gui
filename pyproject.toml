@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "mcp>=1.20,<2.0",
+    "fastmcp>=3.0,<4",
     "pywin32>=306; platform_system == 'Windows'",
 ]
 
