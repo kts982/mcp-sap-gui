@@ -29,8 +29,8 @@ from typing import List, Literal, Optional
 from mcp.server.fastmcp import Context, FastMCP, Image
 from mcp.types import ToolAnnotations
 
-from .session_manager import SessionManager
 from .sap_controller import VKey
+from .session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -1035,7 +1035,9 @@ async def sap_double_click_tree_node(tree_id: str, node_key: str, ctx: Context) 
 
 
 @mcp.tool(annotations=_WRITE)
-async def sap_double_click_tree_item(tree_id: str, node_key: str, item_name: str, ctx: Context) -> dict:
+async def sap_double_click_tree_item(
+    tree_id: str, node_key: str, item_name: str, ctx: Context,
+) -> dict:
     """Double-click a specific item (column cell) in a tree node row.
 
     item_name is the column name (e.g., 'Column1', 'Column2').
