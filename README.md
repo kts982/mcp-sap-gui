@@ -85,14 +85,15 @@ Read the first 20 rows of the visible table
 
 ## Supported Scope
 
-Supported in `0.1.0`:
+Supported:
 - SAP GUI for Windows via the SAP GUI Scripting COM API
 - Local MCP `stdio` transport
+- Per-client session isolation (multiple MCP clients can hold independent SAP sessions)
 - Interactive use from MCP-compatible clients
 - Read and write SAP GUI automation within the permissions of the logged-in SAP user
 
-Not part of `0.1.0`:
-- Streamable HTTP / remote server deployment
+Not yet available:
+- Streamable HTTP / remote server deployment (planned for v0.2)
 - SAP GUI for Java or SAP GUI for HTML
 - Browser-based Fiori automation
 - Unattended multi-user production orchestration
@@ -310,11 +311,11 @@ These prevent common agent mistakes like guessing element IDs, ignoring popups, 
 
 ## Available Tools
 
-The server currently exposes **52 MCP tools**.
+The server currently exposes **53 MCP tools**.
 
 | Category | Count | What it covers |
 |---|---:|---|
-| Connection | 4 | Connect to SAP, attach to open sessions, inspect sessions |
+| Connection | 5 | Connect to SAP, attach to open sessions, inspect sessions, disconnect |
 | Navigation | 3 | Execute transactions, send keys, inspect current screen |
 | Fields & UI | 13 | Read/write fields, buttons, tabs, comboboxes, textedit, focus |
 | Tables & Grids | 17 | ALV grids, TableControls, row selection, column info, cell ops |
@@ -434,6 +435,7 @@ mcp-sap-gui/
 │   └── mcp_sap_gui/
 │       ├── __init__.py        # Package exports
 │       ├── server.py          # MCP server implementation (tool definitions)
+│       ├── session_manager.py # Per-client SAP session isolation
 │       ├── sap_controller.py  # Facade class (composes all mixins)
 │       ├── models.py          # VKey enum, SessionInfo, exceptions
 │       ├── controller.py      # Base controller (connection, navigation, screen info)

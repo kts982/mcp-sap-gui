@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **52 MCP tools**.
+`mcp-sap-gui` currently exposes **53 MCP tools**.
 
 Two practical rules:
 
@@ -17,6 +17,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_connect_existing` | Attach to an already open SAP session |
 | `sap_list_connections` | List all currently open SAP connections and sessions |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen |
+| `sap_disconnect` | Disconnect from the current SAP session (detaches attached sessions, closes owned sessions) |
 
 ## Navigation
 
