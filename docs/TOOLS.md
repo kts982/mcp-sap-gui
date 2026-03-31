@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **53 MCP tools**.
+`mcp-sap-gui` currently exposes **54 MCP tools**.
 
 Two practical rules:
 
@@ -89,6 +89,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | Tool | Description |
 |------|-------------|
 | `sap_get_popup_window` | Read popup title, text, and buttons |
+| `sap_handle_popup` | Read and act on popups in one call (confirm, cancel, or press a specific button) |
 | `sap_get_toolbar_buttons` | List standard SAP toolbar buttons |
 | `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers |
 

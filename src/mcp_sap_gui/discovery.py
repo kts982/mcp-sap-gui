@@ -129,6 +129,116 @@ class DiscoveryMixin:
             pass
 
     # =========================================================================
+    # Popup Workflow
+    # =========================================================================
+
+    _CONFIRM_PATTERNS = ("ok", "yes", "continue", "confirm", "execute", "save")
+    _CANCEL_PATTERNS = ("cancel", "no", "abort", "close", "back")
+
+    def _match_button(
+        self, buttons: List[Dict[str, Any]], patterns: tuple,
+    ) -> Dict[str, Any] | None:
+        """Find first button whose text or tooltip matches any pattern."""
+        for btn in buttons:
+            text_lower = btn.get("text", "").lower()
+            tooltip_lower = btn.get("tooltip", "").lower()
+            for pattern in patterns:
+                if pattern in text_lower or pattern in tooltip_lower:
+                    return btn
+        return None
+
+    def handle_popup(
+        self, action: str = "read", button_text: str = "",
+    ) -> Dict[str, Any]:
+        """Read and optionally act on the current popup dialog.
+
+        Args:
+            action: ``read``, ``confirm``, ``cancel``, or ``press``.
+            button_text: required when *action* is ``press``.
+
+        Returns:
+            Dict with popup content and action taken.
+        """
+        self._require_session()
+
+        popup = self.get_popup_window()
+        if not popup.get("popup_exists"):
+            return {"popup_exists": False, "action": "none"}
+
+        popup_id = popup["window_id"]
+        all_buttons = popup.get("buttons", [])
+
+        if action == "read":
+            popup["action"] = "read"
+            return popup
+
+        if action == "press" and not button_text:
+            raise ValueError(
+                "button_text is required when action='press'"
+            )
+
+        # Determine which button to press
+        btn = None
+        fallback_vkey = None
+
+        if action == "confirm":
+            btn = self._match_button(all_buttons, self._CONFIRM_PATTERNS)
+            fallback_vkey = 0  # Enter
+        elif action == "cancel":
+            btn = self._match_button(all_buttons, self._CANCEL_PATTERNS)
+            fallback_vkey = 12  # F12
+        elif action == "press":
+            needle = button_text.lower()
+            for b in all_buttons:
+                text_l = b.get("text", "").lower()
+                tooltip_l = b.get("tooltip", "").lower()
+                if needle in text_l or needle in tooltip_l:
+                    btn = b
+                    break
+            if btn is None:
+                popup["action"] = "error"
+                popup["error"] = (
+                    f"No button matching '{button_text}'. "
+                    f"Available: {[b.get('text') or b.get('tooltip') for b in all_buttons]}"
+                )
+                return popup
+        else:
+            raise ValueError(
+                f"Invalid action '{action}'. Use read, confirm, cancel, or press."
+            )
+
+        # Press the button or send fallback VKey
+        if btn is not None:
+            try:
+                self._session.findById(btn["id"]).press()
+            except Exception as e:
+                popup["action"] = "error"
+                popup["error"] = f"Failed to press button: {e}"
+                return popup
+            popup["action"] = action + "ed" if action != "press" else "pressed"
+            popup["button_pressed"] = btn.get("text") or btn.get("tooltip")
+        else:
+            # Fallback: send VKey to the popup window
+            try:
+                self._session.findById(popup_id).sendVKey(fallback_vkey)
+            except Exception as e:
+                popup["action"] = "error"
+                popup["error"] = f"Failed to send key: {e}"
+                return popup
+            popup["action"] = action + "ed"
+            popup["button_pressed"] = (
+                "Enter (fallback)" if fallback_vkey == 0 else "F12 (fallback)"
+            )
+
+        # Return updated screen state after the action
+        try:
+            popup["screen"] = self.get_screen_info()
+        except Exception:
+            pass
+
+        return popup
+
+    # =========================================================================
     # Toolbar Discovery
     # =========================================================================
 

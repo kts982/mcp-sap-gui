@@ -445,6 +445,13 @@ class TestReadOnlyMode:
         with pytest.raises(ValueError, match="read-only"):
             await readonly_srv.sap_select_multiple_rows("wnd[0]/usr/grid", [0, 1], ctx)
 
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_handle_popup(self, readonly_srv):
+        """sap_handle_popup raises in read-only mode."""
+        ctx = _make_mock_ctx()
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_handle_popup(ctx)
+
     # Note: sap_disconnect is intentionally NOT blocked in read-only mode.
     # Disconnecting from a session should always be allowed.
 
@@ -547,7 +554,7 @@ class TestToolRegistration:
             # Table (multi-row)
             "sap_select_multiple_rows",
             # Popup & dialog
-            "sap_get_popup_window",
+            "sap_get_popup_window", "sap_handle_popup",
             # Toolbar discovery
             "sap_get_toolbar_buttons",
             # Shell content

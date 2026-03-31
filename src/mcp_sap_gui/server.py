@@ -951,6 +951,27 @@ async def sap_get_popup_window(ctx: Context) -> dict:
     return await _com(c.get_popup_window)
 
 
+@mcp.tool(annotations=_WRITE)
+async def sap_handle_popup(
+    ctx: Context,
+    action: Literal["read", "confirm", "cancel", "press"] = "read",
+    button_text: str = "",
+) -> dict:
+    """Read and optionally act on the current popup/modal dialog.
+
+    Use when active_window shows wnd[1] or higher. Combines popup
+    inspection and response in a single call.
+
+    Actions:
+    - read: return popup content without acting (default)
+    - confirm: press OK/Yes/Continue/Enter on the popup
+    - cancel: press Cancel/No/F12 on the popup
+    - press: press a specific button by its text or tooltip"""
+    _check_write()
+    c = _ctrl(ctx)
+    return await _com(lambda: c.handle_popup(action, button_text))
+
+
 # ---- Toolbar discovery ----
 
 @mcp.tool(annotations=_READ_ONLY)

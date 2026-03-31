@@ -3461,3 +3461,163 @@ class TestReadTableFiltering:
 
         assert result["rows_returned"] == 3
 
+
+# ===========================================================================
+# Handle Popup Tests
+# ===========================================================================
+
+class TestHandlePopup:
+    """Tests for handle_popup workflow tool."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def _setup_popup(self, controller, buttons=None, texts=None):
+        """Set up mock session so get_popup_window finds a popup on wnd[1]."""
+        mock_wnd1 = MagicMock()
+        mock_wnd1.Text = "Confirm Action"
+
+        mock_usr = MagicMock()
+        children = []
+        for t in (texts or []):
+            lbl = MagicMock()
+            lbl.Type = "GuiLabel"
+            lbl.Text = t
+            children.append(lbl)
+        for b in (buttons or []):
+            btn = MagicMock()
+            btn.Type = "GuiButton"
+            btn.Id = b["id"]
+            btn.Text = b.get("text", "")
+            btn.Tooltip = b.get("tooltip", "")
+            children.append(btn)
+
+        col = MagicMock()
+        col.Count = len(children)
+        col.side_effect = lambda i: children[i]
+        mock_usr.Children = col
+
+        # Empty toolbar
+        mock_tbar = MagicMock()
+        mock_tbar.Children.Count = 0
+
+        def find_by_id(elem_id):
+            if elem_id == "wnd[1]":
+                return mock_wnd1
+            if elem_id == "wnd[1]/usr":
+                return mock_usr
+            if elem_id.startswith("wnd[1]/tbar"):
+                return mock_tbar
+            if elem_id == "wnd[1]/sbar":
+                raise Exception("no sbar")
+            # For button presses — return a pressable mock
+            for b in (buttons or []):
+                if elem_id == b["id"]:
+                    return MagicMock()
+            # wnd[2] etc don't exist
+            raise Exception(f"not found: {elem_id}")
+
+        controller._session.findById = MagicMock(side_effect=find_by_id)
+        return mock_wnd1
+
+    def test_no_popup(self):
+        """Returns popup_exists=False when no popup."""
+        controller = self._make_controller_with_session()
+        controller._session.findById.side_effect = Exception("not found")
+
+        result = controller.handle_popup()
+
+        assert result["popup_exists"] is False
+        assert result["action"] == "none"
+
+    def test_read_mode(self):
+        """Read mode returns popup content without pressing anything."""
+        controller = self._make_controller_with_session()
+        self._setup_popup(controller, texts=["Save changes?"])
+
+        result = controller.handle_popup("read")
+
+        assert result["popup_exists"] is True
+        assert result["action"] == "read"
+        assert "Save changes?" in result.get("texts", [])
+
+    def test_confirm_finds_ok_button(self):
+        """Confirm finds and presses a button with 'OK' text."""
+        controller = self._make_controller_with_session()
+        self._setup_popup(
+            controller,
+            buttons=[{"id": "wnd[1]/usr/btn0", "text": "OK", "tooltip": ""}],
+            texts=["Continue?"],
+        )
+        controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
+
+        result = controller.handle_popup("confirm")
+
+        assert result["action"] == "confirmed"
+        assert result["button_pressed"] == "OK"
+        controller._session.findById.assert_any_call("wnd[1]/usr/btn0")
+
+    def test_confirm_falls_back_to_enter(self):
+        """Confirm falls back to Enter VKey when no confirm button found."""
+        controller = self._make_controller_with_session()
+        self._setup_popup(controller, buttons=[], texts=["Info message"])
+        controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
+
+        result = controller.handle_popup("confirm")
+
+        assert result["action"] == "confirmed"
+        assert "fallback" in result["button_pressed"]
+        controller._session.findById("wnd[1]").sendVKey.assert_called_with(0)
+
+    def test_cancel_falls_back_to_f12(self):
+        """Cancel falls back to F12 when no cancel button found."""
+        controller = self._make_controller_with_session()
+        self._setup_popup(controller, buttons=[], texts=["Info"])
+        controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
+
+        result = controller.handle_popup("cancel")
+
+        assert result["action"] == "canceled"
+        assert "F12" in result["button_pressed"]
+
+    def test_press_by_text(self):
+        """Press mode finds button by text match."""
+        controller = self._make_controller_with_session()
+        self._setup_popup(
+            controller,
+            buttons=[
+                {"id": "wnd[1]/usr/btn0", "text": "Save", "tooltip": ""},
+                {"id": "wnd[1]/usr/btn1", "text": "Discard", "tooltip": ""},
+            ],
+        )
+        controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
+
+        result = controller.handle_popup("press", "discard")
+
+        assert result["action"] == "pressed"
+        assert result["button_pressed"] == "Discard"
+
+    def test_press_not_found(self):
+        """Press returns error when button text doesn't match."""
+        controller = self._make_controller_with_session()
+        self._setup_popup(
+            controller,
+            buttons=[{"id": "wnd[1]/usr/btn0", "text": "OK", "tooltip": ""}],
+        )
+
+        result = controller.handle_popup("press", "nonexistent")
+
+        assert result["action"] == "error"
+        assert "No button matching" in result["error"]
+
+    def test_press_requires_button_text(self):
+        """Press raises ValueError when button_text is empty."""
+        controller = self._make_controller_with_session()
+        self._setup_popup(controller)
+
+        with pytest.raises(ValueError, match="button_text is required"):
+            controller.handle_popup("press", "")
+
