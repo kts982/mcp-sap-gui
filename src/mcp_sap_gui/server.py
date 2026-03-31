@@ -1199,6 +1199,13 @@ def main():
                         help="Run in read-only mode (no write operations)")
     parser.add_argument("--allowed-transactions", nargs="*",
                         help="Whitelist of allowed transaction codes")
+    parser.add_argument("--transport", choices=["stdio", "http"],
+                        default="stdio",
+                        help="Transport mode (default: stdio)")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="HTTP bind address (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8000,
+                        help="HTTP port (default: 8000)")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
     args = parser.parse_args()
@@ -1214,7 +1221,11 @@ def main():
     )
     # SessionManager is created in _lifespan, controllers are per-session.
 
-    mcp.run()
+    if args.transport == "http":
+        logger.info("Starting HTTP transport on %s:%d", args.host, args.port)
+        mcp.run(transport="http", host=args.host, port=args.port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

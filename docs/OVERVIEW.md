@@ -23,11 +23,10 @@ That means:
 
 - Windows only
 - SAP GUI for Windows only
-- local `stdio` transport only
+- MCP `stdio` (default) and `streamable HTTP` transports
 - interactive MCP client usage only
-- no remote HTTP deployment yet
 
-The server currently exposes **52 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
+The server currently exposes **53 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
 
 ## Why This Exists
 
@@ -56,7 +55,6 @@ The current strengths are:
 `0.1.0` is not yet:
 
 - a remote multi-user SAP automation service
-- a Streamable HTTP MCP deployment
 - a Fiori or browser automation product
 - a central admin console for SAP governance
 - a workflow engine for unattended enterprise execution

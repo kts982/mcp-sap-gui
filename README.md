@@ -87,13 +87,12 @@ Read the first 20 rows of the visible table
 
 Supported:
 - SAP GUI for Windows via the SAP GUI Scripting COM API
-- Local MCP `stdio` transport
+- MCP `stdio` (default) and `streamable HTTP` transports
 - Per-client session isolation (multiple MCP clients can hold independent SAP sessions)
 - Interactive use from MCP-compatible clients
 - Read and write SAP GUI automation within the permissions of the logged-in SAP user
 
 Not yet available:
-- Streamable HTTP / remote server deployment (planned for v0.2)
 - SAP GUI for Java or SAP GUI for HTML
 - Browser-based Fiori automation
 - Unattended multi-user production orchestration
@@ -139,7 +138,7 @@ Connection recommendation: prefer `sap_connect_existing` for already authenticat
 ### Running the MCP Server Directly
 
 ```bash
-# Standard mode
+# Standard mode (stdio, default)
 uv run python -m mcp_sap_gui.server
 
 # Read-only mode (safer for exploration)
@@ -147,6 +146,12 @@ uv run python -m mcp_sap_gui.server --read-only
 
 # With transaction whitelist
 uv run python -m mcp_sap_gui.server --allowed-transactions MM03 VA03 ME23N
+
+# HTTP transport (for team/remote use, binds to localhost)
+uv run python -m mcp_sap_gui.server --transport http
+
+# HTTP on custom host/port
+uv run python -m mcp_sap_gui.server --transport http --host 0.0.0.0 --port 9000
 
 # Debug mode
 uv run python -m mcp_sap_gui.server --debug
