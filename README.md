@@ -316,7 +316,7 @@ These prevent common agent mistakes like guessing element IDs, ignoring popups, 
 
 ## Available Tools
 
-The server currently exposes **53 MCP tools**.
+The server currently exposes **54 MCP tools**.
 
 | Category | Count | What it covers |
 |---|---:|---|
@@ -324,7 +324,7 @@ The server currently exposes **53 MCP tools**.
 | Navigation | 3 | Execute transactions, send keys, inspect current screen |
 | Fields & UI | 13 | Read/write fields, buttons, tabs, comboboxes, textedit, focus |
 | Tables & Grids | 17 | ALV grids, TableControls, row selection, column info, cell ops |
-| Popup / Toolbar / Shell | 3 | Popup inspection, toolbar discovery, shell content |
+| Popup / Toolbar / Shell | 4 | Popup inspection and handling, toolbar discovery, shell content |
 | Trees | 10 | Read/search/expand/select/click SAP tree controls |
 | Discovery | 2 | Screen element discovery and screenshots |
 
