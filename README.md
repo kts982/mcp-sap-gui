@@ -156,6 +156,9 @@ uv run python -m mcp_sap_gui.server --transport http --host 0.0.0.0 --port 9000
 # Policy profile (restrict visible tools)
 uv run python -m mcp_sap_gui.server --profile exploration
 
+# Audit log to file (JSON lines)
+uv run python -m mcp_sap_gui.server --audit-log sap_audit.jsonl
+
 # Debug mode
 uv run python -m mcp_sap_gui.server --debug
 ```
@@ -278,7 +281,7 @@ The server uses stdio transport. Point any MCP client at:
 
 ```
 Command:   uv run python -m mcp_sap_gui.server
-Arguments: [--read-only] [--profile exploration|operator|full] [--debug] [--allowed-transactions T1 T2 ...]
+Arguments: [--read-only] [--profile exploration|operator|full] [--audit-log FILE] [--debug] [--allowed-transactions T1 T2 ...]
 Transport: stdio
 ```
 
@@ -361,7 +364,9 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 6. **Tool Tags** - Every tool is tagged `read` or `write` for policy profile filtering. All tools carry MCP `readOnlyHint`/`destructiveHint` annotations so clients can display appropriate UI hints
 
-7. **No MCP Password Parameter** - `sap_connect` does not accept a password parameter, avoiding secret exposure in MCP tool-call history and client logs
+7. **Audit Logging** - `--audit-log FILE` writes every tool call (name, arguments, timing, outcome) as JSON lines. Secrets in arguments are masked automatically
+
+8. **Secure Credential Resolution** - `sap_connect` resolves credentials from a `.env` file (`SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT`, `SAP_LANGUAGE`). Passwords are never accepted as MCP tool parameters and never appear in client logs, tool-call history, or audit logs. Copy `.env.example` to `.env` to get started
 
 ### Recommendations for Production Use
 

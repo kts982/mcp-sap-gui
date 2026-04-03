@@ -25,7 +25,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_connect` | Connect to an SAP system by SAP Logon entry name, without exposing a password through MCP |
+| `sap_connect` | Connect to an SAP system by SAP Logon entry name. Credentials resolved from `.env` file — passwords never appear in MCP |
 | `sap_connect_existing` | Attach to an already open SAP session |
 | `sap_list_connections` | List all currently open SAP connections and sessions |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen |

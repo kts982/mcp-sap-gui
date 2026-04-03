@@ -20,14 +20,17 @@ Security Note:
 import asyncio
 import base64
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional
 
+from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 from fastmcp.server.lifespan import lifespan
 from fastmcp.utilities.types import Image
 
+from .audit import AuditMiddleware
 from .sap_controller import VKey
 from .session_manager import SessionManager
 
@@ -310,6 +313,7 @@ Some transactions use split-screen layouts:
 # ---------------------------------------------------------------------------
 
 mcp = FastMCP("mcp-sap-gui", instructions=_INSTRUCTIONS, lifespan=_lifespan)
+mcp.add_middleware(AuditMiddleware())
 _session_mgr: Optional[SessionManager] = None
 config = ServerConfig()
 
@@ -472,13 +476,19 @@ async def sap_connect(
 ) -> dict:
     """Connect to an SAP system by its name in SAP Logon Pad.
 
-    For security, this tool does not accept a password parameter.
+    Credentials are resolved from a .env file (SAP_USER, SAP_PASSWORD,
+    SAP_CLIENT, SAP_LANGUAGE) so passwords never appear in MCP tool calls.
+    Parameters provided here override the .env values (except password).
     If SAP is already open and logged in, use sap_connect_existing instead."""
     c = _ctrl(ctx)
     kwargs: dict[str, str] = {"system_description": system_description}
-    for key, val in [("client", client), ("user", user), ("language", language)]:
-        if val is not None:
-            kwargs[key] = val
+    # Resolve credentials: explicit param > env var > omit
+    kwargs["user"] = user or os.environ.get("SAP_USER") or None
+    kwargs["client"] = client or os.environ.get("SAP_CLIENT") or None
+    kwargs["language"] = language or os.environ.get("SAP_LANGUAGE") or None
+    kwargs["password"] = os.environ.get("SAP_PASSWORD") or None
+    # Strip None values so controller uses its own defaults
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
     return _to_dict(await _com(lambda: c.connect(**kwargs)))
 
 
@@ -1260,6 +1270,9 @@ def main():
     import argparse
     global config
 
+    # Load .env file (SAP_USER, SAP_PASSWORD, SAP_CLIENT, SAP_LANGUAGE)
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="MCP Server for SAP GUI")
     parser.add_argument("--read-only", action="store_true",
                         help="Run in read-only mode (no write operations)")
@@ -1275,6 +1288,8 @@ def main():
     parser.add_argument("--profile", choices=["exploration", "operator", "full"],
                         default="full",
                         help="Default policy profile (default: full)")
+    parser.add_argument("--audit-log", metavar="FILE",
+                        help="Write audit log to FILE (JSON lines)")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
     args = parser.parse_args()
@@ -1283,6 +1298,15 @@ def main():
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
+
+    # Set up audit log file if requested
+    if args.audit_log:
+        audit_logger = logging.getLogger("mcp_sap_gui.audit")
+        handler = logging.FileHandler(args.audit_log, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        audit_logger.addHandler(handler)
+        audit_logger.setLevel(logging.INFO)
+        logger.info("Audit log: %s", args.audit_log)
 
     config = ServerConfig(
         read_only=args.read_only,

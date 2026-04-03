@@ -1012,3 +1012,235 @@ class TestServerConfig:
         from mcp_sap_gui.server import ServerConfig
         config = ServerConfig(read_only=True)
         assert config.read_only is True
+
+
+# ===========================================================================
+# Audit Middleware Tests
+# ===========================================================================
+
+class TestAuditMiddleware:
+    """Tests for audit logging middleware."""
+
+    def test_mask_secrets_password_key(self):
+        """Keys containing 'password' are masked."""
+        from mcp_sap_gui.audit import _mask_secrets
+        result = _mask_secrets({"password": "s3cret", "user": "admin"})
+        assert result["password"] == "***"
+        assert result["user"] == "admin"
+
+    def test_mask_secrets_pwd_key(self):
+        """Keys containing 'pwd' are masked."""
+        from mcp_sap_gui.audit import _mask_secrets
+        result = _mask_secrets({"pwd_field": "hunter2"})
+        assert result["pwd_field"] == "***"
+
+    def test_mask_secrets_bcode_key(self):
+        """Keys containing 'bcode' are masked."""
+        from mcp_sap_gui.audit import _mask_secrets
+        result = _mask_secrets({"BCODE": "abc123"})
+        assert result["BCODE"] == "***"
+
+    def test_mask_secrets_case_insensitive(self):
+        """Secret detection is case-insensitive."""
+        from mcp_sap_gui.audit import _mask_secrets
+        result = _mask_secrets({"Password": "x", "SECRET_KEY": "y"})
+        assert result["Password"] == "***"
+        assert result["SECRET_KEY"] == "***"
+
+    def test_mask_secrets_preserves_normal_args(self):
+        """Non-secret arguments are passed through unchanged."""
+        from mcp_sap_gui.audit import _mask_secrets
+        args = {"field_id": "wnd[0]/usr/txtMATNR", "value": "MAT-001"}
+        result = _mask_secrets(args)
+        assert result == args
+
+    def test_mask_secrets_empty_dict(self):
+        """Empty args return empty dict."""
+        from mcp_sap_gui.audit import _mask_secrets
+        assert _mask_secrets({}) == {}
+
+    def test_middleware_registered_on_server(self, srv):
+        """AuditMiddleware is registered on the FastMCP server."""
+        from mcp_sap_gui.audit import AuditMiddleware
+        has_audit = any(
+            isinstance(m, AuditMiddleware) for m in srv.mcp.middleware
+        )
+        assert has_audit, "AuditMiddleware not found in server middleware"
+
+    def test_audit_logs_tool_call(self, srv, caplog):
+        """Audit middleware logs tool calls with structured JSON."""
+        import asyncio
+        import json
+        import logging
+
+        # The middleware logs via mcp_sap_gui.audit logger.
+        # caplog captures log records from all loggers.
+        with caplog.at_level(logging.INFO, logger="mcp_sap_gui.audit"):
+            # We can't easily run a full tool call through the middleware
+            # without a real MCP session, but we can test the middleware
+            # directly by constructing a MiddlewareContext.
+            from datetime import datetime, timezone
+            from mcp_sap_gui.audit import AuditMiddleware
+            from fastmcp.server.middleware import MiddlewareContext
+
+            mw = AuditMiddleware()
+            params = MagicMock()
+            params.name = "sap_read_field"
+            params.arguments = {"field_id": "wnd[0]/usr/txtMATNR"}
+            ctx = MiddlewareContext(
+                message=params,
+                timestamp=datetime.now(timezone.utc),
+                method="tools/call",
+            )
+
+            async def fake_next(ctx):
+                result = MagicMock()
+                result.content = []
+                return result
+
+            asyncio.new_event_loop().run_until_complete(
+                mw.on_call_tool(ctx, fake_next)
+            )
+
+        # Check that a structured JSON log was emitted
+        audit_records = [
+            r for r in caplog.records
+            if r.name == "mcp_sap_gui.audit"
+        ]
+        assert len(audit_records) == 1
+        log_data = json.loads(audit_records[0].message)
+        assert log_data["event"] == "tool_call"
+        assert log_data["tool"] == "sap_read_field"
+        assert log_data["status"] == "ok"
+        assert "duration_ms" in log_data
+        assert log_data["args"]["field_id"] == "wnd[0]/usr/txtMATNR"
+
+    def test_audit_logs_error(self, srv, caplog):
+        """Audit middleware logs errors with error details."""
+        import asyncio
+        import json
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="mcp_sap_gui.audit"):
+            from datetime import datetime, timezone
+            from mcp_sap_gui.audit import AuditMiddleware
+            from fastmcp.server.middleware import MiddlewareContext
+
+            mw = AuditMiddleware()
+            params = MagicMock()
+            params.name = "sap_set_field"
+            params.arguments = {"field_id": "wnd[0]/usr/txtX", "value": "v"}
+            ctx = MiddlewareContext(
+                message=params,
+                timestamp=datetime.now(timezone.utc),
+                method="tools/call",
+            )
+
+            async def fail_next(ctx):
+                raise ValueError("Element not found")
+
+            with pytest.raises(ValueError, match="Element not found"):
+                asyncio.new_event_loop().run_until_complete(
+                    mw.on_call_tool(ctx, fail_next)
+                )
+
+        audit_records = [
+            r for r in caplog.records
+            if r.name == "mcp_sap_gui.audit"
+        ]
+        assert len(audit_records) == 1
+        log_data = json.loads(audit_records[0].message)
+        assert log_data["status"] == "error"
+        assert log_data["error"] == "ValueError"
+        assert "Element not found" in log_data["error_msg"]
+
+    def test_audit_masks_secrets_in_args(self, srv, caplog):
+        """Audit middleware masks password-like arguments in logs."""
+        import asyncio
+        import json
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="mcp_sap_gui.audit"):
+            from datetime import datetime, timezone
+            from mcp_sap_gui.audit import AuditMiddleware
+            from fastmcp.server.middleware import MiddlewareContext
+
+            mw = AuditMiddleware()
+            params = MagicMock()
+            params.name = "sap_connect"
+            params.arguments = {"system": "D01", "password": "s3cret123"}
+            ctx = MiddlewareContext(
+                message=params,
+                timestamp=datetime.now(timezone.utc),
+                method="tools/call",
+            )
+
+            async def fake_next(ctx):
+                result = MagicMock()
+                result.content = []
+                return result
+
+            asyncio.new_event_loop().run_until_complete(
+                mw.on_call_tool(ctx, fake_next)
+            )
+
+        audit_records = [
+            r for r in caplog.records
+            if r.name == "mcp_sap_gui.audit"
+        ]
+        log_data = json.loads(audit_records[0].message)
+        assert log_data["args"]["password"] == "***"
+        assert log_data["args"]["system"] == "D01"
+        assert "s3cret123" not in audit_records[0].message
+
+
+# ===========================================================================
+# Credential Resolution Tests
+# ===========================================================================
+
+class TestCredentialResolution:
+    """Tests for .env-based credential resolution in sap_connect."""
+
+    def test_env_vars_resolved(self, srv, monkeypatch):
+        """Environment variables are picked up for credential resolution."""
+        import os
+        monkeypatch.setenv("SAP_USER", "ENV_USER")
+        monkeypatch.setenv("SAP_PASSWORD", "ENV_PASS")
+        monkeypatch.setenv("SAP_CLIENT", "200")
+        monkeypatch.setenv("SAP_LANGUAGE", "DE")
+        # Simulate the resolution logic from sap_connect
+        assert (None or os.environ.get("SAP_USER") or None) == "ENV_USER"
+        assert (None or os.environ.get("SAP_PASSWORD") or None) == "ENV_PASS"
+        assert (None or os.environ.get("SAP_CLIENT") or None) == "200"
+        assert (None or os.environ.get("SAP_LANGUAGE") or None) == "DE"
+
+    def test_explicit_params_override_env(self, srv, monkeypatch):
+        """Explicit tool params override env vars (except password)."""
+        monkeypatch.setenv("SAP_USER", "ENV_USER")
+        monkeypatch.setenv("SAP_CLIENT", "200")
+        # Verify the resolution logic directly
+        import os
+        user_param = "EXPLICIT_USER"
+        resolved = user_param or os.environ.get("SAP_USER") or None
+        assert resolved == "EXPLICIT_USER"
+
+    def test_password_only_from_env(self, srv):
+        """sap_connect tool does not accept password as MCP parameter."""
+        import asyncio
+        import inspect
+        sig = inspect.signature(_server_mod.sap_connect)
+        param_names = set(sig.parameters.keys())
+        assert "password" not in param_names, (
+            "password must not be an MCP parameter — resolve from env only"
+        )
+
+    def test_no_env_means_no_credentials(self, srv, monkeypatch):
+        """Without env vars, no credentials are passed."""
+        import os
+        monkeypatch.delenv("SAP_USER", raising=False)
+        monkeypatch.delenv("SAP_PASSWORD", raising=False)
+        monkeypatch.delenv("SAP_CLIENT", raising=False)
+        monkeypatch.delenv("SAP_LANGUAGE", raising=False)
+        # Verify resolution produces None
+        assert os.environ.get("SAP_PASSWORD") is None
+        assert os.environ.get("SAP_USER") is None

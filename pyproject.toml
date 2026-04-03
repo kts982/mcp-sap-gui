@@ -29,6 +29,7 @@ classifiers = [
 dependencies = [
     "fastmcp>=3.0,<4",
     "pywin32>=306; platform_system == 'Windows'",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
