@@ -59,6 +59,9 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/mcp_sap_gui/prompts.py" = ["E501"]  # prompt text is long-form markdown
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true

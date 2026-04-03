@@ -27,8 +27,10 @@ def _mask_secrets(args: dict[str, Any]) -> dict[str, Any]:
         key_lower = key.lower()
         if any(p in key_lower for p in _SECRET_PATTERNS):
             masked[key] = "***"
-        elif isinstance(value, str) and any(p in value.lower() for p in _SECRET_PATTERNS):
-            # Mask values that reference password fields (e.g., field_id="wnd[0]/usr/pwdRSYST-BCODE")
+        elif isinstance(value, str) and any(
+            p in value.lower() for p in _SECRET_PATTERNS
+        ):
+            # Field IDs referencing password fields pass through unchanged
             masked[key] = value
         else:
             masked[key] = value

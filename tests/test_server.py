@@ -1165,8 +1165,10 @@ class TestAuditMiddleware:
             # without a real MCP session, but we can test the middleware
             # directly by constructing a MiddlewareContext.
             from datetime import datetime, timezone
-            from mcp_sap_gui.audit import AuditMiddleware
+
             from fastmcp.server.middleware import MiddlewareContext
+
+            from mcp_sap_gui.audit import AuditMiddleware
 
             mw = AuditMiddleware()
             params = MagicMock()
@@ -1208,8 +1210,10 @@ class TestAuditMiddleware:
 
         with caplog.at_level(logging.WARNING, logger="mcp_sap_gui.audit"):
             from datetime import datetime, timezone
-            from mcp_sap_gui.audit import AuditMiddleware
+
             from fastmcp.server.middleware import MiddlewareContext
+
+            from mcp_sap_gui.audit import AuditMiddleware
 
             mw = AuditMiddleware()
             params = MagicMock()
@@ -1247,8 +1251,10 @@ class TestAuditMiddleware:
 
         with caplog.at_level(logging.INFO, logger="mcp_sap_gui.audit"):
             from datetime import datetime, timezone
-            from mcp_sap_gui.audit import AuditMiddleware
+
             from fastmcp.server.middleware import MiddlewareContext
+
+            from mcp_sap_gui.audit import AuditMiddleware
 
             mw = AuditMiddleware()
             params = MagicMock()
@@ -1311,7 +1317,6 @@ class TestCredentialResolution:
 
     def test_password_only_from_env(self, srv):
         """sap_connect tool does not accept password as MCP parameter."""
-        import asyncio
         import inspect
         sig = inspect.signature(_server_mod.sap_connect)
         param_names = set(sig.parameters.keys())
