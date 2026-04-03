@@ -567,6 +567,8 @@ class TestToolRegistration:
             "sap_get_tree_node_children",
             # Discovery
             "sap_get_screen_elements", "sap_screenshot",
+            # Policy
+            "sap_set_policy_profile",
         }
 
         assert tool_names == expected
@@ -624,8 +626,9 @@ class TestToolRegistration:
             "sap_get_popup_window", "sap_get_toolbar_buttons",
             "sap_read_shell_content", "sap_read_tree", "sap_find_tree_node_by_path",
             "sap_search_tree_nodes", "sap_get_screen_elements", "sap_screenshot",
+            "sap_set_policy_profile",
         }
-        destructive_tools = {"sap_execute_transaction"}
+        destructive_tools = set()  # reserved for future truly irreversible tools
 
         for tool in tools:
             assert tool.annotations is not None, f"{tool.name} missing annotations"
@@ -642,6 +645,116 @@ class TestToolRegistration:
                 assert tool.annotations.readOnlyHint is False, (
                     f"{tool.name} should NOT be readOnly"
                 )
+
+
+# ===========================================================================
+# Tag & Policy Profile Tests
+# ===========================================================================
+
+class TestToolTags:
+    """Tests for tool tag assignments and policy profiles."""
+
+    def test_all_tools_have_tags(self, srv):
+        """Every tool has at least one tag from {read, write, destructive}."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        valid_tags = {"read", "write", "destructive"}
+        for tool in tools:
+            assert tool.tags & valid_tags, (
+                f"{tool.name} has no valid tags (got {tool.tags})"
+            )
+
+    def test_read_tools_tagged_read(self, srv):
+        """Tools with readOnlyHint=True should have the 'read' tag."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        for tool in tools:
+            if tool.annotations and tool.annotations.readOnlyHint:
+                assert "read" in tool.tags, (
+                    f"{tool.name} is readOnly but missing 'read' tag"
+                )
+
+    def test_write_tools_tagged_write(self, srv):
+        """Tools with readOnlyHint=False and destructiveHint=False should have the 'write' tag."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        for tool in tools:
+            if (tool.annotations
+                    and not tool.annotations.readOnlyHint
+                    and not tool.annotations.destructiveHint):
+                assert "write" in tool.tags, (
+                    f"{tool.name} is write but missing 'write' tag"
+                )
+
+    def test_destructive_tools_tagged_destructive(self, srv):
+        """Tools with destructiveHint=True should have the 'destructive' tag."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        for tool in tools:
+            if tool.annotations and tool.annotations.destructiveHint:
+                assert "destructive" in tool.tags, (
+                    f"{tool.name} is destructive but missing 'destructive' tag"
+                )
+
+    def test_profile_definitions_exist(self, srv):
+        """Profile definitions cover all expected profiles."""
+        from mcp_sap_gui.server import _PROFILES
+        assert "exploration" in _PROFILES
+        assert "operator" in _PROFILES
+        assert "full" in _PROFILES
+
+    def test_exploration_profile_is_read_only(self, srv):
+        """Exploration profile only includes read tags."""
+        from mcp_sap_gui.server import _PROFILES
+        assert _PROFILES["exploration"] == {"read"}
+
+    def test_operator_profile_includes_write(self, srv):
+        """Operator profile includes read and write."""
+        from mcp_sap_gui.server import _PROFILES
+        assert _PROFILES["operator"] == {"read", "write"}
+
+    def test_full_profile_includes_all(self, srv):
+        """Full profile includes all tag categories."""
+        from mcp_sap_gui.server import _PROFILES
+        assert _PROFILES["full"] == {"read", "write", "destructive"}
+
+    def test_set_policy_profile_tool_registered(self, srv):
+        """sap_set_policy_profile tool is registered."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        names = {t.name for t in tools}
+        assert "sap_set_policy_profile" in names
+
+    def test_set_policy_profile_is_read_tagged(self, srv):
+        """sap_set_policy_profile has 'read' tag so it's visible in all profiles."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        profile_tool = next(t for t in tools if t.name == "sap_set_policy_profile")
+        assert "read" in profile_tool.tags
 
 
 # ===========================================================================

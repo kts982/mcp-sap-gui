@@ -71,6 +71,11 @@ _READ_ONLY = {"readOnlyHint": True, "destructiveHint": False}
 _WRITE = {"readOnlyHint": False, "destructiveHint": False}
 _DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}
 
+# Tag sets for policy profiles (fastmcp visibility system)
+_TAGS_READ = {"read"}
+_TAGS_WRITE = {"write"}
+_TAGS_DESTRUCTIVE = {"destructive"}
+
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -457,7 +462,7 @@ def _to_dict(obj):
 # Connection tools
 # ===========================================================================
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_connect(
     system_description: str,
     ctx: Context,
@@ -477,7 +482,7 @@ async def sap_connect(
     return _to_dict(await _com(lambda: c.connect(**kwargs)))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_connect_existing(
     ctx: Context,
     connection_index: int = 0,
@@ -493,7 +498,7 @@ async def sap_connect_existing(
     ))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_list_connections(ctx: Context) -> dict:
     """List all open SAP connections and sessions"""
     c = _ctrl(ctx)
@@ -501,7 +506,7 @@ async def sap_list_connections(ctx: Context) -> dict:
     return {"connections": connections}
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_session_info(ctx: Context) -> dict:
     """Get information about the current SAP session (system, client, user, transaction, screen)"""
     c = _ctrl(ctx)
@@ -512,13 +517,16 @@ async def sap_get_session_info(ctx: Context) -> dict:
 # Navigation tools
 # ===========================================================================
 
-@mcp.tool(annotations=_DESTRUCTIVE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_execute_transaction(tcode: str, ctx: Context) -> dict:
     """Execute an SAP transaction code (e.g., MM03, VA01, SE80).
 
     Navigates to the transaction's initial screen. Always check the
     screen info in the response to understand what screen you landed on.
-    Some transactions require /n prefix for SCWM (e.g., /n/SCWM/MON)."""
+    Some transactions require /n prefix for SCWM (e.g., /n/SCWM/MON).
+
+    Subject to transaction blocklist/allowlist. Use sap_get_session_info
+    to see the current transaction before navigating away."""
     _check_write()
     if _is_transaction_blocked(tcode):
         raise ValueError(f"Transaction {tcode} is blocked by security policy")
@@ -526,7 +534,7 @@ async def sap_execute_transaction(tcode: str, ctx: Context) -> dict:
     return await _com(lambda: c.execute_transaction(tcode))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_send_key(
     key: Literal[
         "Enter", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8",
@@ -549,7 +557,7 @@ async def sap_send_key(
     return await _com(lambda: c.send_vkey(vkey))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_screen_info(ctx: Context) -> dict:
     """Get current SAP screen info (transaction, program, screen number, title, status).
 
@@ -569,7 +577,7 @@ async def sap_get_screen_info(ctx: Context) -> dict:
 # Field tools
 # ===========================================================================
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_read_field(field_id: str, ctx: Context) -> dict:
     """Read the value of a field on the current SAP screen.
 
@@ -579,7 +587,7 @@ async def sap_read_field(field_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.read_field(field_id))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
     """Set a value in a field on the current SAP screen.
 
@@ -591,7 +599,7 @@ async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
     return await _com(lambda: c.set_field(field_id, value))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_press_button(button_id: str, ctx: Context) -> dict:
     """Press a button on the current SAP screen.
 
@@ -603,7 +611,7 @@ async def sap_press_button(button_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.press_button(button_id))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_menu(menu_id: str, ctx: Context) -> dict:
     """Select a menu item from the menu bar or a submenu.
 
@@ -615,7 +623,7 @@ async def sap_select_menu(menu_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.select_menu(menu_id))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_checkbox(checkbox_id: str, ctx: Context, selected: bool = True) -> dict:
     """Select or deselect a checkbox on the current SAP screen.
 
@@ -626,7 +634,7 @@ async def sap_select_checkbox(checkbox_id: str, ctx: Context, selected: bool = T
     return await _com(lambda: c.select_checkbox(checkbox_id, selected))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_radio_button(radio_id: str, ctx: Context) -> dict:
     """Select a radio button on the current SAP screen.
 
@@ -637,7 +645,7 @@ async def sap_select_radio_button(radio_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.select_radio_button(radio_id))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_combobox_entry(combobox_id: str, key_or_value: str, ctx: Context) -> dict:
     """Select an entry in a combobox/dropdown by its key or display value text.
 
@@ -648,7 +656,7 @@ async def sap_select_combobox_entry(combobox_id: str, key_or_value: str, ctx: Co
     return await _com(lambda: c.select_combobox_entry(combobox_id, key_or_value))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_tab(tab_id: str, ctx: Context) -> dict:
     """Select a tab in a tab strip control.
 
@@ -659,7 +667,7 @@ async def sap_select_tab(tab_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.select_tab(tab_id))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_combobox_entries(combobox_id: str, ctx: Context) -> dict:
     """List all entries in a combobox/dropdown.
 
@@ -668,7 +676,7 @@ async def sap_get_combobox_entries(combobox_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.get_combobox_entries(combobox_id))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_set_batch_fields(fields: dict, ctx: Context) -> dict:
     """Set multiple field values at once (dict of field_id to value).
 
@@ -680,7 +688,7 @@ async def sap_set_batch_fields(fields: dict, ctx: Context) -> dict:
     return await _com(lambda: c.set_batch_fields(fields))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_read_textedit(textedit_id: str, ctx: Context, max_lines: int = 0) -> dict:
     """Read the content of a multiline text editor (GuiTextedit).
 
@@ -690,7 +698,7 @@ async def sap_read_textedit(textedit_id: str, ctx: Context, max_lines: int = 0) 
     return await _com(lambda: c.read_textedit(textedit_id, max_lines))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_set_textedit(textedit_id: str, text: str, ctx: Context) -> dict:
     """Set the content of a multiline text editor (GuiTextedit)."""
     _check_write()
@@ -698,7 +706,7 @@ async def sap_set_textedit(textedit_id: str, text: str, ctx: Context) -> dict:
     return await _com(lambda: c.set_textedit(textedit_id, text))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_set_focus(element_id: str, ctx: Context) -> dict:
     """Set focus to any screen element by its ID.
 
@@ -714,7 +722,7 @@ async def sap_set_focus(element_id: str, ctx: Context) -> dict:
 # Table tools
 # ===========================================================================
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_read_table(
     table_id: str,
     ctx: Context,
@@ -741,7 +749,7 @@ async def sap_read_table(
     ))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_alv_toolbar(grid_id: str, ctx: Context) -> dict:
     """Get all toolbar buttons from an ALV grid.
 
@@ -753,7 +761,7 @@ async def sap_get_alv_toolbar(grid_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.get_alv_toolbar(grid_id))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_press_alv_toolbar_button(grid_id: str, button_id: str, ctx: Context) -> dict:
     """Press a toolbar button on an ALV grid (e.g., sort, filter, export).
 
@@ -763,7 +771,7 @@ async def sap_press_alv_toolbar_button(grid_id: str, button_id: str, ctx: Contex
     return await _com(lambda: c.press_alv_toolbar_button(grid_id, button_id))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_alv_context_menu_item(
     grid_id: str,
     menu_item_id: str,
@@ -797,7 +805,7 @@ async def sap_select_alv_context_menu_item(
     )
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_table_row(table_id: str, row: int, ctx: Context) -> dict:
     """Select a row in a table/grid.
 
@@ -809,7 +817,7 @@ async def sap_select_table_row(table_id: str, row: int, ctx: Context) -> dict:
     return await _com(lambda: c.select_table_row(table_id, row))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_double_click_cell(table_id: str, row: int, column: str, ctx: Context) -> dict:
     """Double-click a cell in a table/grid (often opens details or drills down).
 
@@ -822,7 +830,7 @@ async def sap_double_click_cell(table_id: str, row: int, column: str, ctx: Conte
     )
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_modify_cell(grid_id: str, row: int, column: str, value: str, ctx: Context) -> dict:
     """Modify the value of a cell in an ALV grid or table control.
 
@@ -833,7 +841,7 @@ async def sap_modify_cell(grid_id: str, row: int, column: str, value: str, ctx: 
     return await _com(lambda: c.modify_cell(grid_id, row, column, value))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_set_current_cell(grid_id: str, row: int, column: str, ctx: Context) -> dict:
     """Set the current (focused) cell in an ALV grid or table control.
 
@@ -843,7 +851,7 @@ async def sap_set_current_cell(grid_id: str, row: int, column: str, ctx: Context
     return await _com(lambda: c.set_current_cell(grid_id, row, column))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_column_info(grid_id: str, ctx: Context) -> dict:
     """Get detailed column info from an ALV grid or table control.
 
@@ -854,7 +862,7 @@ async def sap_get_column_info(grid_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.get_column_info(grid_id))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_current_cell(table_id: str, ctx: Context) -> dict:
     """Get the currently focused cell position in an ALV grid or table control."""
     c = _ctrl(ctx)
@@ -863,7 +871,7 @@ async def sap_get_current_cell(table_id: str, ctx: Context) -> dict:
 
 # ---- TableControl-specific tools ----
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_scroll_table_control(table_id: str, position: int, ctx: Context) -> dict:
     """Scroll a GuiTableControl to a specific row position.
 
@@ -875,7 +883,7 @@ async def sap_scroll_table_control(table_id: str, position: int, ctx: Context) -
     return await _com(lambda: c.scroll_table_control(table_id, position))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_table_control_row_info(
     table_id: str,
     ctx: Context,
@@ -889,7 +897,7 @@ async def sap_get_table_control_row_info(
     return await _com(lambda: c.get_table_control_row_info(table_id, rows))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_all_table_control_columns(
     table_id: str,
     ctx: Context,
@@ -903,7 +911,7 @@ async def sap_select_all_table_control_columns(
 
 # ---- ALV-specific tools ----
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_cell_info(grid_id: str, row: int, column: str, ctx: Context) -> dict:
     """Get detailed cell metadata from an ALV grid.
 
@@ -913,7 +921,7 @@ async def sap_get_cell_info(grid_id: str, row: int, column: str, ctx: Context) -
     return await _com(lambda: c.get_cell_info(grid_id, row, column))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_press_column_header(grid_id: str, column: str, ctx: Context) -> dict:
     """Click a column header in an ALV grid (triggers sort). Does NOT work on GuiTableControl."""
     _check_write()
@@ -921,7 +929,7 @@ async def sap_press_column_header(grid_id: str, column: str, ctx: Context) -> di
     return await _com(lambda: c.press_column_header(grid_id, column))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_all_rows(grid_id: str, ctx: Context) -> dict:
     """Select all rows in an ALV grid. Does NOT work on GuiTableControl."""
     _check_write()
@@ -929,7 +937,7 @@ async def sap_select_all_rows(grid_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.select_all_rows(grid_id))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_multiple_rows(table_id: str, rows: list[int], ctx: Context) -> dict:
     """Select multiple rows at once in an ALV grid or table control.
 
@@ -941,7 +949,7 @@ async def sap_select_multiple_rows(table_id: str, rows: list[int], ctx: Context)
 
 # ---- Popup & dialog tools ----
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_popup_window(ctx: Context) -> dict:
     """Check if a popup/modal dialog is open (wnd[1], wnd[2], etc.).
 
@@ -951,7 +959,7 @@ async def sap_get_popup_window(ctx: Context) -> dict:
     return await _com(c.get_popup_window)
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_handle_popup(
     ctx: Context,
     action: Literal["read", "confirm", "cancel", "press"] = "read",
@@ -974,7 +982,7 @@ async def sap_handle_popup(
 
 # ---- Toolbar discovery ----
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_toolbar_buttons(ctx: Context, window_id: str = "wnd[0]") -> dict:
     """List all buttons on the system toolbar (tbar[0]) and app toolbar (tbar[1]).
 
@@ -986,7 +994,7 @@ async def sap_get_toolbar_buttons(ctx: Context, window_id: str = "wnd[0]") -> di
 
 # ---- Shell content ----
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_read_shell_content(shell_id: str, ctx: Context) -> dict:
     """Read content from a GuiShell subtype (e.g., HTMLViewer).
 
@@ -1000,7 +1008,7 @@ async def sap_read_shell_content(shell_id: str, ctx: Context) -> dict:
 # Tree tools
 # ===========================================================================
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_read_tree(tree_id: str, ctx: Context, max_nodes: int = 200) -> dict:
     """Read data from a tree control (TableTreeControl, ColumnTreeControl, etc.).
 
@@ -1013,7 +1021,7 @@ async def sap_read_tree(tree_id: str, ctx: Context, max_nodes: int = 200) -> dic
     return await _com(lambda: c.read_tree(tree_id, capped))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_expand_tree_node(tree_id: str, node_key: str, ctx: Context) -> dict:
     """Expand a folder node in a tree control to reveal its children.
 
@@ -1024,7 +1032,7 @@ async def sap_expand_tree_node(tree_id: str, node_key: str, ctx: Context) -> dic
     return await _com(lambda: c.expand_tree_node(tree_id, node_key))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_collapse_tree_node(tree_id: str, node_key: str, ctx: Context) -> dict:
     """Collapse a folder node in a tree control"""
     _check_write()
@@ -1032,7 +1040,7 @@ async def sap_collapse_tree_node(tree_id: str, node_key: str, ctx: Context) -> d
     return await _com(lambda: c.collapse_tree_node(tree_id, node_key))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_tree_node(tree_id: str, node_key: str, ctx: Context) -> dict:
     """Select a node in a tree control.
 
@@ -1043,7 +1051,7 @@ async def sap_select_tree_node(tree_id: str, node_key: str, ctx: Context) -> dic
     return await _com(lambda: c.select_tree_node(tree_id, node_key))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_double_click_tree_node(tree_id: str, node_key: str, ctx: Context) -> dict:
     """Double-click a node in a tree control (often opens details or drills down).
 
@@ -1055,7 +1063,7 @@ async def sap_double_click_tree_node(tree_id: str, node_key: str, ctx: Context) 
     return await _com(lambda: c.double_click_tree_node(tree_id, node_key))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_double_click_tree_item(
     tree_id: str, node_key: str, item_name: str, ctx: Context,
 ) -> dict:
@@ -1070,7 +1078,7 @@ async def sap_double_click_tree_item(
     )
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_click_tree_link(tree_id: str, node_key: str, item_name: str, ctx: Context) -> dict:
     """Click a hyperlink in a tree node item.
 
@@ -1084,7 +1092,7 @@ async def sap_click_tree_link(tree_id: str, node_key: str, item_name: str, ctx: 
     )
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_find_tree_node_by_path(tree_id: str, path: str, ctx: Context) -> dict:
     """Find a tree node key by its path.
 
@@ -1093,7 +1101,7 @@ async def sap_find_tree_node_by_path(tree_id: str, path: str, ctx: Context) -> d
     return await _com(lambda: c.find_tree_node_by_path(tree_id, path))
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_search_tree_nodes(tree_id: str, search_text: str, ctx: Context,
                                 column: str = "", max_results: int = 20) -> dict:
     """Search for tree nodes by text. Returns matches with full ancestor paths.
@@ -1113,7 +1121,7 @@ async def sap_search_tree_nodes(tree_id: str, search_text: str, ctx: Context,
     ))
 
 
-@mcp.tool(annotations=_WRITE)
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_get_tree_node_children(tree_id: str, ctx: Context, node_key: str = "",
                                      expand: bool = False) -> dict:
     """Get direct children of a tree node. Much faster than read_tree for
@@ -1133,7 +1141,7 @@ async def sap_get_tree_node_children(tree_id: str, ctx: Context, node_key: str =
 # Discovery tools
 # ===========================================================================
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_screen_elements(
     ctx: Context,
     container_id: str = "wnd[0]/usr",
@@ -1168,7 +1176,7 @@ async def sap_get_screen_elements(
     }
 
 
-@mcp.tool(annotations=_READ_ONLY)
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_screenshot(ctx: Context) -> Image:
     """Take a screenshot of the current SAP window.
 
@@ -1183,10 +1191,47 @@ async def sap_screenshot(ctx: Context) -> Image:
 
 
 # ===========================================================================
-# Resources
+# Policy profile tools
 # ===========================================================================
 
-@mcp.tool(annotations=_READ_ONLY)
+# Profile definitions: which tag sets are visible in each profile
+_PROFILES: dict[str, set[str]] = {
+    "exploration": {"read"},
+    "operator": {"read", "write"},
+    "full": {"read", "write", "destructive"},
+}
+
+
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
+async def sap_set_policy_profile(
+    profile: Literal["exploration", "operator", "full"],
+    ctx: Context,
+) -> dict:
+    """Switch the active policy profile for this session.
+
+    Profiles control which tools are visible:
+    - exploration: read-only tools (discover, inspect, screenshot)
+    - operator: read + write tools (normal SAP interaction)
+    - full: all tools including destructive (transaction execution)
+
+    Default profile is 'full' unless the server was started with --profile."""
+    allowed_tags = _PROFILES[profile]
+    await ctx.disable_components(match_all=True)
+    await ctx.enable_components(tags=allowed_tags)
+    # Re-enable this tool so the profile can be changed again
+    await ctx.enable_components(names={"sap_set_policy_profile"})
+    return {
+        "profile": profile,
+        "enabled_tags": sorted(allowed_tags),
+        "message": f"Session switched to '{profile}' profile",
+    }
+
+
+# ===========================================================================
+# Session lifecycle tools
+# ===========================================================================
+
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_disconnect(ctx: Context) -> dict:
     """Disconnect from the current SAP session and release the binding.
 
@@ -1227,6 +1272,9 @@ def main():
                         help="HTTP bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000,
                         help="HTTP port (default: 8000)")
+    parser.add_argument("--profile", choices=["exploration", "operator", "full"],
+                        default="full",
+                        help="Default policy profile (default: full)")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
     args = parser.parse_args()
@@ -1240,7 +1288,15 @@ def main():
         read_only=args.read_only,
         allowed_transactions=args.allowed_transactions,
     )
-    # SessionManager is created in _lifespan, controllers are per-session.
+
+    # Apply server-level policy profile (hides tools globally)
+    if args.profile != "full":
+        allowed_tags = _PROFILES[args.profile]
+        all_tags = {"read", "write", "destructive"}
+        for tag in all_tags - allowed_tags:
+            mcp.disable(tags={tag})
+        logger.info("Server profile: %s (enabled tags: %s)",
+                     args.profile, ", ".join(sorted(allowed_tags)))
 
     if args.transport == "http":
         logger.info("Starting HTTP transport on %s:%d", args.host, args.port)

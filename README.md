@@ -153,6 +153,9 @@ uv run python -m mcp_sap_gui.server --transport http
 # HTTP on custom host/port
 uv run python -m mcp_sap_gui.server --transport http --host 0.0.0.0 --port 9000
 
+# Policy profile (restrict visible tools)
+uv run python -m mcp_sap_gui.server --profile exploration
+
 # Debug mode
 uv run python -m mcp_sap_gui.server --debug
 ```
@@ -275,7 +278,7 @@ The server uses stdio transport. Point any MCP client at:
 
 ```
 Command:   uv run python -m mcp_sap_gui.server
-Arguments: [--read-only] [--debug] [--allowed-transactions T1 T2 ...]
+Arguments: [--read-only] [--profile exploration|operator|full] [--debug] [--allowed-transactions T1 T2 ...]
 Transport: stdio
 ```
 
@@ -316,11 +319,11 @@ These prevent common agent mistakes like guessing element IDs, ignoring popups, 
 
 ## Available Tools
 
-The server currently exposes **54 MCP tools**.
+The server currently exposes **55 MCP tools**.
 
 | Category | Count | What it covers |
 |---|---:|---|
-| Connection | 5 | Connect to SAP, attach to open sessions, inspect sessions, disconnect |
+| Connection & Policy | 6 | Connect to SAP, attach to open sessions, inspect sessions, disconnect, set policy profile |
 | Navigation | 3 | Execute transactions, send keys, inspect current screen |
 | Fields & UI | 13 | Read/write fields, buttons, tabs, comboboxes, textedit, focus |
 | Tables & Grids | 17 | ALV grids, TableControls, row selection, column info, cell ops |
@@ -354,9 +357,11 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 4. **Transaction Whitelist** - `--allowed-transactions` limits to specific t-codes
 
-5. **MCP Tool Annotations** - All 52 tools are annotated with `readOnlyHint`/`destructiveHint` per the MCP spec, so clients can display appropriate UI hints
+5. **Policy Profiles** - `--profile` controls which tools are visible: `exploration` (read-only), `operator` (read + write), `full` (all, default). Profiles can also be switched per-session via `sap_set_policy_profile`
 
-6. **No MCP Password Parameter** - `sap_connect` does not accept a password parameter, avoiding secret exposure in MCP tool-call history and client logs
+6. **Tool Tags** - Every tool is tagged `read` or `write` for policy profile filtering. All tools carry MCP `readOnlyHint`/`destructiveHint` annotations so clients can display appropriate UI hints
+
+7. **No MCP Password Parameter** - `sap_connect` does not accept a password parameter, avoiding secret exposure in MCP tool-call history and client logs
 
 ### Recommendations for Production Use
 

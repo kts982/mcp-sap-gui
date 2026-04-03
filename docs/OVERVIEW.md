@@ -26,7 +26,7 @@ That means:
 - MCP `stdio` (default) and `streamable HTTP` transports
 - interactive MCP client usage only
 
-The server currently exposes **53 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
+The server currently exposes **55 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
 
 ## Why This Exists
 
@@ -46,7 +46,7 @@ The current strengths are:
 
 - strong SAP GUI coverage across fields, tables, ALV grids, trees, menus, and popups
 - discovery-first workflows that reduce brittle hardcoded IDs
-- safety controls such as read-only mode, transaction blocklists, and allowlists
+- safety controls: read-only mode, transaction blocklists/allowlists, and tag-based policy profiles
 - built-in MCP guidance so clients start with better navigation patterns
 - unit-tested server and controller behavior
 

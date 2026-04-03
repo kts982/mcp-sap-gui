@@ -1,11 +1,23 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **54 MCP tools**.
+`mcp-sap-gui` currently exposes **55 MCP tools**.
 
 Two practical rules:
 
 - Start with discovery instead of guessing IDs.
 - Start table work with `sap_read_table`, then branch into ALV- or TableControl-specific tools as needed.
+
+## Policy Profiles
+
+Every tool is tagged `read` or `write`. Three profiles control which tools are visible:
+
+| Profile | Tags | What the agent can do |
+|---|---|---|
+| `exploration` | `read` | Observe only: inspect screens, read tables, take screenshots. Cannot interact or navigate. |
+| `operator` | `read`, `write` | Normal SAP work: navigate transactions, fill fields, press buttons. Transaction blocklist still applies. |
+| `full` | `read`, `write` | All tools. Default. |
+
+Set the default profile at startup with `--profile operator`, or switch per-session with `sap_set_policy_profile`.
 
 ## Connection
 
@@ -18,6 +30,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_list_connections` | List all currently open SAP connections and sessions |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen |
 | `sap_disconnect` | Disconnect from the current SAP session (detaches attached sessions, closes owned sessions) |
+| `sap_set_policy_profile` | Switch the active policy profile for this session (exploration, operator, full) |
 
 ## Navigation
 
