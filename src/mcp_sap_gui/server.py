@@ -31,6 +31,7 @@ from fastmcp.server.lifespan import lifespan
 from fastmcp.utilities.types import Image
 
 from .audit import AuditMiddleware
+from .prompts import register_prompts
 from .sap_controller import VKey
 from .session_manager import SessionManager
 
@@ -314,6 +315,7 @@ Some transactions use split-screen layouts:
 
 mcp = FastMCP("mcp-sap-gui", instructions=_INSTRUCTIONS, lifespan=_lifespan)
 mcp.add_middleware(AuditMiddleware())
+register_prompts(mcp)
 _session_mgr: Optional[SessionManager] = None
 config = ServerConfig()
 

@@ -802,6 +802,91 @@ class TestInstructionsAndResource:
 
 
 # ===========================================================================
+# Prompt Tests
+# ===========================================================================
+
+class TestPrompts:
+    """Tests for MCP workflow prompts."""
+
+    def test_prompts_registered(self, srv):
+        """All workflow prompts are registered on the server."""
+        import asyncio
+
+        async def get_prompts():
+            return await srv.mcp.list_prompts()
+
+        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        names = {p.name for p in prompts}
+        assert "sap_search_help" in names
+        assert "sap_table_export" in names
+        assert "sap_spro_navigate" in names
+
+    def test_search_help_prompt_has_field_id_arg(self, srv):
+        """sap_search_help prompt accepts a field_id argument."""
+        import asyncio
+
+        async def get_prompts():
+            return await srv.mcp.list_prompts()
+
+        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        prompt = next(p for p in prompts if p.name == "sap_search_help")
+        arg_names = [a.name for a in prompt.arguments]
+        assert "field_id" in arg_names
+
+    def test_table_export_prompt_has_table_id_arg(self, srv):
+        """sap_table_export prompt accepts a table_id argument."""
+        import asyncio
+
+        async def get_prompts():
+            return await srv.mcp.list_prompts()
+
+        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        prompt = next(p for p in prompts if p.name == "sap_table_export")
+        arg_names = [a.name for a in prompt.arguments]
+        assert "table_id" in arg_names
+
+    def test_spro_prompt_has_activity_name_arg(self, srv):
+        """sap_spro_navigate prompt accepts an activity_name argument."""
+        import asyncio
+
+        async def get_prompts():
+            return await srv.mcp.list_prompts()
+
+        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        prompt = next(p for p in prompts if p.name == "sap_spro_navigate")
+        arg_names = [a.name for a in prompt.arguments]
+        assert "activity_name" in arg_names
+
+    def test_search_help_content_includes_key_steps(self, srv):
+        """sap_search_help prompt content covers the critical steps."""
+        import asyncio
+
+        async def render():
+            prompt = await srv.mcp.get_prompt("sap_search_help")
+            return await prompt.render({"field_id": "wnd[0]/usr/ctxtMATNR"})
+
+        result = asyncio.new_event_loop().run_until_complete(render())
+        text = result.messages[0].content.text
+        assert "sap_set_focus" in text
+        assert "sap_send_key" in text
+        assert "F4" in text
+        assert "wnd[0]/usr/ctxtMATNR" in text
+
+    def test_spro_content_warns_against_double_click(self, srv):
+        """sap_spro_navigate warns against using double_click_tree_node."""
+        import asyncio
+
+        async def render():
+            prompt = await srv.mcp.get_prompt("sap_spro_navigate")
+            return await prompt.render({"activity_name": "Define Storage Types"})
+
+        result = asyncio.new_event_loop().run_until_complete(render())
+        text = result.messages[0].content.text
+        assert "click_tree_link" in text
+        assert "Do NOT use" in text or "do NOT use" in text or "CRITICAL" in text
+
+
+# ===========================================================================
 # COM Retry Tests
 # ===========================================================================
 

@@ -233,12 +233,19 @@ Add to your Claude Desktop config file:
   "mcpServers": {
     "sap-gui": {
       "command": "uv",
-      "args": ["run", "python", "-m", "mcp_sap_gui.server"],
+      "args": [
+        "run", "--directory", "<path-to-mcp-sap-gui>",
+        "python", "-m", "mcp_sap_gui.server"
+      ],
       "cwd": "<path-to-mcp-sap-gui>"
     }
   }
 }
 ```
+
+> **Note:** The `--directory` flag is required so `uv` finds the project's
+> virtual environment regardless of the working directory Claude Desktop
+> uses when launching the process.
 
 **Read-only mode** (recommended when exploring/querying data):
 
@@ -247,7 +254,10 @@ Add to your Claude Desktop config file:
   "mcpServers": {
     "sap-gui": {
       "command": "uv",
-      "args": ["run", "python", "-m", "mcp_sap_gui.server", "--read-only"],
+      "args": [
+        "run", "--directory", "<path-to-mcp-sap-gui>",
+        "python", "-m", "mcp_sap_gui.server", "--read-only"
+      ],
       "cwd": "<path-to-mcp-sap-gui>"
     }
   }
@@ -262,7 +272,8 @@ Add to your Claude Desktop config file:
     "sap-gui": {
       "command": "uv",
       "args": [
-        "run", "python", "-m", "mcp_sap_gui.server",
+        "run", "--directory", "<path-to-mcp-sap-gui>",
+        "python", "-m", "mcp_sap_gui.server",
         "--allowed-transactions", "MM03", "VA03", "ME23N"
       ],
       "cwd": "<path-to-mcp-sap-gui>"

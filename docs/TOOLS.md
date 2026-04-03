@@ -153,6 +153,20 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 2. `sap_search_tree_nodes`
 3. `sap_expand_tree_node` or `sap_click_tree_link`
 
+## Workflow Prompts
+
+In addition to tools, the server provides **MCP prompts** — step-by-step workflow
+guides that agents can invoke for common multi-tool SAP patterns:
+
+| Prompt | Parameter | What it guides |
+|---|---|---|
+| `sap_search_help` | `field_id` | F4 search help: focus, open popup, browse results, select, confirm |
+| `sap_table_export` | `table_id` | Read all rows: schema discovery, column selection, pagination |
+| `sap_spro_navigate` | `activity_name` | SPRO customizing: open tree, search/expand, execute activity |
+
+Prompts cost zero tool count and reduce agent errors by prescribing the
+correct tool sequence for patterns that are easy to get wrong.
+
 ## Related
 
 - [Client Setup Guide](CLIENTS.md)

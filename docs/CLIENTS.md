@@ -57,12 +57,18 @@ Add this to your Claude Desktop config:
   "mcpServers": {
     "sap-gui": {
       "command": "uv",
-      "args": ["run", "python", "-m", "mcp_sap_gui.server"],
+      "args": [
+        "run", "--directory", "<path-to-mcp-sap-gui>",
+        "python", "-m", "mcp_sap_gui.server"
+      ],
       "cwd": "<path-to-mcp-sap-gui>"
     }
   }
 }
 ```
+
+The `--directory` flag is required so `uv` finds the project's virtual
+environment regardless of where Claude Desktop launches the process.
 
 Read-only example:
 
@@ -71,7 +77,10 @@ Read-only example:
   "mcpServers": {
     "sap-gui": {
       "command": "uv",
-      "args": ["run", "python", "-m", "mcp_sap_gui.server", "--read-only"],
+      "args": [
+        "run", "--directory", "<path-to-mcp-sap-gui>",
+        "python", "-m", "mcp_sap_gui.server", "--read-only"
+      ],
       "cwd": "<path-to-mcp-sap-gui>"
     }
   }
