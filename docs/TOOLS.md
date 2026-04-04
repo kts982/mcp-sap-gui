@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **55 MCP tools**.
+`mcp-sap-gui` currently exposes **57 MCP tools**.
 
 Two practical rules:
 
@@ -14,7 +14,7 @@ Every tool is tagged `read` or `write`. Three profiles control which tools are v
 | Profile | Tags | What the agent can do |
 |---|---|---|
 | `exploration` | `read` | Observe only: inspect screens, read tables, take screenshots. Cannot interact or navigate. |
-| `operator` | `read`, `write` | Normal SAP work: navigate transactions, fill fields, press buttons. Transaction blocklist still applies. |
+| `operator` | `read`, `write` | Normal SAP work: navigate transactions, fill fields, press buttons. Transaction blocklist still applies, and save-key confirmation may still prompt the user. |
 | `full` | `read`, `write` | All tools. Default. |
 
 Set the default profile at startup with `--profile operator`, or switch per-session with `sap_set_policy_profile`.
@@ -37,7 +37,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | Tool | Description |
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `SE80` |
-| `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, or `Save` |
+| `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, or `Save`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients |
 | `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window |
 
 ## Fields And UI Elements
@@ -128,6 +128,18 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter |
 | `sap_screenshot` | Capture a screenshot of the active SAP window |
 
+## Workflow Guidance
+
+| Tool | Description |
+|------|-------------|
+| `sap_get_workflow_guide` | Return structured, step-by-step guidance for a supported workflow such as `search_help`, `table_export`, or `spro_navigate` |
+
+## Transaction Guidance
+
+| Tool | Description |
+|------|-------------|
+| `sap_get_transaction_guide` | Return a generic, read-first guide for a supported transaction such as `/SCWM/MON`; aliases like `SCWM/MON` and `warehouse monitor` also work |
+
 ## Recommended Usage Patterns
 
 ### New Or Unfamiliar Screen
@@ -156,7 +168,9 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 ## Workflow Prompts
 
 In addition to tools, the server provides **MCP prompts** — step-by-step workflow
-guides that agents can invoke for common multi-tool SAP patterns:
+guides that agents can invoke for common multi-tool SAP patterns. The
+`sap_get_workflow_guide` tool exposes the same guidance in tool form for agents
+that are better at discovering tools than prompts:
 
 | Prompt | Parameter | What it guides |
 |---|---|---|

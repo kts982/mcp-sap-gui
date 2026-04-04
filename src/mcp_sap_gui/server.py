@@ -27,11 +27,19 @@ from typing import List, Literal, Optional
 
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
+from mcp.shared.exceptions import McpError
 from fastmcp.server.lifespan import lifespan
 from fastmcp.utilities.types import Image
 
 from .audit import AuditMiddleware
-from .prompts import register_prompts
+from .prompts import (
+    WORKFLOW_TARGET_PARAMETERS,
+    WorkflowName,
+    normalize_transaction,
+    register_prompts,
+    render_transaction_guide,
+    render_workflow_guide,
+)
 from .sap_controller import VKey
 from .session_manager import SessionManager
 
@@ -459,6 +467,44 @@ def _parse_key(key: str) -> int:
     return _KEY_MAP[key]
 
 
+# Keys that trigger a save confirmation via elicitation
+_SAVE_KEYS = {"F11", "Save"}
+
+
+async def _confirm_save(ctx: Context, key: str) -> dict | None:
+    """Request user confirmation before sending a save key.
+
+    Returns ``None`` if the user accepted (caller should proceed).
+    Returns a cancellation dict if declined/cancelled.
+    Raises ``ValueError`` if the client does not support elicitation.
+    """
+    try:
+        result = await ctx.elicit(
+            message=(
+                f"You are about to send '{key}' which triggers Save (F11) "
+                "in SAP. This can persist changes to the database. "
+                "Do you want to proceed?"
+            ),
+            response_type=bool,
+        )
+    except McpError as exc:
+        raise ValueError(
+            f"Save action requires confirmation but the client does not "
+            f"support elicitation: {exc}"
+        ) from exc
+
+    if result.action == "accept" and result.data is True:
+        return None  # proceed
+
+    action = result.action
+    return {
+        "status": "cancelled",
+        "action": action,
+        "key": key,
+        "reason": f"User did not confirm save ({action})",
+    }
+
+
 def _to_dict(obj):
     """Convert dataclass to dict, pass dicts through unchanged."""
     return obj.__dict__ if hasattr(obj, '__dict__') and not isinstance(obj, dict) else obj
@@ -562,10 +608,16 @@ async def sap_send_key(
 
     Common keys: Enter, F1 (Help), F3 (Back), F4 (Search help),
     F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel).
-    Also supports Shift+F1..F9 and Ctrl+F, Ctrl+G, Ctrl+P."""
+    Also supports Shift+F1..F9 and Ctrl+F, Ctrl+G, Ctrl+P.
+
+    F11 / Save requires user confirmation via elicitation before proceeding."""
     _check_write()
-    c = _ctrl(ctx)
     vkey = _parse_key(key)
+    if key in _SAVE_KEYS:
+        cancellation = await _confirm_save(ctx, key)
+        if cancellation is not None:
+            return cancellation
+    c = _ctrl(ctx)
     return await _com(lambda: c.send_vkey(vkey))
 
 
@@ -1236,6 +1288,57 @@ async def sap_set_policy_profile(
         "profile": profile,
         "enabled_tags": sorted(allowed_tags),
         "message": f"Session switched to '{profile}' profile",
+    }
+
+
+# ===========================================================================
+# Workflow guidance tool
+# ===========================================================================
+
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
+async def sap_get_workflow_guide(
+    workflow: WorkflowName,
+    target: str,
+) -> dict:
+    """Return step-by-step guidance for a common SAP workflow.
+
+    Available workflows:
+    - **search_help**: F4 search help on a field. `target` = field ID.
+    - **table_export**: Paginated table export. `target` = table element ID.
+    - **spro_navigate**: SPRO customizing navigation. `target` = activity name.
+    """
+    guide_text = render_workflow_guide(workflow, target)
+    return {
+        "workflow": workflow,
+        "target_parameter": WORKFLOW_TARGET_PARAMETERS[workflow],
+        "target": target,
+        "guide": guide_text,
+    }
+
+
+# ===========================================================================
+# Transaction guidance tool
+# ===========================================================================
+
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
+async def sap_get_transaction_guide(
+    transaction: str,
+    task: str = "",
+) -> dict:
+    """Return a generic, read-first guide for a supported SAP transaction.
+
+    Available transactions:
+    - **/SCWM/MON**: EWM Warehouse Monitor with tree navigation and ALV results.
+
+    Aliases accepted: `SCWM/MON`, `warehouse monitor`, `ewm warehouse monitor`.
+    """
+    canonical = normalize_transaction(transaction)
+    guide_text = render_transaction_guide(canonical, task)
+    return {
+        "transaction": canonical,
+        "task": task,
+        "mode": "read-first",
+        "guide": guide_text,
     }
 
 

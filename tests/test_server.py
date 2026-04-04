@@ -1,6 +1,6 @@
 """Tests for MCP SAP GUI Server - security logic, routing, and configuration."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -569,6 +569,10 @@ class TestToolRegistration:
             "sap_get_screen_elements", "sap_screenshot",
             # Policy
             "sap_set_policy_profile",
+            # Workflow guidance
+            "sap_get_workflow_guide",
+            # Transaction guidance
+            "sap_get_transaction_guide",
         }
 
         assert tool_names == expected
@@ -626,7 +630,8 @@ class TestToolRegistration:
             "sap_get_popup_window", "sap_get_toolbar_buttons",
             "sap_read_shell_content", "sap_read_tree", "sap_find_tree_node_by_path",
             "sap_search_tree_nodes", "sap_get_screen_elements", "sap_screenshot",
-            "sap_set_policy_profile",
+            "sap_set_policy_profile", "sap_get_workflow_guide",
+            "sap_get_transaction_guide",
         }
         destructive_tools = set()  # reserved for future truly irreversible tools
 
@@ -884,6 +889,269 @@ class TestPrompts:
         text = result.messages[0].content.text
         assert "click_tree_link" in text
         assert "Do NOT use" in text or "do NOT use" in text or "CRITICAL" in text
+
+
+# ===========================================================================
+# Workflow Guide Tool Tests
+# ===========================================================================
+
+class TestWorkflowGuideTool:
+    """Tests for sap_get_workflow_guide tool."""
+
+    def test_tool_registered(self, srv):
+        """sap_get_workflow_guide is registered on the server."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        names = {t.name for t in tools}
+        assert "sap_get_workflow_guide" in names
+
+    def test_tool_is_read_only(self, srv):
+        """sap_get_workflow_guide has readOnlyHint=True."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tool = next(t for t in tools if t.name == "sap_get_workflow_guide")
+        assert tool.annotations.readOnlyHint is True
+
+    def test_tool_has_read_tag(self, srv):
+        """sap_get_workflow_guide has the 'read' tag."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tool = next(t for t in tools if t.name == "sap_get_workflow_guide")
+        assert "read" in tool.tags
+
+    def test_tool_schema_lists_supported_workflows(self, srv):
+        """sap_get_workflow_guide keeps an explicit workflow enum schema."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tool = next(t for t in tools if t.name == "sap_get_workflow_guide")
+        workflow_schema = tool.parameters["properties"]["workflow"]
+        assert set(workflow_schema["enum"]) == {
+            "search_help",
+            "table_export",
+            "spro_navigate",
+        }
+        assert "target" in tool.parameters["properties"]
+
+    @pytest.mark.asyncio
+    async def test_search_help_returns_structured_data(self, srv):
+        """search_help workflow returns dict with workflow, target, guide keys."""
+        result = await srv.sap_get_workflow_guide(
+            workflow="search_help", target="wnd[0]/usr/ctxtMATNR"
+        )
+        assert result["workflow"] == "search_help"
+        assert result["target_parameter"] == "field_id"
+        assert result["target"] == "wnd[0]/usr/ctxtMATNR"
+        assert "sap_set_focus" in result["guide"]
+        assert "F4" in result["guide"]
+        assert "wnd[0]/usr/ctxtMATNR" in result["guide"]
+
+    @pytest.mark.asyncio
+    async def test_table_export_returns_pagination_guidance(self, srv):
+        """table_export workflow includes pagination steps."""
+        result = await srv.sap_get_workflow_guide(
+            workflow="table_export", target="wnd[0]/usr/cntlGRID/shellcont/shell"
+        )
+        assert result["workflow"] == "table_export"
+        assert result["target_parameter"] == "table_id"
+        assert result["target"] == "wnd[0]/usr/cntlGRID/shellcont/shell"
+        assert "columns_only" in result["guide"]
+        assert "start_row" in result["guide"]
+        assert "total_rows" in result["guide"]
+
+    @pytest.mark.asyncio
+    async def test_spro_navigate_returns_tree_guidance(self, srv):
+        """spro_navigate workflow includes SPRO-specific warnings."""
+        result = await srv.sap_get_workflow_guide(
+            workflow="spro_navigate", target="Define Storage Types"
+        )
+        assert result["workflow"] == "spro_navigate"
+        assert result["target_parameter"] == "activity_name"
+        assert result["target"] == "Define Storage Types"
+        assert "click_tree_link" in result["guide"]
+        assert "Define Storage Types" in result["guide"]
+
+    @pytest.mark.asyncio
+    async def test_guide_matches_prompt_content(self, srv):
+        """Workflow guide text is identical to what the prompt renders."""
+        # Get guide from the tool
+        tool_result = await srv.sap_get_workflow_guide(
+            workflow="search_help", target="wnd[0]/usr/ctxtFIELD"
+        )
+
+        # Get the same content from the prompt
+        prompt = await srv.mcp.get_prompt("sap_search_help")
+        prompt_result = await prompt.render({"field_id": "wnd[0]/usr/ctxtFIELD"})
+        prompt_text = prompt_result.messages[0].content.text
+
+        assert tool_result["guide"] == prompt_text
+
+    def test_prompts_still_registered_after_tool_added(self, srv):
+        """Adding the workflow guide tool did not break prompt registration."""
+        import asyncio
+
+        async def get_prompts():
+            return await srv.mcp.list_prompts()
+
+        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        names = {p.name for p in prompts}
+        assert "sap_search_help" in names
+        assert "sap_table_export" in names
+        assert "sap_spro_navigate" in names
+
+    def test_prompts_still_render_correctly(self, srv):
+        """Existing prompts still render with correct content after refactor."""
+        import asyncio
+
+        async def render_table_export():
+            prompt = await srv.mcp.get_prompt("sap_table_export")
+            return await prompt.render({"table_id": "wnd[0]/usr/tbl"})
+
+        result = asyncio.new_event_loop().run_until_complete(render_table_export())
+        text = result.messages[0].content.text
+        assert "columns_only" in text
+        assert "wnd[0]/usr/tbl" in text
+        assert "Paginate" in text or "paginate" in text or "start_row" in text
+
+
+# ===========================================================================
+# Transaction Alias Normalization (unit tests for prompts helper)
+# ===========================================================================
+
+class TestNormalizeTransaction:
+    """Unit tests for normalize_transaction in prompts.py."""
+
+    def test_canonical_input(self):
+        from mcp_sap_gui.prompts import normalize_transaction
+        assert normalize_transaction("/SCWM/MON") == "/SCWM/MON"
+
+    def test_without_leading_slash(self):
+        from mcp_sap_gui.prompts import normalize_transaction
+        assert normalize_transaction("SCWM/MON") == "/SCWM/MON"
+
+    def test_human_alias_warehouse_monitor(self):
+        from mcp_sap_gui.prompts import normalize_transaction
+        assert normalize_transaction("warehouse monitor") == "/SCWM/MON"
+
+    def test_human_alias_ewm(self):
+        from mcp_sap_gui.prompts import normalize_transaction
+        assert normalize_transaction("ewm warehouse monitor") == "/SCWM/MON"
+
+    def test_case_insensitive(self):
+        from mcp_sap_gui.prompts import normalize_transaction
+        assert normalize_transaction("Warehouse Monitor") == "/SCWM/MON"
+        assert normalize_transaction("/scwm/mon") == "/SCWM/MON"
+
+    def test_strips_whitespace(self):
+        from mcp_sap_gui.prompts import normalize_transaction
+        assert normalize_transaction("  /SCWM/MON  ") == "/SCWM/MON"
+
+    def test_unknown_raises_valueerror(self):
+        from mcp_sap_gui.prompts import normalize_transaction
+        with pytest.raises(ValueError, match="Unknown transaction"):
+            normalize_transaction("SE16")
+
+
+# ===========================================================================
+# Transaction Guide Tool Tests
+# ===========================================================================
+
+class TestTransactionGuideTool:
+    """Tests for sap_get_transaction_guide tool."""
+
+    def test_tool_registered(self, srv):
+        """sap_get_transaction_guide is registered on the server."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        names = {t.name for t in tools}
+        assert "sap_get_transaction_guide" in names
+
+    def test_tool_is_read_only(self, srv):
+        """sap_get_transaction_guide has readOnlyHint=True."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tool = next(t for t in tools if t.name == "sap_get_transaction_guide")
+        assert tool.annotations.readOnlyHint is True
+        assert "read" in tool.tags
+
+    def test_tool_schema_transaction_is_string(self, srv):
+        """transaction parameter accepts a plain string (aliases resolved at runtime)."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tool = next(t for t in tools if t.name == "sap_get_transaction_guide")
+        transaction_schema = tool.parameters["properties"]["transaction"]
+        assert transaction_schema.get("type") == "string"
+        assert "task" in tool.parameters["properties"]
+
+    @pytest.mark.asyncio
+    async def test_scwm_mon_returns_generic_read_first_guidance(self, srv):
+        """The SCWM monitor guide captures the expected generic navigation flow."""
+        result = await srv.sap_get_transaction_guide(
+            transaction="/SCWM/MON",
+            task="navigate to a document list and inspect results",
+        )
+        assert result["transaction"] == "/SCWM/MON"
+        assert result["task"] == "navigate to a document list and inspect results"
+        assert result["mode"] == "read-first"
+        assert '/n/SCWM/MON' in result["guide"]
+        assert "splitter layout" in result["guide"]
+        assert "sap_get_popup_window" in result["guide"]
+        assert "sap_search_tree_nodes" in result["guide"]
+        assert "sap_read_table" in result["guide"]
+
+    @pytest.mark.asyncio
+    async def test_scwm_mon_guide_without_task_hint(self, srv):
+        """The guide also works without a task hint."""
+        result = await srv.sap_get_transaction_guide(transaction="/SCWM/MON")
+        assert result["transaction"] == "/SCWM/MON"
+        assert result["task"] == ""
+        assert result["mode"] == "read-first"
+        assert "Do not hardcode field IDs" in result["guide"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "alias",
+        ["SCWM/MON", "warehouse monitor", "ewm warehouse monitor", " /SCWM/MON "],
+    )
+    async def test_alias_normalizes_to_canonical(self, srv, alias):
+        """Human-friendly aliases resolve to the canonical /SCWM/MON."""
+        result = await srv.sap_get_transaction_guide(transaction=alias)
+        assert result["transaction"] == "/SCWM/MON"
+        assert result["mode"] == "read-first"
+        assert '/n/SCWM/MON' in result["guide"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_transaction_raises(self, srv):
+        """An unrecognised transaction string raises ValueError."""
+        with pytest.raises(ValueError, match="Unknown transaction"):
+            await srv.sap_get_transaction_guide(transaction="nonexistent")
 
 
 # ===========================================================================
@@ -1334,3 +1602,153 @@ class TestCredentialResolution:
         # Verify resolution produces None
         assert os.environ.get("SAP_PASSWORD") is None
         assert os.environ.get("SAP_USER") is None
+
+
+# ===========================================================================
+# Save Confirmation (Elicitation) Tests
+# ===========================================================================
+
+
+def _make_elicit_result(action, data=None):
+    """Create a mock elicitation result with the given action and optional data."""
+    result = MagicMock()
+    result.action = action
+    result.data = data
+    return result
+
+
+def _make_elicit_ctx(elicit_return=None, elicit_side_effect=None):
+    """Create a mock Context with an async elicit method."""
+    ctx = _make_mock_ctx()
+    ctx.elicit = AsyncMock(return_value=elicit_return, side_effect=elicit_side_effect)
+    return ctx
+
+
+class TestSaveConfirmation:
+    """Tests for F11/Save elicitation confirmation in sap_send_key."""
+
+    @pytest.mark.asyncio
+    async def test_save_accepted_calls_send_vkey(self, srv):
+        """When user accepts save confirmation, send_vkey is called."""
+        ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("accept", data=True))
+        mock_controller = MagicMock()
+        mock_controller.send_vkey.return_value = {"screen": {"transaction": "VA01"}}
+
+        with patch.object(srv, "_ctrl", return_value=mock_controller), \
+             patch.object(srv, "_com", new_callable=lambda: lambda fn: _async_wrap(fn)):
+            result = await srv.sap_send_key("F11", ctx)
+
+        ctx.elicit.assert_called_once()
+        mock_controller.send_vkey.assert_called_once()
+        assert result.get("screen", {}).get("transaction") == "VA01"
+
+    @pytest.mark.asyncio
+    async def test_save_alias_accepted(self, srv):
+        """'Save' key also triggers confirmation and proceeds on accept."""
+        ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("accept", data=True))
+        mock_controller = MagicMock()
+        mock_controller.send_vkey.return_value = {"screen": {"transaction": "MM02"}}
+
+        with patch.object(srv, "_ctrl", return_value=mock_controller), \
+             patch.object(srv, "_com", new_callable=lambda: lambda fn: _async_wrap(fn)):
+            result = await srv.sap_send_key("Save", ctx)
+
+        ctx.elicit.assert_called_once()
+        mock_controller.send_vkey.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_save_declined_no_send_vkey(self, srv):
+        """When user declines save, send_vkey is NOT called."""
+        ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("decline"))
+        mock_controller = MagicMock()
+
+        with patch.object(srv, "_ctrl", return_value=mock_controller):
+            result = await srv.sap_send_key("F11", ctx)
+
+        assert result["status"] == "cancelled"
+        assert result["action"] == "decline"
+        mock_controller.send_vkey.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_save_cancelled_no_send_vkey(self, srv):
+        """When user cancels save confirmation, send_vkey is NOT called."""
+        ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("cancel"))
+        mock_controller = MagicMock()
+
+        with patch.object(srv, "_ctrl", return_value=mock_controller):
+            result = await srv.sap_send_key("F11", ctx)
+
+        assert result["status"] == "cancelled"
+        assert result["action"] == "cancel"
+        mock_controller.send_vkey.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_save_accepted_false_no_send_vkey(self, srv):
+        """When user accepts but with confirm=False, send_vkey is NOT called."""
+        ctx = _make_elicit_ctx(
+            elicit_return=_make_elicit_result("accept", data=False),
+        )
+        mock_controller = MagicMock()
+
+        with patch.object(srv, "_ctrl", return_value=mock_controller):
+            result = await srv.sap_send_key("Save", ctx)
+
+        assert result["status"] == "cancelled"
+        assert result["action"] == "accept"
+        mock_controller.send_vkey.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_save_unsupported_elicitation_raises(self, srv):
+        """McpError (capability failure) is converted to ValueError."""
+        from mcp.shared.exceptions import McpError
+        from mcp.types import ErrorData, INVALID_REQUEST
+
+        ctx = _make_elicit_ctx(
+            elicit_side_effect=McpError(
+                ErrorData(
+                    code=INVALID_REQUEST,
+                    message="Client does not support elicitation",
+                )
+            ),
+        )
+        mock_controller = MagicMock()
+
+        with patch.object(srv, "_ctrl", return_value=mock_controller):
+            with pytest.raises(ValueError, match="does not support elicitation"):
+                await srv.sap_send_key("F11", ctx)
+
+        mock_controller.send_vkey.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_save_non_capability_error_propagates(self, srv):
+        """Non-McpError exceptions from elicit() are not mislabeled."""
+        ctx = _make_elicit_ctx(
+            elicit_side_effect=RuntimeError("COM connection lost"),
+        )
+        mock_controller = MagicMock()
+
+        with patch.object(srv, "_ctrl", return_value=mock_controller):
+            with pytest.raises(RuntimeError, match="COM connection lost"):
+                await srv.sap_send_key("F11", ctx)
+
+        mock_controller.send_vkey.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_save_key_bypasses_elicitation(self, srv):
+        """Non-save keys (e.g. Enter) skip elicitation entirely."""
+        ctx = _make_mock_ctx()
+        ctx.elicit = AsyncMock()  # should never be called
+        mock_controller = MagicMock()
+        mock_controller.send_vkey.return_value = {"screen": {"transaction": "SE38"}}
+
+        with patch.object(srv, "_ctrl", return_value=mock_controller), \
+             patch.object(srv, "_com", new_callable=lambda: lambda fn: _async_wrap(fn)):
+            result = await srv.sap_send_key("Enter", ctx)
+
+        ctx.elicit.assert_not_called()
+        mock_controller.send_vkey.assert_called_once()
+
+
+async def _async_wrap(fn):
+    """Helper to run a sync function and return its result as an awaitable."""
+    return fn()

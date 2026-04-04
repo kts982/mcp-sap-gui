@@ -333,7 +333,7 @@ These prevent common agent mistakes like guessing element IDs, ignoring popups, 
 
 ## Available Tools
 
-The server currently exposes **55 MCP tools**.
+The server currently exposes **57 MCP tools**.
 
 | Category | Count | What it covers |
 |---|---:|---|
@@ -344,11 +344,15 @@ The server currently exposes **55 MCP tools**.
 | Popup / Toolbar / Shell | 4 | Popup inspection and handling, toolbar discovery, shell content |
 | Trees | 10 | Read/search/expand/select/click SAP tree controls |
 | Discovery | 2 | Screen element discovery and screenshots |
+| Workflow Guidance | 1 | Return step-by-step guidance for known multi-tool SAP workflows |
+| Transaction Guidance | 1 | Return a generic, read-first guide for supported SAP transactions |
 
 The most important patterns:
 - `sap_get_screen_elements` to discover IDs instead of guessing
 - `sap_read_table` to start with any SAP table/grid
 - `sap_get_popup_window` when `active_window` reports a popup
+- `sap_get_workflow_guide` when you want the proven sequence for a known workflow
+- `sap_get_transaction_guide` when you want a generic guide for a supported transaction such as `/SCWM/MON`, `SCWM/MON`, or `warehouse monitor`
 - `sap_read_tree` plus search/expand helpers for SPRO-style navigation
 
 For the full tool catalog, grouped by category with short descriptions, see **[docs/TOOLS.md](docs/TOOLS.md)**.
@@ -375,9 +379,11 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 6. **Tool Tags** - Every tool is tagged `read` or `write` for policy profile filtering. All tools carry MCP `readOnlyHint`/`destructiveHint` annotations so clients can display appropriate UI hints
 
-7. **Audit Logging** - `--audit-log FILE` writes every tool call (name, arguments, timing, outcome) as JSON lines. Secrets in arguments are masked automatically
+7. **Save Confirmation** - `sap_send_key("F11")` and `sap_send_key("Save")` now require explicit user confirmation via MCP elicitation. If the client does not support elicitation, the save is blocked instead of proceeding silently.
 
-8. **Secure Credential Resolution** - `sap_connect` resolves credentials from a `.env` file (`SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT`, `SAP_LANGUAGE`). Passwords are never accepted as MCP tool parameters and never appear in client logs, tool-call history, or audit logs. Copy `.env.example` to `.env` to get started
+8. **Audit Logging** - `--audit-log FILE` writes every tool call (name, arguments, timing, outcome) as JSON lines. Secrets in arguments are masked automatically
+
+9. **Secure Credential Resolution** - `sap_connect` resolves credentials from a `.env` file (`SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT`, `SAP_LANGUAGE`). Passwords are never accepted as MCP tool parameters and never appear in client logs, tool-call history, or audit logs. Copy `.env.example` to `.env` to get started
 
 ### Recommendations for Production Use
 

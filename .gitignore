@@ -44,6 +44,12 @@ config.local.json
 # Claude Code local settings
 .claude/settings.local.json
 
+# Local AI tool workspaces
+.agents/
+.claude/
+.codex/
+.gemini/
+
 # Local roadmap / vision drafts
 .dev/ROADMAP_VISION.local.md
 SAP_GUI_Scripting_Technical_Guide.md

@@ -8,19 +8,55 @@ reduce agent errors by prescribing the correct tool sequence.
 Register on the server with: register_prompts(mcp)
 """
 
+from typing import Literal
+
 from fastmcp import FastMCP
 
+# ---------------------------------------------------------------------------
+# Supported workflow names
+# ---------------------------------------------------------------------------
 
-def register_prompts(mcp: FastMCP) -> None:
-    """Register all SAP workflow prompts on the given server."""
+WORKFLOW_NAMES = ("search_help", "table_export", "spro_navigate")
+WorkflowName = Literal["search_help", "table_export", "spro_navigate"]
+WORKFLOW_TARGET_PARAMETERS = {
+    "search_help": "field_id",
+    "table_export": "table_id",
+    "spro_navigate": "activity_name",
+}
+TRANSACTION_GUIDE_NAMES = ("/SCWM/MON",)
+TransactionGuideName = Literal["/SCWM/MON"]
 
-    @mcp.prompt()
-    def sap_search_help(field_id: str) -> str:
-        """Open F4 search help on a field, browse results, and select a value.
+# Alias → canonical transaction mapping (all keys lowercase)
+_TRANSACTION_ALIASES: dict[str, str] = {
+    "/scwm/mon": "/SCWM/MON",
+    "scwm/mon": "/SCWM/MON",
+    "warehouse monitor": "/SCWM/MON",
+    "ewm warehouse monitor": "/SCWM/MON",
+}
 
-        Use this when you need to pick a value from a dropdown or search help
-        dialog (F4) for a specific field."""
-        return f"""\
+
+def normalize_transaction(raw: str) -> str:
+    """Normalize a transaction name or human-friendly alias to its canonical form.
+
+    Raises ``ValueError`` for unrecognised inputs.
+    """
+    canonical = _TRANSACTION_ALIASES.get(raw.strip().lower())
+    if canonical is not None:
+        return canonical
+    raise ValueError(
+        f"Unknown transaction {raw!r}. "
+        f"Supported transactions: {', '.join(TRANSACTION_GUIDE_NAMES)}. "
+        f"Also accepted: {', '.join(sorted(a for a in _TRANSACTION_ALIASES if a not in {t.lower() for t in TRANSACTION_GUIDE_NAMES}))}"
+    )
+
+# ---------------------------------------------------------------------------
+# Guide text generators (shared by prompts and the workflow-guide tool)
+# ---------------------------------------------------------------------------
+
+
+def render_search_help_guide(field_id: str) -> str:
+    """Return the step-by-step guide for F4 search help on *field_id*."""
+    return f"""\
 Follow these steps exactly to use F4 search help on field `{field_id}`:
 
 ## Step 1 — Set focus on the target field
@@ -83,13 +119,10 @@ sap_send_key("Enter")
 - **Trying to type in the field instead**: Some fields require F4 selection and reject typed values.
 """
 
-    @mcp.prompt()
-    def sap_table_export(table_id: str) -> str:
-        """Read all rows from a large SAP table with proper pagination.
 
-        Use this when you need to export or analyze the complete contents
-        of an ALV grid or TableControl."""
-        return f"""\
+def render_table_export_guide(table_id: str) -> str:
+    """Return the step-by-step guide for paginated table export of *table_id*."""
+    return f"""\
 Follow these steps to read all data from table `{table_id}`:
 
 ## Step 1 — Discover the table schema
@@ -128,13 +161,10 @@ If they don't match, you may have missed rows — check your pagination math.
 - **Position button**: For SM30-style table maintenance, look for a "Position..." button in the toolbar (`sap_get_toolbar_buttons`) to jump to specific entries instead of paginating.
 """
 
-    @mcp.prompt()
-    def sap_spro_navigate(activity_name: str) -> str:
-        """Navigate the SPRO customizing tree to find and execute an activity.
 
-        Use this when you need to reach a specific customizing activity
-        in SPRO (e.g., "Define Storage Types", "Maintain Number Ranges")."""
-        return f"""\
+def render_spro_navigate_guide(activity_name: str) -> str:
+    """Return the step-by-step guide for navigating SPRO to *activity_name*."""
+    return f"""\
 Follow these steps to find and execute "{activity_name}" in SPRO:
 
 ## Step 1 — Open SPRO
@@ -206,3 +236,180 @@ sap_get_popup_window()
 - **Search not finding nodes**: Nodes must be expanded/loaded first. Expand parent nodes, then search again.
 - **Forgetting the selection popup**: Most SPRO activities show a parameter popup before the actual screen. Always check for `wnd[1]` after clicking.
 """
+
+
+# ---------------------------------------------------------------------------
+# Dispatch helper
+# ---------------------------------------------------------------------------
+
+_RENDERERS = {
+    "search_help": render_search_help_guide,
+    "table_export": render_table_export_guide,
+    "spro_navigate": render_spro_navigate_guide,
+}
+
+
+def render_workflow_guide(workflow: WorkflowName, target: str) -> str:
+    """Render the guide text for *workflow* with *target* argument.
+
+    Raises ``ValueError`` for unknown workflow names.
+    """
+    renderer = _RENDERERS.get(workflow)
+    if renderer is None:
+        raise ValueError(
+            f"Unknown workflow {workflow!r}. "
+            f"Valid workflows: {', '.join(WORKFLOW_NAMES)}"
+    )
+    return renderer(target)
+
+
+def render_scwm_mon_transaction_guide(task: str = "") -> str:
+    """Return a generic, read-first guide for EWM Warehouse Monitor."""
+    task_note = (
+        f"Keep the user goal in mind while navigating: {task}.\n\n"
+        if task.strip()
+        else ""
+    )
+    return f"""\
+Use this generic guide for **EWM Warehouse Monitor** (`/SCWM/MON`).
+
+{task_note}## Usage mode
+- Treat this as a **read-first / navigation-first** guide.
+- Prefer display and inspection actions before opening follow-on documents.
+- Do not hardcode field IDs, tree IDs, tab IDs, or ALV IDs. Discover them on the current system.
+
+## Step 1 — Enter the transaction correctly
+Use the SCWM form with `/n` prefix:
+```
+sap_execute_transaction("/n/SCWM/MON")
+```
+
+## Step 2 — Handle first-access selection screens or popups
+- On first access, the monitor may ask for warehouse number, monitor profile, or similar entry criteria.
+- If `active_window` shows a popup, read it first:
+```
+sap_get_popup_window()
+```
+- Discover editable fields before filling anything:
+```
+sap_get_screen_elements(container_id="wnd[1]/usr", changeable_only=true)
+```
+- Fill only the fields needed to enter the monitor, then confirm with Enter or Execute.
+
+## Step 3 — Expect a splitter layout
+- Warehouse Monitor commonly uses a split layout.
+- The navigation tree is often in `shellcont[0]`.
+- Results often appear in another shell container or ALV area on the right.
+- If the initial element scan looks sparse, increase discovery depth:
+```
+sap_get_screen_elements(max_depth=4)
+```
+
+## Step 4 — Discover the tree and navigate by text
+- Find the tree control instead of guessing its ID:
+```
+sap_get_screen_elements(type_filter="GuiTree")
+```
+- Search by business text first:
+```
+sap_search_tree_nodes("<tree_id>", "<business_text>")
+```
+- If nothing is found, expand parent nodes step by step:
+```
+sap_get_tree_node_children("<tree_id>", expand=true)
+sap_get_tree_node_children("<tree_id>", node_key="<parent_key>", expand=true)
+```
+
+## Step 5 — Execute or display the selected monitor node
+- Prefer the monitor's display/navigation action rather than aggressive double-clicking.
+- When the tree row exposes a link/action column, use:
+```
+sap_click_tree_link("<tree_id>", "<node_key>", "<column>")
+```
+- If the tree behaves like a standard selectable tree, select the node first and then inspect the result area.
+
+## Step 6 — Inspect the result area as ALV first
+- After selecting a monitor node, discover whether the result area is a grid or table:
+```
+sap_get_screen_elements(type_filter="GuiGridView,GuiTableControl")
+```
+- Start by reading the schema:
+```
+sap_read_table("<table_id>", columns_only=true)
+```
+- Then read a small page of data:
+```
+sap_read_table("<table_id>", max_rows=50)
+```
+
+## Step 7 — Navigate to specific documents carefully
+- Search or filter in the result set before opening anything.
+- Prefer row selection and metadata reads before double-clicking into a document.
+- If opening a document is necessary, verify whether the next screen is display-oriented or action-oriented.
+- After every open/navigation action, check for:
+  - popup dialogs
+  - selection screens
+  - status-bar warnings
+
+## Common patterns to expect
+- warehouse or monitor-selection step on first entry
+- left-side tree navigation + right-side ALV results
+- document lists that support drilldown into deliveries, warehouse tasks, handling units, or stock objects
+- follow-on screens that may expose additional tabs, trees, or ALV grids
+
+## Common pitfalls
+- Forgetting the `/n` prefix for SCWM transactions
+- Assuming the same monitor profile or warehouse-selection fields exist everywhere
+- Guessing splitter container IDs without discovery
+- Treating every double-click as safe display navigation
+- Reading huge result sets before checking schema and filters
+"""
+
+
+_TRANSACTION_RENDERERS = {
+    "/SCWM/MON": render_scwm_mon_transaction_guide,
+}
+
+
+def render_transaction_guide(transaction: TransactionGuideName, task: str = "") -> str:
+    """Render a generic guide for a supported transaction."""
+    renderer = _TRANSACTION_RENDERERS.get(transaction)
+    if renderer is None:
+        raise ValueError(
+            f"Unknown transaction {transaction!r}. "
+            f"Valid transactions: {', '.join(TRANSACTION_GUIDE_NAMES)}"
+        )
+    return renderer(task)
+
+
+# ---------------------------------------------------------------------------
+# MCP prompt registration
+# ---------------------------------------------------------------------------
+
+
+def register_prompts(mcp: FastMCP) -> None:
+    """Register all SAP workflow prompts on the given server."""
+
+    @mcp.prompt()
+    def sap_search_help(field_id: str) -> str:
+        """Open F4 search help on a field, browse results, and select a value.
+
+        Use this when you need to pick a value from a dropdown or search help
+        dialog (F4) for a specific field."""
+        return render_search_help_guide(field_id)
+
+    @mcp.prompt()
+    def sap_table_export(table_id: str) -> str:
+        """Read all rows from a large SAP table with proper pagination.
+
+        Use this when you need to export or analyze the complete contents
+        of an ALV grid or TableControl."""
+        return render_table_export_guide(table_id)
+
+    @mcp.prompt()
+    def sap_spro_navigate(activity_name: str) -> str:
+        """Navigate the SPRO customizing tree to find and execute an activity.
+
+        Use this when you need to reach a specific customizing activity
+        in SPRO (e.g., "Define Storage Types", "Maintain Number Ranges")."""
+        return render_spro_navigate_guide(activity_name)
