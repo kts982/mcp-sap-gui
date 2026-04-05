@@ -53,7 +53,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_select_combobox_entry` | Select a combobox entry by key or visible value |
 | `sap_select_tab` | Select a tab strip tab |
 | `sap_get_combobox_entries` | List combobox entries |
-| `sap_set_batch_fields` | Set multiple fields in one call |
+| `sap_set_batch_fields` | Set multiple fields in one call, with optional `validate` and `skip_readonly` support for safer form fill |
 | `sap_read_textedit` | Read a multiline text editor |
 | `sap_set_textedit` | Set a multiline text editor |
 | `sap_set_focus` | Set focus to a screen element |
@@ -158,6 +158,12 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 1. Start with `sap_read_table`
 2. Check `table_type`
 3. Use ALV-specific or TableControl-specific tools if needed
+
+### Form Fill
+
+1. Use `sap_set_batch_fields` for multi-field input instead of repeated single-field writes
+2. Add `skip_readonly=true` when the screen may include display-only fields
+3. Add `validate=true` when you want SAP to process the input with Enter and return post-validation screen feedback
 
 ### SPRO Or Tree Navigation
 

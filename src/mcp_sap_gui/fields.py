@@ -5,7 +5,7 @@ Provides all field-level operations for the SAP GUI controller.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +335,13 @@ class FieldsMixin:
                 "Could not read combobox entries",
             )
 
-    def set_batch_fields(self, fields: Dict[str, str]) -> Dict[str, Any]:
+    def set_batch_fields(
+        self,
+        fields: Dict[str, str],
+        *,
+        skip_readonly: bool = False,
+        validate: bool = False,
+    ) -> Dict[str, Any]:
         """
         Set multiple field values at once.
 
@@ -344,16 +350,28 @@ class FieldsMixin:
 
         Args:
             fields: Dict mapping field_id -> value
+            skip_readonly: When True, silently skip fields whose element
+                reports ``Changeable == False`` instead of counting them
+                as failures.
+            validate: When True, press Enter after setting fields and
+                include validation feedback (status bar, highlighted
+                fields) in the result.
 
         Returns:
-            Dict with per-field results
+            Dict with per-field results and optional validation info
         """
         self._require_session()
 
-        results = {}
+        results: Dict[str, str] = {}
+        skipped = 0
         for field_id, value in fields.items():
             try:
-                self._session.findById(field_id).text = value
+                element = self._session.findById(field_id)
+                if skip_readonly and not getattr(element, "Changeable", True):
+                    results[field_id] = "skipped: read-only"
+                    skipped += 1
+                    continue
+                element.text = value
                 results[field_id] = "success"
             except Exception as e:
                 results[field_id] = (
@@ -362,12 +380,54 @@ class FieldsMixin:
                 )
 
         succeeded = sum(1 for v in results.values() if v == "success")
-        return {
+        failed = len(fields) - succeeded - skipped
+        result: Dict[str, Any] = {
             "total": len(fields),
             "succeeded": succeeded,
-            "failed": len(fields) - succeeded,
+            "failed": failed,
+            "skipped": skipped,
             "results": results,
         }
+
+        if validate:
+            succeeded_ids = [
+                fid for fid, status in results.items() if status == "success"
+            ]
+            result["validation"] = self._validate_batch(succeeded_ids, succeeded)
+
+        return result
+
+    def _validate_batch(
+        self,
+        succeeded_ids: List[str],
+        succeeded: int,
+    ) -> Dict[str, Any]:
+        """Press Enter and gather validation feedback for a batch-set operation."""
+        if succeeded == 0:
+            return {"performed": False, "reason": "no fields were set"}
+
+        enter_result = self.press_enter()
+        screen_info = enter_result.get("screen", {})
+
+        # Check highlighted fields only among those actually set successfully
+        highlighted: List[str] = []
+        for field_id in succeeded_ids:
+            try:
+                element = self._session.findById(field_id)
+                if getattr(element, "Highlighted", False):
+                    highlighted.append(field_id)
+            except Exception:
+                pass
+
+        validation: Dict[str, Any] = {
+            "performed": True,
+            "message": screen_info.get("message"),
+            "message_type": screen_info.get("message_type", ""),
+            "screen": screen_info,
+        }
+        if highlighted:
+            validation["highlighted_fields"] = highlighted
+        return validation
 
     def read_textedit(self, textedit_id: str, max_lines: int = 0) -> Dict[str, Any]:
         """

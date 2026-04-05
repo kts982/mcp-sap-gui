@@ -207,6 +207,46 @@ class TestOkCodeBypassPrevention:
             }, ctx)
 
     @pytest.mark.asyncio
+    async def test_batch_fields_forwards_validate_flag(self, srv):
+        """sap_set_batch_fields passes validate to controller."""
+        ctx = _make_mock_ctx()
+        mock_ctrl = MagicMock()
+        mock_ctrl.set_batch_fields.return_value = {
+            "total": 1, "succeeded": 1, "failed": 0, "skipped": 0,
+            "results": {"f": "success"},
+            "validation": {
+                "performed": True, "message": "OK", "message_type": "S",
+                "screen": {"transaction": "VA01", "message": "OK", "message_type": "S"},
+            },
+        }
+        with patch.object(srv, '_ctrl', return_value=mock_ctrl):
+            result = await srv.sap_set_batch_fields(
+                {"f": "v"}, ctx, validate=True,
+            )
+        mock_ctrl.set_batch_fields.assert_called_once_with(
+            {"f": "v"}, skip_readonly=False, validate=True,
+        )
+        assert result["validation"]["performed"] is True
+
+    @pytest.mark.asyncio
+    async def test_batch_fields_forwards_skip_readonly_flag(self, srv):
+        """sap_set_batch_fields passes skip_readonly to controller."""
+        ctx = _make_mock_ctx()
+        mock_ctrl = MagicMock()
+        mock_ctrl.set_batch_fields.return_value = {
+            "total": 1, "succeeded": 0, "failed": 0, "skipped": 1,
+            "results": {"f": "skipped: read-only"},
+        }
+        with patch.object(srv, '_ctrl', return_value=mock_ctrl):
+            result = await srv.sap_set_batch_fields(
+                {"f": "v"}, ctx, skip_readonly=True,
+            )
+        mock_ctrl.set_batch_fields.assert_called_once_with(
+            {"f": "v"}, skip_readonly=True, validate=False,
+        )
+        assert result["skipped"] == 1
+
+    @pytest.mark.asyncio
     async def test_screen_elements_surfaces_discovery_errors(self, srv):
         """sap_get_screen_elements should surface invalid-container errors."""
         ctx = _make_mock_ctx()
@@ -395,6 +435,16 @@ class TestReadOnlyMode:
         ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="read-only"):
             await readonly_srv.sap_set_batch_fields({"wnd[0]/usr/txt": "v"}, ctx)
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_batch_fields_with_flags(self, readonly_srv):
+        """sap_set_batch_fields raises in read-only mode even with new flags."""
+        ctx = _make_mock_ctx()
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_set_batch_fields(
+                {"wnd[0]/usr/txt": "v"}, ctx,
+                validate=True, skip_readonly=True,
+            )
 
     @pytest.mark.asyncio
     async def test_readonly_blocks_set_textedit(self, readonly_srv):

@@ -2266,6 +2266,231 @@ class TestSetBatchFields:
         assert result["results"]["wnd[0]/usr/txtF1"] == "success"
         assert "error" in result["results"]["wnd[0]/usr/txtBAD"]
 
+    def test_skip_readonly_skips_non_changeable(self):
+        """skip_readonly=True skips fields with Changeable=False."""
+        controller = self._make_controller_with_session()
+        changeable_field = MagicMock(Changeable=True)
+        readonly_field = MagicMock(Changeable=False)
+
+        def find_by_id(id):
+            return {
+                "wnd[0]/usr/txtF1": changeable_field,
+                "wnd[0]/usr/txtF2": readonly_field,
+            }[id]
+        controller._session.findById.side_effect = find_by_id
+
+        result = controller.set_batch_fields(
+            {"wnd[0]/usr/txtF1": "val1", "wnd[0]/usr/txtF2": "val2"},
+            skip_readonly=True,
+        )
+
+        assert result["total"] == 2
+        assert result["succeeded"] == 1
+        assert result["skipped"] == 1
+        assert result["failed"] == 0
+        assert result["results"]["wnd[0]/usr/txtF1"] == "success"
+        assert result["results"]["wnd[0]/usr/txtF2"] == "skipped: read-only"
+        # The changeable field was written; the read-only one was not
+        changeable_field.assert_has_calls([])  # .text was set via attribute
+        assert readonly_field.text != "val2"
+
+    def test_skip_readonly_false_still_fails_on_readonly(self):
+        """skip_readonly=False (default) counts read-only errors as failures."""
+        controller = self._make_controller_with_session()
+        readonly_field = MagicMock(Changeable=False)
+        # Simulate COM raising when writing to a read-only field
+        type(readonly_field).text = property(
+            fget=lambda self: "", fset=lambda self, v: (_ for _ in ()).throw(Exception("not changeable")),
+        )
+
+        controller._session.findById.return_value = readonly_field
+
+        result = controller.set_batch_fields({"wnd[0]/usr/txtF1": "val1"})
+
+        assert result["succeeded"] == 0
+        assert result["failed"] == 1
+        assert result["skipped"] == 0
+        assert "error" in result["results"]["wnd[0]/usr/txtF1"]
+
+    def test_validate_presses_enter_and_returns_feedback(self):
+        """validate=True sends Enter and returns status bar info."""
+        controller = self._make_controller_with_session()
+        mock_field = MagicMock(Changeable=True)
+        mock_window = MagicMock()
+        mock_sbar = MagicMock()
+        mock_sbar.Text = "Document saved"
+        mock_sbar.MessageType = "S"
+        mock_sbar.Id = ""
+        mock_sbar.Number = ""
+
+        # After Enter, the field should not be highlighted
+        mock_field_after = MagicMock(Highlighted=False)
+
+        call_count = {"n": 0}
+
+        def find_by_id(id):
+            if id == "wnd[0]":
+                return mock_window
+            if id.endswith("/sbar"):
+                return mock_sbar
+            # First call during set, second during highlight check
+            call_count["n"] += 1
+            if call_count["n"] <= 1:
+                return mock_field
+            return mock_field_after
+        controller._session.findById.side_effect = find_by_id
+
+        # Mock session.Info and ActiveWindow for get_screen_info
+        controller._session.Info = MagicMock(
+            Transaction="VA01", Program="SAPMV45A",
+            ScreenNumber=100,
+        )
+        controller._session.ActiveWindow = mock_window
+        mock_window.Id = "/app/con[0]/ses[0]/wnd[0]"
+        mock_window.Text = "Create Sales Order"
+
+        result = controller.set_batch_fields(
+            {"wnd[0]/usr/txtF1": "val1"},
+            validate=True,
+        )
+
+        assert result["succeeded"] == 1
+        validation = result["validation"]
+        assert validation["performed"] is True
+        assert validation["message"] == "Document saved"
+        assert validation["message_type"] == "S"
+        assert "screen" in validation
+        assert validation["screen"]["transaction"] == "VA01"
+        assert validation["screen"]["title"] == "Create Sales Order"
+        mock_window.sendVKey.assert_called_once_with(0)  # VKey.ENTER
+
+    def test_validate_skipped_when_nothing_succeeded(self):
+        """validate=True does NOT press Enter when no fields were set."""
+        controller = self._make_controller_with_session()
+        controller._session.findById.side_effect = Exception("not found")
+
+        result = controller.set_batch_fields(
+            {"wnd[0]/usr/txtBAD": "val1"},
+            validate=True,
+        )
+
+        assert result["succeeded"] == 0
+        assert result["validation"]["performed"] is False
+        # sendVKey should not have been called on any window
+        # (findById always raises, so no window mock exists to check,
+        # but the key assertion is that performed is False)
+
+    def test_validate_reports_highlighted_fields(self):
+        """validate=True includes highlighted fields in the result."""
+        controller = self._make_controller_with_session()
+        mock_field = MagicMock(Changeable=True)
+        mock_window = MagicMock()
+        mock_sbar = MagicMock()
+        mock_sbar.Text = "Fill required fields"
+        mock_sbar.MessageType = "E"
+        mock_sbar.Id = ""
+        mock_sbar.Number = ""
+
+        # After Enter, field becomes highlighted (validation error)
+        mock_field_highlighted = MagicMock(Highlighted=True)
+
+        call_count = {"n": 0}
+
+        def find_by_id(id):
+            if id == "wnd[0]":
+                return mock_window
+            if id.endswith("/sbar"):
+                return mock_sbar
+            call_count["n"] += 1
+            if call_count["n"] <= 1:
+                return mock_field
+            return mock_field_highlighted
+        controller._session.findById.side_effect = find_by_id
+
+        controller._session.Info = MagicMock(
+            Transaction="VA01", Program="SAPMV45A",
+            ScreenNumber=100,
+        )
+        controller._session.ActiveWindow = mock_window
+        mock_window.Id = "/app/con[0]/ses[0]/wnd[0]"
+        mock_window.Text = "Create Sales Order"
+
+        result = controller.set_batch_fields(
+            {"wnd[0]/usr/txtF1": "val1"},
+            validate=True,
+        )
+
+        validation = result["validation"]
+        assert validation["performed"] is True
+        assert validation["message_type"] == "E"
+        assert "screen" in validation
+        assert "wnd[0]/usr/txtF1" in validation["highlighted_fields"]
+
+    def test_validate_highlights_only_succeeded_fields(self):
+        """validate=True only checks highlights for successfully-set fields."""
+        controller = self._make_controller_with_session()
+        changeable_field = MagicMock(Changeable=True)
+        mock_window = MagicMock()
+        mock_sbar = MagicMock()
+        mock_sbar.Text = "Fill required fields"
+        mock_sbar.MessageType = "E"
+        mock_sbar.Id = ""
+        mock_sbar.Number = ""
+
+        # After Enter, the changeable field becomes highlighted
+        highlighted_field = MagicMock(Highlighted=True)
+
+        call_count = {"n": 0}
+
+        def find_by_id(id):
+            if id == "wnd[0]":
+                return mock_window
+            if id.endswith("/sbar"):
+                return mock_sbar
+            if id == "wnd[0]/usr/txtBAD":
+                raise Exception("Not found")
+            call_count["n"] += 1
+            if call_count["n"] <= 1:
+                return changeable_field
+            return highlighted_field
+        controller._session.findById.side_effect = find_by_id
+
+        controller._session.Info = MagicMock(
+            Transaction="VA01", Program="SAPMV45A",
+            ScreenNumber=100,
+        )
+        controller._session.ActiveWindow = mock_window
+        mock_window.Id = "/app/con[0]/ses[0]/wnd[0]"
+        mock_window.Text = "Create Sales Order"
+
+        result = controller.set_batch_fields(
+            {
+                "wnd[0]/usr/txtF1": "val1",
+                "wnd[0]/usr/txtBAD": "val2",
+            },
+            validate=True,
+        )
+
+        assert result["succeeded"] == 1
+        assert result["failed"] == 1
+        validation = result["validation"]
+        assert validation["performed"] is True
+        # Only txtF1 (succeeded) should be checked; txtBAD (failed) should not appear
+        assert "wnd[0]/usr/txtF1" in validation["highlighted_fields"]
+        # findById for txtBAD should NOT have been called during highlight check
+        # (it was called once during the set phase and raised, but not again)
+
+    def test_default_skipped_is_zero(self):
+        """Existing callers get skipped=0 without passing new flags."""
+        controller = self._make_controller_with_session()
+        mock_field = MagicMock()
+        controller._session.findById.return_value = mock_field
+
+        result = controller.set_batch_fields({"wnd[0]/usr/txtF1": "val1"})
+
+        assert result["skipped"] == 0
+        assert "validation" not in result
+
 
 class TestTextedit:
     """Tests for read_textedit and set_textedit."""

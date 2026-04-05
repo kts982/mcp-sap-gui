@@ -741,15 +741,32 @@ async def sap_get_combobox_entries(combobox_id: str, ctx: Context) -> dict:
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
-async def sap_set_batch_fields(fields: dict, ctx: Context) -> dict:
+async def sap_set_batch_fields(
+    fields: dict,
+    ctx: Context,
+    validate: bool = False,
+    skip_readonly: bool = False,
+) -> dict:
     """Set multiple field values at once (dict of field_id to value).
 
-    More efficient than repeated sap_set_field calls."""
+    More efficient than repeated sap_set_field calls.
+
+    Args:
+        fields: Dict mapping field_id -> value.
+        validate: Press Enter after setting fields and return status-bar
+            feedback. Skipped when no fields were actually set.
+        skip_readonly: Silently skip fields whose element reports
+            Changeable == False instead of counting them as failures.
+    """
     _check_write()
     for fid, val in fields.items():
         _check_okcode_bypass(fid, str(val))
     c = _ctrl(ctx)
-    return await _com(lambda: c.set_batch_fields(fields))
+    return await _com(
+        lambda: c.set_batch_fields(
+            fields, skip_readonly=skip_readonly, validate=validate,
+        )
+    )
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)

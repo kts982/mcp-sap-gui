@@ -453,6 +453,20 @@ sap_send_key("Execute")
 data = sap_read_table("wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS")
 ```
 
+### Batch Fill And Validate A Form
+
+```python
+sap_set_batch_fields(
+    {
+        "wnd[0]/usr/ctxtFIELD1": "VALUE1",
+        "wnd[0]/usr/txtFIELD2": "VALUE2",
+    },
+    validate=True,
+    skip_readonly=True,
+)
+# Returns per-field results plus post-Enter screen feedback
+```
+
 ## Project Structure
 
 ```
