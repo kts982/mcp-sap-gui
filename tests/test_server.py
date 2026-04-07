@@ -49,6 +49,17 @@ def readonly_srv(mock_win32com):
 class TestTransactionBlocking:
     """Tests for _is_transaction_blocked with removeprefix fix."""
 
+    def test_normalize_transaction_code_strips_prefixes(self, srv):
+        """Transaction normalization strips command prefixes before policy checks."""
+        assert srv._normalize_transaction_code(" /nMM03 ") == "MM03"
+        assert srv._normalize_transaction_code("/o/scwm/mon") == "/SCWM/MON"
+        assert srv._normalize_transaction_code("/*SE16N") == "SE16N"
+
+    def test_normalize_transaction_code_rejects_invalid_shapes(self, srv):
+        """Clearly malformed transaction inputs are rejected."""
+        with pytest.raises(ValueError, match="Invalid SAP transaction code"):
+            srv._normalize_transaction_code("MM03; DELETE")
+
     def test_blocked_transaction_direct(self, srv):
         """Default blocklist blocks SU01."""
         assert srv._is_transaction_blocked("SU01") is True
@@ -99,7 +110,11 @@ class TestTransactionBlocking:
 
     def test_all_default_blocked(self, srv):
         """All default blocked transactions are correctly blocked."""
-        blocked = ["SU01", "SU10", "SU01D", "PFCG", "SU53", "SM21", "ST22", "SE16N"]
+        blocked = [
+            "SU01", "SU10", "SU01D", "PFCG", "SU53", "SM21", "ST22", "SE16N",
+            "SE38", "SA38", "SE80", "STMS", "SCC4", "RZ10", "RZ11",
+            "SM36", "SM49", "SM59", "SM69",
+        ]
         for tcode in blocked:
             assert srv._is_transaction_blocked(tcode) is True, f"{tcode} should be blocked"
 
@@ -122,6 +137,15 @@ class TestTransactionBlocking:
         assert _srv._is_transaction_blocked("/OMM03") is False
         assert _srv._is_transaction_blocked("/NVA01") is True
 
+    def test_allowlist_normalizes_prefixed_entries(self, mock_win32com):
+        """Allowed transaction config entries are normalized on load."""
+        import mcp_sap_gui.server as _srv
+        _srv.config = _srv.ServerConfig(allowed_transactions=[" /nmm03 ", "/o/scwm/mon"])
+
+        assert _srv.config.allowed_transactions == ["MM03", "/SCWM/MON"]
+        assert _srv._is_transaction_blocked("MM03") is False
+        assert _srv._is_transaction_blocked("/n/scwm/mon") is False
+
     def test_allowlist_case_insensitive(self, mock_win32com):
         """Allowlist is case-insensitive via __post_init__ normalization."""
         import mcp_sap_gui.server as _srv
@@ -139,6 +163,15 @@ class TestTransactionBlocking:
         assert _srv._is_transaction_blocked("SU01") is True
         assert _srv._is_transaction_blocked("SE16N") is True
 
+    def test_blocklist_normalizes_prefixed_entries(self, mock_win32com):
+        """Blocked transaction config entries are normalized on load."""
+        import mcp_sap_gui.server as _srv
+        _srv.config = _srv.ServerConfig(blocked_transactions=[" /nse80 ", "/o/scwm/mon"])
+
+        assert _srv.config.blocked_transactions == ["SE80", "/SCWM/MON"]
+        assert _srv._is_transaction_blocked("SE80") is True
+        assert _srv._is_transaction_blocked("/n/scwm/mon") is True
+
     def test_blocked_transaction_raises_valueerror(self, srv):
         """sap_execute_transaction raises ValueError (not returns dict) for blocked tcodes."""
         ctx = _make_mock_ctx()
@@ -148,6 +181,20 @@ class TestTransactionBlocking:
                 srv.sap_execute_transaction("SU01", ctx)
             )
 
+    def test_allowlist_violation_raises_specific_error(self, mock_win32com):
+        """Allowlist denials should mention the allowlist rather than the blocklist."""
+        import asyncio
+        import mcp_sap_gui.server as _srv
+
+        _srv._session_mgr = SessionManager()
+        _srv.config = _srv.ServerConfig(allowed_transactions=["MM03"])
+        ctx = _make_mock_ctx()
+
+        with pytest.raises(ValueError, match="not in the allowed transaction list"):
+            asyncio.new_event_loop().run_until_complete(
+                _srv.sap_execute_transaction("VA03", ctx)
+            )
+
 
 # ===========================================================================
 # OK-Code Bypass Prevention Tests
@@ -155,6 +202,13 @@ class TestTransactionBlocking:
 
 class TestOkCodeBypassPrevention:
     """Tests for preventing transaction blocklist bypass via OK-code field."""
+
+    def test_is_okcode_field_matches_known_aliases(self, srv):
+        """Alternate command-field names should also be treated as OK-code fields."""
+        assert srv._is_okcode_field("wnd[0]/tbar[0]/okcd") is True
+        assert srv._is_okcode_field("wnd[0]/usr/txtOK_CODE") is True
+        assert srv._is_okcode_field("/app/con[0]/ses[0]/wnd[0]/usr/ctxtCOMMAND_CODE") is True
+        assert srv._is_okcode_field("wnd[0]/usr/txtMATNR") is False
 
     @pytest.mark.asyncio
     async def test_set_field_blocks_su01_on_okcd(self, srv):
@@ -177,6 +231,15 @@ class TestOkCodeBypassPrevention:
                 "/app/con[0]/ses[0]/wnd[0]/tbar[0]/OKCD",
                 "/nSU01",
             )
+
+    def test_check_okcode_bypass_matches_alternate_command_fields(self, srv):
+        """Alternate command-field names should also be protected."""
+        with pytest.raises(ValueError, match="blocked by security policy"):
+            srv._check_okcode_bypass("wnd[0]/usr/txtOK_CODE", "/nSU01")
+
+    def test_check_okcode_bypass_ignores_non_transaction_values(self, srv):
+        """Normal text entered into command-like fields should not trigger policy parsing."""
+        srv._check_okcode_bypass("wnd[0]/usr/txtOK_CODE", "find this value")
 
     @pytest.mark.asyncio
     async def test_set_field_allows_mm03_on_okcd(self, srv):
@@ -1421,6 +1484,8 @@ class TestServerConfig:
         assert config.allowed_transactions is None
         assert "SU01" in config.blocked_transactions
         assert "SE16N" in config.blocked_transactions
+        assert "SE80" in config.blocked_transactions
+        assert "SM49" in config.blocked_transactions
         assert config.max_table_rows == 500
         assert config.default_language == "EN"
 
@@ -1429,6 +1494,18 @@ class TestServerConfig:
         from mcp_sap_gui.server import ServerConfig
         config = ServerConfig(read_only=True)
         assert config.read_only is True
+
+    def test_config_normalizes_transaction_lists(self, mock_win32com):
+        """Config normalization should canonicalize allow/block transaction lists."""
+        from mcp_sap_gui.server import ServerConfig
+
+        config = ServerConfig(
+            allowed_transactions=[" /nmm03 ", "/o/scwm/mon"],
+            blocked_transactions=[" /nse80 ", "/o/scwm/prdi"],
+        )
+
+        assert config.allowed_transactions == ["MM03", "/SCWM/MON"]
+        assert config.blocked_transactions == ["SE80", "/SCWM/PRDI"]
 
 
 # ===========================================================================

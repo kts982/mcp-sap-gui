@@ -21,6 +21,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional
@@ -46,6 +47,90 @@ from .session_manager import SessionManager
 logger = logging.getLogger(__name__)
 
 
+_DEFAULT_BLOCKED_TRANSACTIONS = [
+    "SU01", "SU10", "SU01D",  # User administration
+    "PFCG", "SU53",           # Role administration
+    "SM21", "ST22",           # System logs / dumps
+    "SE16N",                  # Direct table maintenance
+    "SE38", "SA38", "SE80",   # ABAP editor / program execution
+    "STMS",                   # Transport management
+    "SCC4",                   # Client administration
+    "RZ10", "RZ11",           # Profile parameters
+    "SM36",                   # Background jobs
+    "SM49", "SM69",           # OS command execution
+    "SM59",                   # RFC destination config
+]
+
+_TRANSACTION_PREFIX_RE = re.compile(r"^(?:/(?:N|O|\*)\s*)+", re.IGNORECASE)
+_TRANSACTION_CODE_RE = re.compile(r"^/?[A-Z0-9_]+(?:/[A-Z0-9_]+)*$")
+_COMMAND_FIELD_EXACT_NAMES = {
+    "okcd",
+    "okcode",
+    "okcodefield",
+    "okcodeinput",
+    "ok_code",
+    "tcode",
+    "transaction",
+    "transactioncode",
+    "transaction_code",
+    "command",
+    "commandcode",
+    "command_code",
+}
+_COMMAND_FIELD_PREFIXES = ("txt", "ctxt", "pwd", "cmb")
+
+
+def _normalize_transaction_code(raw: str, *, strict: bool = True) -> str | None:
+    """Normalize an SAP transaction code for policy checks.
+
+    Strips command prefixes such as ``/n`` or ``/o``, preserves slash-style
+    transactions like ``/SCWM/MON``, uppercases the result, and optionally
+    validates the remaining shape.
+    """
+    if not isinstance(raw, str):
+        if strict:
+            raise ValueError("Transaction code must be a string")
+        return None
+
+    value = raw.strip().upper()
+    if not value:
+        if strict:
+            raise ValueError("Transaction code cannot be empty")
+        return None
+
+    while value.startswith("="):
+        value = value[1:].lstrip()
+    value = _TRANSACTION_PREFIX_RE.sub("", value).strip()
+    if not value:
+        if strict:
+            raise ValueError("Transaction code cannot be empty")
+        return None
+
+    if not _TRANSACTION_CODE_RE.fullmatch(value):
+        if strict:
+            raise ValueError(
+                f"Invalid SAP transaction code: {raw!r}. "
+                "Expected forms like 'MM03', 'VA03', or '/SCWM/MON'."
+            )
+        return None
+    return value
+
+
+def _normalize_transaction_list(codes: Optional[List[str]]) -> Optional[List[str]]:
+    """Normalize and de-duplicate a list of transaction codes."""
+    if codes is None:
+        return None
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for code in codes:
+        canonical = _normalize_transaction_code(code)
+        if canonical not in seen:
+            seen.add(canonical)
+            normalized.append(canonical)
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -57,12 +142,9 @@ class ServerConfig:
     # Security settings
     read_only: bool = False
     allowed_transactions: Optional[List[str]] = None  # None = all allowed
-    blocked_transactions: List[str] = field(default_factory=lambda: [
-        "SU01", "SU10", "SU01D",  # User administration
-        "PFCG", "SU53",           # Role administration
-        "SM21", "ST22",           # System logs
-        "SE16N",                  # Table maintenance
-    ])
+    blocked_transactions: List[str] = field(
+        default_factory=lambda: list(_DEFAULT_BLOCKED_TRANSACTIONS)
+    )
 
     # Behavior settings
     auto_connect_existing: bool = True
@@ -70,9 +152,8 @@ class ServerConfig:
     max_table_rows: int = 500
 
     def __post_init__(self):
-        self.blocked_transactions = [t.upper() for t in self.blocked_transactions]
-        if self.allowed_transactions is not None:
-            self.allowed_transactions = [t.upper() for t in self.allowed_transactions]
+        self.blocked_transactions = _normalize_transaction_list(self.blocked_transactions) or []
+        self.allowed_transactions = _normalize_transaction_list(self.allowed_transactions)
 
 
 # ---------------------------------------------------------------------------
@@ -407,37 +488,79 @@ def _check_write():
         raise ValueError("Write operations disabled in read-only mode")
 
 
+def _is_transaction_allowed(tcode: str) -> tuple[bool, str]:
+    """Return allow/deny decision plus the canonical transaction code."""
+    canonical = _normalize_transaction_code(tcode)
+    if canonical in config.blocked_transactions:
+        return False, canonical
+    if config.allowed_transactions is not None and canonical not in config.allowed_transactions:
+        return False, canonical
+    return True, canonical
+
+
+def _enforce_transaction_policy(tcode: str, *, source: str = "transaction") -> str:
+    """Raise when a transaction is not permitted by the active policy."""
+    allowed, canonical = _is_transaction_allowed(tcode)
+    if allowed:
+        return canonical
+
+    if canonical in config.blocked_transactions:
+        raise ValueError(
+            f"Transaction {canonical} is blocked by security policy"
+            f"{f' (attempted via {source})' if source != 'transaction' else ''}"
+        )
+    raise ValueError(
+        f"Transaction {canonical} is not in the allowed transaction list"
+        f"{f' (attempted via {source})' if source != 'transaction' else ''}"
+    )
+
+
+def _compact_command_field_name(field_id: str) -> str:
+    """Return a normalized field leaf name for OK-code detection."""
+    if not isinstance(field_id, str):
+        return ""
+
+    normalized = field_id.replace("\\", "/").strip()
+    if "wnd[" in normalized:
+        normalized = "wnd[" + normalized.split("wnd[", 1)[1]
+    leaf = normalized.rsplit("/", 1)[-1].lower()
+    for prefix in _COMMAND_FIELD_PREFIXES:
+        if leaf.startswith(prefix) and len(leaf) > len(prefix):
+            leaf = leaf[len(prefix):]
+            break
+    return re.sub(r"[^a-z0-9]", "", leaf)
+
+
 def _is_okcode_field(field_id: str) -> bool:
-    """Return True when a field ID targets an SAP command field."""
-    normalized = field_id.replace("\\", "/").strip().lower()
-    return normalized.endswith("/okcd")
+    """Return True when a field ID likely targets an SAP command field."""
+    compact = _compact_command_field_name(field_id)
+    if not compact:
+        return False
+    if compact in {name.replace("_", "") for name in _COMMAND_FIELD_EXACT_NAMES}:
+        return True
+    return (
+        compact.endswith("okcd")
+        or compact.endswith("okcode")
+        or compact.endswith("tcode")
+        or "commandcode" in compact
+        or "transactioncode" in compact
+    )
 
 
 def _check_okcode_bypass(field_id: str, value: str):
     """Block attempts to execute blocked transactions via the OK-code field."""
-    if _is_okcode_field(field_id) and _is_transaction_blocked(value):
-        raise ValueError(
-            f"Transaction {value} is blocked by security policy "
-            f"(attempted via OK-code field)"
-        )
+    if not _is_okcode_field(field_id):
+        return
+    candidate = _normalize_transaction_code(value, strict=False)
+    if candidate is None:
+        return
+    _enforce_transaction_policy(candidate, source="command field")
 
 
 def _is_transaction_blocked(tcode: str) -> bool:
     """Check if a transaction is blocked by security policy."""
-    tcode_upper = (
-        tcode.strip().upper()
-        .removeprefix("/N").removeprefix("/O").removeprefix("/*")
-    )
-
-    # Check blocklist
-    if tcode_upper in config.blocked_transactions:
-        return True
-
-    # Check allowlist if configured
-    if config.allowed_transactions is not None:
-        return tcode_upper not in config.allowed_transactions
-
-    return False
+    allowed, _ = _is_transaction_allowed(tcode)
+    return not allowed
 
 
 _KEY_MAP = {
@@ -586,8 +709,7 @@ async def sap_execute_transaction(tcode: str, ctx: Context) -> dict:
     Subject to transaction blocklist/allowlist. Use sap_get_session_info
     to see the current transaction before navigating away."""
     _check_write()
-    if _is_transaction_blocked(tcode):
-        raise ValueError(f"Transaction {tcode} is blocked by security policy")
+    _enforce_transaction_policy(tcode)
     c = _ctrl(ctx)
     return await _com(lambda: c.execute_transaction(tcode))
 

@@ -20,7 +20,7 @@ Every tool is tagged `read` or `write`. Three profiles control which tools are v
 | Profile | Tags | What the agent can do |
 |---|---|---|
 | `exploration` | `read` | Observe only: inspect screens, read tables, take screenshots. Cannot interact or navigate. |
-| `operator` | `read`, `write` | Normal SAP work: navigate transactions, fill fields, press buttons. Transaction blocklist still applies, and save-key confirmation may still prompt the user. |
+| `operator` | `read`, `write` | Normal SAP work: navigate transactions, fill fields, press buttons. The built-in transaction policy still applies, and save-key confirmation may still prompt the user. |
 | `full` | `read`, `write` | All tools. Default. |
 
 Set the default profile at startup with `--profile operator`, or switch per-session with `sap_set_policy_profile`.
@@ -42,7 +42,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `SE80` |
+| `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active transaction policy |
 | `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, or `Save`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients |
 | `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window |
 

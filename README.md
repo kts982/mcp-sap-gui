@@ -20,7 +20,7 @@ Current release target: `0.1.0` alpha for local Windows use over MCP `stdio`.
 
 This server allows AI assistants to:
 - Connect to SAP systems (like double-clicking in SAP Logon Pad)
-- Execute transactions (MM03, VA01, SE80, etc.)
+- Execute transactions (MM03, VA01, /SCWM/MON, etc.)
 - Read and write screen fields, checkboxes, radio buttons, comboboxes, and tabs
 - Select menu items from the menu bar (Table View, Edit, Selection, etc.)
 - Navigate through SAP screens using keyboard keys and buttons
@@ -367,14 +367,15 @@ This server provides powerful automation capabilities. **Use responsibly.**
 1. **Transaction Blocklist** - Sensitive transactions blocked by default:
    - `SU01`, `SU10`, `SU01D` (User administration)
    - `PFCG` (Role administration)
-   - `SE16N` (Direct table access)
+   - `SE16N`, `SE38`, `SA38`, `SE80` (Direct table/program access)
+   - `STMS`, `SCC4`, `RZ10`, `RZ11`, `SM36`, `SM49`, `SM59`, `SM69` (high-risk admin/system actions)
    - Case-insensitive matching; handles `/n`, `/o`, `/*` prefixes and whitespace
 
-2. **OK-Code Bypass Prevention** - Setting the OK-code field (`tbar[0]/okcd`) to a blocked transaction is also blocked, preventing circumvention of the transaction blocklist
+2. **OK-Code Bypass Prevention** - Setting likely SAP command fields such as `tbar[0]/okcd`, `txtOK_CODE`, or similar command-code aliases to a blocked transaction is also blocked, preventing circumvention of the transaction policy
 
 3. **Read-Only Mode** - `--read-only` flag disables all mutating operations (field writes, button presses, transaction execution, key sends, tree/table interactions)
 
-4. **Transaction Whitelist** - `--allowed-transactions` limits to specific t-codes
+4. **Transaction Whitelist** - `--allowed-transactions` limits execution to specific approved t-codes. This is the recommended production mode.
 
 5. **Policy Profiles** - `--profile` controls which tools are visible: `exploration` (read-only), `operator` (read + write), `full` (all, default). Profiles can also be switched per-session via `sap_set_policy_profile`
 
