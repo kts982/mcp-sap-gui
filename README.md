@@ -386,6 +386,8 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 9. **Secure Credential Resolution** - `sap_connect` resolves credentials from a `.env` file (`SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT`, `SAP_LANGUAGE`). Passwords are never accepted as MCP tool parameters and never appear in client logs, tool-call history, or audit logs. Copy `.env.example` to `.env` to get started
 
+10. **ID Validation And Normalization** - User-supplied SAP window and element IDs are validated before `findById()` is called. Standard IDs like `wnd[0]/usr/...` are accepted, and full session paths like `/app/con[0]/ses[0]/wnd[0]/usr/...` are normalized to the short form automatically.
+
 ### Recommendations for Production Use
 
 - **Never expose to untrusted users**

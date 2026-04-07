@@ -7,6 +7,12 @@ Two practical rules:
 - Start with discovery instead of guessing IDs.
 - Start table work with `sap_read_table`, then branch into ALV- or TableControl-specific tools as needed.
 
+ID handling:
+
+- Pass normal SAP GUI IDs such as `wnd[0]/usr/...`, `wnd[0]/tbar[1]/btn[8]`, or `wnd[0]/mbar/menu[3]/menu[0]`.
+- Full session paths such as `/app/con[0]/ses[0]/wnd[0]/usr/...` are accepted and normalized automatically.
+- Malformed IDs are rejected before they reach SAP GUI scripting.
+
 ## Policy Profiles
 
 Every tool is tagged `read` or `write`. Three profiles control which tools are visible:

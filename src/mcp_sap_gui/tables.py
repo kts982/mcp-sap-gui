@@ -159,7 +159,7 @@ class TablesMixin:
             col_filter = [c.strip() for c in columns.split(",") if c.strip()]
 
         try:
-            table = self._session.findById(table_id)
+            table = self._find_element(table_id)
             if getattr(table, 'Type', '') == "GuiTableControl":
                 return self._read_table_control(
                     table, table_id, max_rows, col_filter, columns_only, start_row,
@@ -350,7 +350,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            grid = self._session.findById(grid_id)
+            grid = self._find_element(grid_id)
             button_count = grid.ToolbarButtonCount
 
             buttons = []
@@ -411,7 +411,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            grid = self._session.findById(grid_id)
+            grid = self._find_element(grid_id)
 
             # Try PressToolbarContextButton first (works for Menu/ButtonAndMenu)
             # Fall back to PressToolbarButton for regular buttons
@@ -474,7 +474,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            grid = self._session.findById(grid_id)
+            grid = self._find_element(grid_id)
             select_mode = (select_by or "auto").lower()
 
             # Open context menu first if toolbar button specified
@@ -540,7 +540,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(table_id)
+            table = self._find_element(table_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 # Scroll is best-effort — GetAbsoluteRow uses absolute
@@ -578,7 +578,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(table_id)
+            table = self._find_element(table_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 vis_row = self._scroll_table_control_to_row(table, row)
@@ -588,7 +588,7 @@ class TablesMixin:
                 cell.SetFocus()
                 # Send F2 to the window that owns this table
                 wnd_id = table_id.split("/usr")[0]
-                self._session.findById(wnd_id).sendVKey(VKey.F2)
+                self._find_window(wnd_id).sendVKey(VKey.F2)
             else:
                 table.DoubleClick(row, column)
 
@@ -622,7 +622,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(grid_id)
+            table = self._find_element(grid_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 vis_row = self._scroll_table_control_to_row(table, row)
@@ -661,7 +661,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(grid_id)
+            table = self._find_element(grid_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 vis_row = self._scroll_table_control_to_row(table, row)
@@ -699,7 +699,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(grid_id)
+            table = self._find_element(grid_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 columns = self._get_table_control_columns(table)
@@ -760,7 +760,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(table_id)
+            table = self._find_element(table_id)
             if getattr(table, 'Type', '') != "GuiTableControl":
                 return {
                     "table_id": table_id,
@@ -823,7 +823,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(table_id)
+            table = self._find_element(table_id)
             if getattr(table, 'Type', '') != "GuiTableControl":
                 return {"table_id": table_id, "error": "Not a GuiTableControl"}
 
@@ -872,7 +872,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(table_id)
+            table = self._find_element(table_id)
             if getattr(table, 'Type', '') != "GuiTableControl":
                 return {"table_id": table_id, "error": "Not a GuiTableControl"}
 
@@ -912,7 +912,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            grid = self._session.findById(grid_id)
+            grid = self._find_element(grid_id)
             info: Dict[str, Any] = {
                 "grid_id": grid_id,
                 "row": row,
@@ -955,7 +955,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            grid = self._session.findById(grid_id)
+            grid = self._find_element(grid_id)
             grid.PressColumnHeader(column)
             return {
                 "grid_id": grid_id,
@@ -983,7 +983,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            grid = self._session.findById(grid_id)
+            grid = self._find_element(grid_id)
             grid.SelectAll()
             return {"grid_id": grid_id, "status": "all_selected"}
         except Exception as e:
@@ -1008,7 +1008,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(table_id)
+            table = self._find_element(table_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 return {
@@ -1057,7 +1057,7 @@ class TablesMixin:
         self._require_session()
 
         try:
-            table = self._session.findById(table_id)
+            table = self._find_element(table_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 for row in rows:

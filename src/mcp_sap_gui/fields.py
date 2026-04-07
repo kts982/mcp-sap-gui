@@ -34,7 +34,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            element = self._session.findById(field_id)
+            element = self._find_element(field_id)
 
             result: Dict[str, Any] = {
                 "field_id": field_id,
@@ -92,7 +92,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            element = self._session.findById(field_id)
+            element = self._find_element(field_id)
             element.text = value
 
             logger.debug("Set %s = %s", field_id, self._mask_field_value(field_id, value))
@@ -121,7 +121,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            self._session.findById(button_id).press()
+            self._find_element(button_id).press()
 
             logger.debug(f"Pressed button: {button_id}")
             return {
@@ -149,7 +149,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            self._session.findById(menu_id).Select()
+            self._find_element(menu_id).Select()
 
             return {
                 "menu_id": menu_id,
@@ -174,7 +174,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            element = self._session.findById(checkbox_id)
+            element = self._find_element(checkbox_id)
             element.selected = selected
 
             return {
@@ -202,7 +202,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            element = self._session.findById(radio_id)
+            element = self._find_element(radio_id)
             element.Select()
 
             return {
@@ -233,7 +233,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            combobox = self._session.findById(combobox_id)
+            combobox = self._find_element(combobox_id)
 
             # Try setting key directly first
             try:
@@ -283,7 +283,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            tab = self._session.findById(tab_id)
+            tab = self._find_element(tab_id)
             tab.Select()
 
             return {
@@ -314,7 +314,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            combo = self._session.findById(combobox_id)
+            combo = self._find_element(combobox_id)
             entries = []
             for i in range(combo.Entries.Count):
                 entry = combo.Entries(i)
@@ -366,7 +366,7 @@ class FieldsMixin:
         skipped = 0
         for field_id, value in fields.items():
             try:
-                element = self._session.findById(field_id)
+                element = self._find_element(field_id)
                 if skip_readonly and not getattr(element, "Changeable", True):
                     results[field_id] = "skipped: read-only"
                     skipped += 1
@@ -413,7 +413,7 @@ class FieldsMixin:
         highlighted: List[str] = []
         for field_id in succeeded_ids:
             try:
-                element = self._session.findById(field_id)
+                element = self._find_element(field_id)
                 if getattr(element, "Highlighted", False):
                     highlighted.append(field_id)
             except Exception:
@@ -443,7 +443,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            textedit = self._session.findById(textedit_id)
+            textedit = self._find_element(textedit_id)
             line_count = textedit.LineCount
 
             read_count = line_count
@@ -493,7 +493,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            textedit = self._session.findById(textedit_id)
+            textedit = self._find_element(textedit_id)
             try:
                 textedit.Text = text
             except Exception:
@@ -524,7 +524,7 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            self._session.findById(element_id).SetFocus()
+            self._find_element(element_id).SetFocus()
             return {"element_id": element_id, "status": "success"}
         except Exception as e:
             return self._error_result(

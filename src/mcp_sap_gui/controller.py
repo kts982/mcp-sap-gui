@@ -21,6 +21,15 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
+_WINDOW_ID_RE = re.compile(r"^wnd\[(\d+)\]$")
+_NORMALIZED_WND_PATH_RE = re.compile(r"(?:^|/)(wnd\[\d+\].*)$")
+_ELEMENT_ID_RE = re.compile(
+    r"^wnd\[(\d+)\]"
+    r"(?:/(?:usr|mbar|sbar|tbar\[\d+\])"
+    r"(?:/[A-Za-z0-9_.:%\\-]+(?:\[[A-Za-z0-9_,]+\])*)*)$"
+)
+
+
 class SAPGUIControllerBase:
     """
     Base controller for SAP GUI Scripting API via COM automation.
@@ -97,10 +106,52 @@ class SAPGUIControllerBase:
     def _normalize_window_id(self, window_id: Any) -> str:
         """Normalize SAP window IDs to the short form used by findById()."""
         if not isinstance(window_id, str):
-            return "wnd[0]"
-        if "wnd[" in window_id:
-            return "wnd[" + window_id.split("wnd[", 1)[1]
+            raise ValueError("SAP window ID must be a string like 'wnd[0]'")
+        window_id = window_id.strip()
+        match = _NORMALIZED_WND_PATH_RE.search(window_id)
+        if match:
+            return match.group(1)
         return window_id
+
+    def _normalize_element_id(self, element_id: Any) -> str:
+        """Normalize SAP element IDs to the short form used by findById()."""
+        if not isinstance(element_id, str):
+            raise ValueError("SAP element ID must be a string like 'wnd[0]/usr/...'")
+        element_id = element_id.strip()
+        match = _NORMALIZED_WND_PATH_RE.search(element_id)
+        if match:
+            return match.group(1)
+        return element_id
+
+    def _validate_window_id(self, window_id: Any) -> str:
+        """Validate a user-supplied SAP window ID."""
+        normalized = self._normalize_window_id(window_id)
+        if not _WINDOW_ID_RE.fullmatch(normalized):
+            raise ValueError(
+                f"Invalid SAP window ID: {window_id!r}. Expected format like 'wnd[0]'."
+            )
+        return normalized
+
+    def _validate_element_id(self, element_id: Any) -> str:
+        """Validate a user-supplied SAP element/container ID."""
+        normalized = self._normalize_element_id(element_id)
+        if not _ELEMENT_ID_RE.fullmatch(normalized):
+            raise ValueError(
+                "Invalid SAP element ID: "
+                f"{element_id!r}. Expected format like 'wnd[0]/usr/...', "
+                "'wnd[0]/mbar/...', 'wnd[0]/sbar', or 'wnd[0]/tbar[0]/...'."
+            )
+        return normalized
+
+    def _find_window(self, window_id: Any):
+        """Validate and resolve an SAP window by short ID."""
+        normalized = self._validate_window_id(window_id)
+        return self._session.findById(normalized)
+
+    def _find_element(self, element_id: Any):
+        """Validate and resolve an SAP element by short ID."""
+        normalized = self._validate_element_id(element_id)
+        return self._session.findById(normalized)
 
     def _is_sensitive_field_id(self, field_id: str) -> bool:
         """Return True when a field ID likely refers to a secret input."""
@@ -499,8 +550,9 @@ class SAPGUIControllerBase:
         self._require_session()
 
         try:
+            window = self._validate_window_id(window)
             logger.debug("Sending VKey %s to %s", vkey, window)
-            self._session.findById(window).sendVKey(vkey)
+            self._find_window(window).sendVKey(vkey)
             return {"vkey": vkey, "screen": self.get_screen_info()}
         except Exception as e:
             return self._error_result(

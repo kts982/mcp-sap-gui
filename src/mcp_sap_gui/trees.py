@@ -115,7 +115,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
 
             # Detect tree type (0=Simple, 1=List, 2=Column)
             tree_type = ""
@@ -260,7 +260,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
             tree.ExpandNode(node_key)
 
             return {
@@ -290,7 +290,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
             tree.CollapseNode(node_key)
 
             return {
@@ -320,7 +320,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
             tree.SelectNode(node_key)
 
             return {
@@ -350,7 +350,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
             tree.DoubleClickNode(node_key)
 
             return {
@@ -385,7 +385,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
             tree.DoubleClickItem(node_key, item_name)
 
             return {
@@ -422,7 +422,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
             tree.ClickLink(node_key, item_name)
 
             return {
@@ -505,7 +505,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
 
             # Get column info for text fallback
             column_names, _ = self._get_tree_column_info(tree)
@@ -598,7 +598,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
             column_names, _ = self._get_tree_column_info(tree)
 
             # Optionally expand first
@@ -716,7 +716,7 @@ class TreesMixin:
         self._require_session()
 
         try:
-            tree = self._session.findById(tree_id)
+            tree = self._find_element(tree_id)
             node_key = tree.FindNodeKeyByPath(path)
 
             return {

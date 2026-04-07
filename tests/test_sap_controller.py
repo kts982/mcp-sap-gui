@@ -310,7 +310,7 @@ class TestSearchTreeNodes:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.search_tree_nodes("tree1", "Warehouse")
+        result = controller.search_tree_nodes("wnd[0]/usr/tree", "Warehouse")
 
         assert result["total_matches"] == 1
         assert result["matches"][0]["key"] == "B"
@@ -324,7 +324,7 @@ class TestSearchTreeNodes:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.search_tree_nodes("tree1", "warehouse tasks")
+        result = controller.search_tree_nodes("wnd[0]/usr/tree", "warehouse tasks")
 
         assert result["total_matches"] == 1
         assert result["matches"][0]["key"] == "A"
@@ -340,7 +340,7 @@ class TestSearchTreeNodes:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.search_tree_nodes("tree1", "Warehouse Tasks")
+        result = controller.search_tree_nodes("wnd[0]/usr/tree", "Warehouse Tasks")
 
         assert result["total_matches"] == 1
         assert result["matches"][0]["path"] == "Root > Outbound > Documents > Warehouse Tasks"
@@ -360,7 +360,7 @@ class TestSearchTreeNodes:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.search_tree_nodes("tree1", "Warehouse Tasks")
+        result = controller.search_tree_nodes("wnd[0]/usr/tree", "Warehouse Tasks")
 
         assert result["total_matches"] == 2
         paths = [m["path"] for m in result["matches"]]
@@ -396,7 +396,7 @@ class TestSearchTreeNodes:
 
         controller._session.findById.return_value = mock_tree
 
-        result = controller.search_tree_nodes("tree1", "Active", column="STATUS")
+        result = controller.search_tree_nodes("wnd[0]/usr/tree", "Active", column="STATUS")
 
         # "Active" matches K1, "Inactive" also contains "Active"
         assert result["total_matches"] == 2
@@ -409,7 +409,7 @@ class TestSearchTreeNodes:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.search_tree_nodes("tree1", "Nonexistent")
+        result = controller.search_tree_nodes("wnd[0]/usr/tree", "Nonexistent")
 
         assert result["total_matches"] == 0
         assert result["matches"] == []
@@ -424,7 +424,7 @@ class TestSearchTreeNodes:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.search_tree_nodes("tree1", "Task", max_results=2)
+        result = controller.search_tree_nodes("wnd[0]/usr/tree", "Task", max_results=2)
 
         assert result["total_matches"] == 2
 
@@ -476,7 +476,7 @@ class TestGetTreeNodeChildren:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.get_tree_node_children("tree1")
+        result = controller.get_tree_node_children("wnd[0]/usr/tree")
 
         assert result["children_count"] == 2
         keys = [c["key"] for c in result["children"]]
@@ -495,7 +495,7 @@ class TestGetTreeNodeChildren:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.get_tree_node_children("tree1", node_key="R")
+        result = controller.get_tree_node_children("wnd[0]/usr/tree", node_key="R")
 
         assert result["children_count"] == 2
         keys = [c["key"] for c in result["children"]]
@@ -513,7 +513,7 @@ class TestGetTreeNodeChildren:
         controller._session.findById.return_value = mock_tree
         controller.get_screen_info = MagicMock(return_value={"transaction": "SPRO"})
 
-        result = controller.get_tree_node_children("tree1", node_key="R", expand=True)
+        result = controller.get_tree_node_children("wnd[0]/usr/tree", node_key="R", expand=True)
 
         mock_tree.ExpandNode.assert_called_once_with("R")
         assert "screen" in result
@@ -526,7 +526,7 @@ class TestGetTreeNodeChildren:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.get_tree_node_children("tree1")
+        result = controller.get_tree_node_children("wnd[0]/usr/tree")
 
         assert "screen" not in result
 
@@ -540,7 +540,7 @@ class TestGetTreeNodeChildren:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.get_tree_node_children("tree1", node_key="A")
+        result = controller.get_tree_node_children("wnd[0]/usr/tree", node_key="A")
 
         assert result["node_text"] == "EWM"
         assert result["path"] == "Root > EWM"
@@ -556,7 +556,7 @@ class TestGetTreeNodeChildren:
         ])
         controller._session.findById.return_value = mock_tree
 
-        result = controller.get_tree_node_children("tree1", node_key="L")
+        result = controller.get_tree_node_children("wnd[0]/usr/tree", node_key="L")
 
         assert result["children_count"] == 0
         assert result["children"] == []
@@ -571,7 +571,7 @@ class TestGetTreeNodeChildren:
         controller._session.findById.return_value = mock_tree
         controller.get_screen_info = MagicMock(return_value={"transaction": "SPRO"})
 
-        result = controller.get_tree_node_children("tree1", node_key="R", expand=True)
+        result = controller.get_tree_node_children("wnd[0]/usr/tree", node_key="R", expand=True)
 
         assert "expand_error" in result
         assert "not expandable" in result["expand_error"]
@@ -1364,6 +1364,59 @@ class TestActiveWindowImproved:
         hardcopy_target.HardCopy.assert_called_once_with(str(screenshot_path), "PNG")
         assert result["data"] == base64.b64encode(b"png-bytes").decode()
         assert not screenshot_path.exists()
+
+
+class TestElementIdValidation:
+    """Tests for SAP element/window ID normalization and validation."""
+
+    def _make_controller_with_session(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        return controller
+
+    def test_normalize_element_id_accepts_full_session_path(self):
+        """Full SAP GUI paths should normalize to the wnd[...] short form."""
+        controller = self._make_controller_with_session()
+
+        result = controller._normalize_element_id(
+            "/app/con[0]/ses[0]/wnd[0]/usr/txtFIELD"
+        )
+
+        assert result == "wnd[0]/usr/txtFIELD"
+
+    def test_read_field_rejects_invalid_element_id(self):
+        """Malformed field IDs should fail before reaching findById."""
+        controller = self._make_controller_with_session()
+
+        result = controller.read_field("bad-field-id")
+
+        assert "Invalid SAP element ID" in result["error"]
+        controller._session.findById.assert_not_called()
+
+    def test_send_vkey_rejects_invalid_window_id(self):
+        """Malformed window IDs should fail before reaching findById."""
+        controller = self._make_controller_with_session()
+
+        result = controller.send_vkey(0, "bad-window-id")
+
+        assert "Invalid SAP window ID" in result["error"]
+        controller._session.findById.assert_not_called()
+
+    def test_read_field_accepts_full_session_path(self):
+        """Full SAP GUI field paths should be normalized before lookup."""
+        controller = self._make_controller_with_session()
+        mock_field = MagicMock()
+        mock_field.Text = "100"
+        mock_field.Type = "GuiTextField"
+        mock_field.Name = "FIELD"
+        mock_field.Changeable = True
+        controller._session.findById.return_value = mock_field
+
+        result = controller.read_field("/app/con[0]/ses[0]/wnd[0]/usr/txtFIELD")
+
+        assert result["value"] == "100"
+        controller._session.findById.assert_called_once_with("wnd[0]/usr/txtFIELD")
 
 
 class TestDisconnectOwnership:
@@ -3507,7 +3560,7 @@ class TestGetScreenElementsFiltering:
         controller = self._make_controller_with_session()
         controller._session.findById.side_effect = Exception("not found")
 
-        with pytest.raises(SAPGUIError, match="wnd\\[0\\]/bad"):
+        with pytest.raises(ValueError, match="Invalid SAP element ID"):
             controller.get_screen_elements("wnd[0]/bad")
 
 
@@ -3547,7 +3600,7 @@ class TestReadTableFiltering:
         grid = self._make_alv_grid(["COL_A", "COL_B"], [["a1", "b1"], ["a2", "b2"]])
         controller._session.findById.return_value = grid
 
-        result = controller.read_table("grid1", columns_only=True)
+        result = controller.read_table("wnd[0]/usr/grid", columns_only=True)
 
         assert result["columns_only"] is True
         assert result["data"] == []
@@ -3565,7 +3618,7 @@ class TestReadTableFiltering:
         )
         controller._session.findById.return_value = grid
 
-        result = controller.read_table("grid1", columns="COL_A,COL_C")
+        result = controller.read_table("wnd[0]/usr/grid", columns="COL_A,COL_C")
 
         assert result["columns"] == ["COL_A", "COL_C"]
         assert len(result["column_info"]) == 2
@@ -3582,7 +3635,7 @@ class TestReadTableFiltering:
         )
         controller._session.findById.return_value = grid
 
-        result = controller.read_table("grid1", max_rows=2, start_row=2)
+        result = controller.read_table("wnd[0]/usr/grid", max_rows=2, start_row=2)
 
         assert result["start_row"] == 2
         assert result["rows_returned"] == 2
@@ -3596,7 +3649,7 @@ class TestReadTableFiltering:
         grid = self._make_alv_grid(["COL"], [["v0"], ["v1"]])
         controller._session.findById.return_value = grid
 
-        result = controller.read_table("grid1", start_row=10)
+        result = controller.read_table("wnd[0]/usr/grid", start_row=10)
 
         assert result["rows_returned"] == 0
         assert result["data"] == []
@@ -3657,7 +3710,7 @@ class TestReadTableFiltering:
         mock_table = self._make_table_control(cols, [["a1", "b1"]])
         controller._session.findById.return_value = mock_table
 
-        result = controller.read_table("tbl1", columns_only=True)
+        result = controller.read_table("wnd[0]/usr/tblTEST", columns_only=True)
 
         assert result["columns_only"] is True
         assert result["data"] == []
@@ -3678,7 +3731,7 @@ class TestReadTableFiltering:
         )
         controller._session.findById.return_value = mock_table
 
-        result = controller.read_table("tbl1", columns="COL_A,COL_C")
+        result = controller.read_table("wnd[0]/usr/tblTEST", columns="COL_A,COL_C")
 
         assert result["columns"] == ["COL_A", "COL_C"]
         assert len(result["column_info"]) == 2
@@ -3696,7 +3749,7 @@ class TestReadTableFiltering:
         )
         controller._session.findById.return_value = mock_table
 
-        result = controller.read_table("tbl1", max_rows=3, start_row=10)
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=3, start_row=10)
 
         # Verify scroll was requested
         assert mock_table.VerticalScrollbar.Position == 10
@@ -3710,7 +3763,7 @@ class TestReadTableFiltering:
         grid = self._make_alv_grid(["COL"], [["v0"], ["v1"]])
         controller._session.findById.return_value = grid
 
-        result = controller.read_table("grid1", start_row=-5)
+        result = controller.read_table("wnd[0]/usr/grid", start_row=-5)
 
         assert result["start_row"] == 0
         assert result["rows_returned"] == 2
@@ -3730,7 +3783,7 @@ class TestReadTableFiltering:
 
         # Filter to only OPT — should still return 3 rows because
         # padding detection checks all columns
-        result = controller.read_table("tbl1", columns="OPT")
+        result = controller.read_table("wnd[0]/usr/tblTEST", columns="OPT")
 
         assert result["rows_returned"] == 3
 

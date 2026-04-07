@@ -353,7 +353,7 @@ class DiscoveryMixin:
         # Press the button or send fallback VKey
         if btn is not None:
             try:
-                self._session.findById(btn["id"]).press()
+                self._find_element(btn["id"]).press()
             except Exception as e:
                 popup["action"] = "error"
                 popup["error"] = f"Failed to press button: {e}"
@@ -363,7 +363,7 @@ class DiscoveryMixin:
         else:
             # Fallback: send VKey to the popup window
             try:
-                self._session.findById(popup_id).sendVKey(fallback_vkey)
+                self._find_window(popup_id).sendVKey(fallback_vkey)
             except Exception as e:
                 popup["action"] = "error"
                 popup["error"] = f"Failed to send key: {e}"
@@ -407,11 +407,12 @@ class DiscoveryMixin:
         """
         self._require_session()
 
+        normalized_window_id = self._validate_window_id(window_id)
         toolbars: Dict[str, list] = {}
         for tbar_idx, tbar_name in [(0, "system_toolbar"), (1, "application_toolbar")]:
             buttons = []
             try:
-                tbar = self._session.findById(f"{window_id}/tbar[{tbar_idx}]")
+                tbar = self._find_element(f"{normalized_window_id}/tbar[{tbar_idx}]")
                 for i in range(tbar.Children.Count):
                     btn = tbar.Children(i)
                     btype = getattr(btn, 'Type', '')
@@ -428,7 +429,7 @@ class DiscoveryMixin:
                 toolbars[tbar_name] = buttons
 
         return {
-            "window_id": window_id,
+            "window_id": normalized_window_id,
             "toolbars": toolbars,
         }
 
@@ -453,7 +454,7 @@ class DiscoveryMixin:
         self._require_session()
 
         try:
-            shell = self._session.findById(shell_id)
+            shell = self._find_element(shell_id)
             shell_type = getattr(shell, 'Type', '')
             sub_type = getattr(shell, 'SubType', '')
 
@@ -520,13 +521,15 @@ class DiscoveryMixin:
             type_filter_set = {t.strip() for t in type_filter.split(",") if t.strip()}
 
         try:
-            container = self._session.findById(container_id)
+            container = self._find_element(container_id)
             elements = self._enumerate_elements(
                 container, max_depth,
                 type_filter_set=type_filter_set,
                 changeable_only=changeable_only,
             )
             return elements
+        except ValueError:
+            raise
         except Exception as e:
             logger.warning(
                 "Failed to enumerate elements in %s: %s",
@@ -642,7 +645,7 @@ class DiscoveryMixin:
 
             # Find the topmost window (popups are wnd[1], wnd[2], etc.)
             window_id = self._find_topmost_window()
-            window = self._session.findById(window_id)
+            window = self._find_window(window_id)
             window.HardCopy(filepath, "PNG")
 
             # Optimize image size with Pillow if available
