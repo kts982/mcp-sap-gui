@@ -2972,10 +2972,58 @@ class TestGetPopupWindow:
         result = controller.get_popup_window()
         assert result["popup_exists"] is True
         assert result["title"] == "Confirm Action"
+        assert result["classification"] == "confirmation"
+        assert result["recommended_action"] == "read"
         assert "texts" in result
         assert "Do you want to continue?" in result["texts"]
         assert len(result["buttons"]) >= 1
         assert result["buttons"][0]["text"] == "Yes"
+
+    def test_popup_input_required_classification(self):
+        """Selection-style popups are classified as input_required."""
+        controller = self._make_controller_with_session()
+
+        mock_popup = MagicMock()
+        mock_popup.Text = "Enter Values"
+
+        mock_usr = MagicMock()
+        label = MagicMock()
+        label.Type = "GuiLabel"
+        label.Text = "Select warehouse"
+        label.Children = MagicMock()
+        label.Children.Count = 0
+
+        field = MagicMock()
+        field.Type = "GuiCTextField"
+        field.Id = "wnd[1]/usr/ctxtLGNUM"
+        field.Name = "LGNUM"
+        field.Text = ""
+        field.Changeable = True
+        field.Children = MagicMock()
+        field.Children.Count = 0
+
+        mock_usr.Children.Count = 2
+        mock_usr.Children.side_effect = lambda i: [label, field][i]
+
+        def find_by_id(element_id):
+            if element_id == "wnd[1]":
+                return mock_popup
+            if element_id == "wnd[2]":
+                raise Exception("not found")
+            if element_id == "wnd[1]/sbar":
+                raise Exception("no sbar")
+            if element_id == "wnd[1]/usr":
+                return mock_usr
+            if element_id.startswith("wnd[1]/tbar"):
+                raise Exception("no toolbar")
+            raise Exception("not found")
+
+        controller._session.findById.side_effect = find_by_id
+
+        result = controller.get_popup_window()
+        assert result["classification"] == "input_required"
+        assert result["has_inputs"] is True
+        assert result["interactive_elements"][0]["id"] == "wnd[1]/usr/ctxtLGNUM"
 
 
 # ===========================================================================
@@ -3700,13 +3748,29 @@ class TestHandlePopup:
         controller._session = MagicMock(Busy=False)
         return controller
 
-    def _setup_popup(self, controller, buttons=None, texts=None):
+    def _setup_popup(
+        self,
+        controller,
+        buttons=None,
+        texts=None,
+        popup_title="Confirm Action",
+        interactive_elements=None,
+        close_on_action=False,
+    ):
         """Set up mock session so get_popup_window finds a popup on wnd[1]."""
+        popup_state = {"open": True}
         mock_wnd1 = MagicMock()
-        mock_wnd1.Text = "Confirm Action"
+        mock_wnd1.Text = popup_title
+
+        def _close_popup():
+            popup_state["open"] = False
+
+        if close_on_action:
+            mock_wnd1.sendVKey.side_effect = lambda *_args, **_kwargs: _close_popup()
 
         mock_usr = MagicMock()
         children = []
+        button_lookup = {}
         for t in (texts or []):
             lbl = MagicMock()
             lbl.Type = "GuiLabel"
@@ -3718,7 +3782,20 @@ class TestHandlePopup:
             btn.Id = b["id"]
             btn.Text = b.get("text", "")
             btn.Tooltip = b.get("tooltip", "")
+            if close_on_action:
+                btn.press.side_effect = lambda _btn=btn: _close_popup()
             children.append(btn)
+            button_lookup[btn.Id] = btn
+        for element in (interactive_elements or []):
+            field = MagicMock()
+            field.Type = element["type"]
+            field.Id = element["id"]
+            field.Name = element.get("name", "")
+            field.Text = element.get("text", "")
+            field.Changeable = element.get("changeable", True)
+            field.Children = MagicMock()
+            field.Children.Count = 0
+            children.append(field)
 
         col = MagicMock()
         col.Count = len(children)
@@ -3730,6 +3807,8 @@ class TestHandlePopup:
         mock_tbar.Children.Count = 0
 
         def find_by_id(elem_id):
+            if not popup_state["open"] and elem_id.startswith("wnd[1]"):
+                raise Exception(f"not found: {elem_id}")
             if elem_id == "wnd[1]":
                 return mock_wnd1
             if elem_id == "wnd[1]/usr":
@@ -3739,9 +3818,8 @@ class TestHandlePopup:
             if elem_id == "wnd[1]/sbar":
                 raise Exception("no sbar")
             # For button presses — return a pressable mock
-            for b in (buttons or []):
-                if elem_id == b["id"]:
-                    return MagicMock()
+            if elem_id in button_lookup:
+                return button_lookup[elem_id]
             # wnd[2] etc don't exist
             raise Exception(f"not found: {elem_id}")
 
@@ -3767,6 +3845,8 @@ class TestHandlePopup:
 
         assert result["popup_exists"] is True
         assert result["action"] == "read"
+        assert result["classification"] == "confirmation"
+        assert result["recommended_action"] == "read"
         assert "Save changes?" in result.get("texts", [])
 
     def test_confirm_finds_ok_button(self):
@@ -3824,6 +3904,45 @@ class TestHandlePopup:
 
         assert result["action"] == "pressed"
         assert result["button_pressed"] == "Discard"
+
+    def test_auto_confirms_informational_popup(self):
+        """Auto only acts when the popup is clearly informational."""
+        controller = self._make_controller_with_session()
+        self._setup_popup(
+            controller,
+            buttons=[{"id": "wnd[1]/usr/btn0", "text": "OK", "tooltip": ""}],
+            texts=["Information message"],
+            popup_title="Information",
+            close_on_action=True,
+        )
+        controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
+
+        result = controller.handle_popup("auto")
+
+        assert result["action_requested"] == "auto"
+        assert result["auto_decision"] == "confirm"
+        assert result["action"] == "confirmed"
+        assert result["popup_closed"] is True
+        assert result["popup_after"]["popup_exists"] is False
+
+    def test_auto_reads_confirmation_popup_without_pressing(self):
+        """Auto refuses to confirm risky confirmation popups on its own."""
+        controller = self._make_controller_with_session()
+        popup_window = self._setup_popup(
+            controller,
+            buttons=[
+                {"id": "wnd[1]/usr/btn0", "text": "Yes", "tooltip": ""},
+                {"id": "wnd[1]/usr/btn1", "text": "No", "tooltip": ""},
+            ],
+            texts=["Do you want to save changes?"],
+        )
+
+        result = controller.handle_popup("auto")
+
+        assert result["action_requested"] == "auto"
+        assert result["auto_decision"] == "read"
+        assert result["action"] == "read"
+        popup_window.sendVKey.assert_not_called()
 
     def test_press_not_found(self):
         """Press returns error when button text doesn't match."""

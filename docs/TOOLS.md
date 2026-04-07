@@ -101,8 +101,8 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_popup_window` | Read popup title, text, and buttons |
-| `sap_handle_popup` | Read and act on popups in one call (confirm, cancel, or press a specific button) |
+| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information or input-required dialogs |
+| `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification |
 | `sap_get_toolbar_buttons` | List standard SAP toolbar buttons |
 | `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers |
 
@@ -152,6 +152,8 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 1. Check `active_window` in tool responses
 2. If it is not `wnd[0]`, call `sap_get_popup_window`
+3. Use the popup `classification` before acting; `input_required` and risky `confirmation` popups should usually stay human- or agent-reviewed
+4. Use `sap_handle_popup(action="auto")` only for clearly informational popups you want dismissed safely
 
 ### Table Handling
 

@@ -16,6 +16,61 @@ logger = logging.getLogger(__name__)
 class DiscoveryMixin:
     """Mixin for discovery and inspection operations on SAP GUI screens."""
 
+    _POPUP_INTERACTIVE_TYPES = (
+        "GuiTextField",
+        "GuiCTextField",
+        "GuiPasswordField",
+        "GuiComboBox",
+        "GuiCheckBox",
+        "GuiRadioButton",
+        "GuiTableControl",
+        "GuiGridView",
+        "GuiTree",
+    )
+    _POPUP_ERROR_PATTERNS = (
+        "error",
+        "failed",
+        "cannot",
+        "can not",
+        "not possible",
+        "not found",
+        "does not exist",
+        "required",
+        "invalid",
+    )
+    _POPUP_INFO_PATTERNS = (
+        "information",
+        "info",
+        "success",
+        "completed",
+        "saved",
+        "created",
+        "displayed",
+    )
+    _POPUP_INPUT_PATTERNS = (
+        "enter",
+        "select",
+        "choose",
+        "specify",
+        "values",
+        "parameters",
+        "selection",
+        "organization",
+        "warehouse",
+        "plant",
+    )
+    _POPUP_CONFIRMATION_PATTERNS = (
+        "do you want",
+        "are you sure",
+        "save changes",
+        "discard",
+        "overwrite",
+        "delete",
+        "confirm",
+        "continue?",
+        "proceed",
+    )
+
     # =========================================================================
     # Popup Window Handling
     # =========================================================================
@@ -26,7 +81,8 @@ class DiscoveryMixin:
 
         SAP popups appear as wnd[1], wnd[2], etc.  Returns the topmost
         popup's title, text content, and available buttons so the AI can
-        decide how to respond.
+        decide how to respond, plus a coarse classification and safe
+        next-action hint.
 
         Returns:
             Dict with popup info or {"popup_exists": False}
@@ -65,9 +121,10 @@ class DiscoveryMixin:
         # Collect text elements and buttons from the user area
         texts = []
         buttons = []
+        interactive_elements = []
         try:
             usr = self._session.findById(f"{popup_id}/usr")
-            self._collect_popup_contents(usr, texts, buttons)
+            self._collect_popup_contents(usr, texts, buttons, interactive_elements)
         except Exception:
             pass
 
@@ -90,11 +147,21 @@ class DiscoveryMixin:
             result["texts"] = texts
         if buttons:
             result["buttons"] = buttons
+        if interactive_elements:
+            result["interactive_elements"] = interactive_elements
+            result["has_inputs"] = True
+        else:
+            result["has_inputs"] = False
 
-        return result
+        return self._classify_popup(result)
 
     def _collect_popup_contents(
-        self, container, texts: list, buttons: list, depth: int = 0,
+        self,
+        container,
+        texts: list,
+        buttons: list,
+        interactive_elements: list,
+        depth: int = 0,
     ) -> None:
         """Recursively collect text and buttons from a popup's user area."""
         if depth > 3:
@@ -111,6 +178,14 @@ class DiscoveryMixin:
                         "text": text,
                         "tooltip": getattr(child, 'Tooltip', '').strip(),
                     })
+                elif ctype in self._POPUP_INTERACTIVE_TYPES:
+                    interactive_elements.append({
+                        "id": child.Id,
+                        "type": ctype,
+                        "name": getattr(child, 'Name', ''),
+                        "text": text,
+                        "changeable": getattr(child, 'Changeable', None),
+                    })
                 elif text and ctype in (
                     'GuiTextField', 'GuiCTextField', 'GuiLabel',
                     'GuiTitlebar', 'GuiStatusbar',
@@ -121,12 +196,71 @@ class DiscoveryMixin:
                     try:
                         if child.Children.Count > 0:
                             self._collect_popup_contents(
-                                child, texts, buttons, depth + 1,
+                                child,
+                                texts,
+                                buttons,
+                                interactive_elements,
+                                depth + 1,
                             )
                     except Exception:
                         pass
         except Exception:
             pass
+
+    def _popup_text_blob(self, popup: Dict[str, Any]) -> str:
+        """Build a lowercase text blob from popup title/message/texts."""
+        parts = [
+            popup.get("title", ""),
+            popup.get("message", ""),
+            *popup.get("texts", []),
+        ]
+        return " ".join(part for part in parts if part).lower()
+
+    def _classify_popup(self, popup: Dict[str, Any]) -> Dict[str, Any]:
+        """Classify popup intent and suggest a safe next action."""
+        buttons = popup.get("buttons", [])
+        text_blob = self._popup_text_blob(popup)
+        message_type = popup.get("message_type", "")
+        has_inputs = popup.get("has_inputs", False)
+        has_confirm = self._match_button(buttons, self._CONFIRM_PATTERNS) is not None
+        has_cancel = self._match_button(buttons, self._CANCEL_PATTERNS) is not None
+
+        if message_type == "E" or any(p in text_blob for p in self._POPUP_ERROR_PATTERNS):
+            classification = "error"
+        elif has_inputs or any(p in text_blob for p in self._POPUP_INPUT_PATTERNS):
+            classification = "input_required"
+        elif (
+            any(p in text_blob for p in self._POPUP_CONFIRMATION_PATTERNS)
+            or ("?" in text_blob and (has_confirm or has_cancel))
+        ):
+            classification = "confirmation"
+        elif has_confirm and has_cancel:
+            classification = "confirmation"
+        elif (
+            message_type in ("S", "I")
+            or any(p in text_blob for p in self._POPUP_INFO_PATTERNS)
+            or (has_confirm and not has_cancel and not has_inputs)
+            or (has_cancel and not has_confirm and not has_inputs)
+        ):
+            classification = "information"
+        else:
+            classification = "unknown"
+
+        recommended_action = "read"
+        safe_auto_action = None
+        if classification == "information" and not has_inputs:
+            if has_confirm and not has_cancel:
+                recommended_action = "confirm"
+                safe_auto_action = "confirm"
+            elif has_cancel and not has_confirm:
+                recommended_action = "cancel"
+                safe_auto_action = "cancel"
+
+        popup["classification"] = classification
+        popup["recommended_action"] = recommended_action
+        if safe_auto_action is not None:
+            popup["safe_auto_action"] = safe_auto_action
+        return popup
 
     # =========================================================================
     # Popup Workflow
@@ -153,11 +287,11 @@ class DiscoveryMixin:
         """Read and optionally act on the current popup dialog.
 
         Args:
-            action: ``read``, ``confirm``, ``cancel``, or ``press``.
+            action: ``read``, ``confirm``, ``cancel``, ``press``, or ``auto``.
             button_text: required when *action* is ``press``.
 
         Returns:
-            Dict with popup content and action taken.
+            Dict with popup content, classification, and action taken.
         """
         self._require_session()
 
@@ -165,12 +299,21 @@ class DiscoveryMixin:
         if not popup.get("popup_exists"):
             return {"popup_exists": False, "action": "none"}
 
+        popup["action_requested"] = action
         popup_id = popup["window_id"]
         all_buttons = popup.get("buttons", [])
 
         if action == "read":
             popup["action"] = "read"
             return popup
+
+        if action == "auto":
+            decision = popup.get("safe_auto_action") or "read"
+            popup["auto_decision"] = decision
+            if decision == "read":
+                popup["action"] = "read"
+                return popup
+            action = decision
 
         if action == "press" and not button_text:
             raise ValueError(
@@ -204,7 +347,7 @@ class DiscoveryMixin:
                 return popup
         else:
             raise ValueError(
-                f"Invalid action '{action}'. Use read, confirm, cancel, or press."
+                f"Invalid action '{action}'. Use read, confirm, cancel, press, or auto."
             )
 
         # Press the button or send fallback VKey
@@ -233,6 +376,13 @@ class DiscoveryMixin:
         # Return updated screen state after the action
         try:
             popup["screen"] = self.get_screen_info()
+        except Exception:
+            pass
+
+        try:
+            popup_after = self.get_popup_window()
+            popup["popup_after"] = popup_after
+            popup["popup_closed"] = not popup_after.get("popup_exists", False)
         except Exception:
             pass
 

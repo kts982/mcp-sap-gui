@@ -1035,7 +1035,8 @@ async def sap_get_popup_window(ctx: Context) -> dict:
     """Check if a popup/modal dialog is open (wnd[1], wnd[2], etc.).
 
     Returns the popup's title, text content, and available buttons so
-    you know how to respond. Returns {popup_exists: false} if no popup."""
+    you know how to respond. Also classifies the popup and suggests a
+    safe next action. Returns {popup_exists: false} if no popup."""
     c = _ctrl(ctx)
     return await _com(c.get_popup_window)
 
@@ -1043,7 +1044,7 @@ async def sap_get_popup_window(ctx: Context) -> dict:
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_handle_popup(
     ctx: Context,
-    action: Literal["read", "confirm", "cancel", "press"] = "read",
+    action: Literal["read", "confirm", "cancel", "press", "auto"] = "read",
     button_text: str = "",
 ) -> dict:
     """Read and optionally act on the current popup/modal dialog.
@@ -1055,7 +1056,11 @@ async def sap_handle_popup(
     - read: return popup content without acting (default)
     - confirm: press OK/Yes/Continue/Enter on the popup
     - cancel: press Cancel/No/F12 on the popup
-    - press: press a specific button by its text or tooltip"""
+    - press: press a specific button by its text or tooltip
+    - auto: take only a clearly safe action; otherwise return the popup read-only
+
+    Returns the popup contents plus classification, requested action,
+    and post-action screen/popup state when something was pressed."""
     _check_write()
     c = _ctrl(ctx)
     return await _com(lambda: c.handle_popup(action, button_text))

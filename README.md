@@ -350,7 +350,8 @@ The server currently exposes **57 MCP tools**.
 The most important patterns:
 - `sap_get_screen_elements` to discover IDs instead of guessing
 - `sap_read_table` to start with any SAP table/grid
-- `sap_get_popup_window` when `active_window` reports a popup
+- `sap_get_popup_window` when `active_window` reports a popup; it now classifies the dialog and suggests a safe next step
+- `sap_handle_popup(action="auto")` when you want the server to dismiss only clearly safe informational popups and otherwise leave the dialog untouched
 - `sap_get_workflow_guide` when you want the proven sequence for a known workflow
 - `sap_get_transaction_guide` when you want a generic guide for a supported transaction such as `/SCWM/MON`, `SCWM/MON`, or `warehouse monitor`
 - `sap_read_tree` plus search/expand helpers for SPRO-style navigation

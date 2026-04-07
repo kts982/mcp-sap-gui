@@ -643,6 +643,20 @@ class TestToolRegistration:
         assert "F8" in key_schema["enum"]
         assert len(key_schema["enum"]) == 30
 
+    def test_handle_popup_has_auto_action(self, srv):
+        """sap_handle_popup exposes the new auto action in its schema."""
+        import asyncio
+
+        async def get_tools():
+            return await srv.mcp.list_tools()
+
+        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        handle_popup = next(t for t in tools if t.name == "sap_handle_popup")
+        action_schema = handle_popup.parameters["properties"]["action"]
+
+        assert "enum" in action_schema
+        assert "auto" in action_schema["enum"]
+
     def test_sap_connect_schema_excludes_password(self, srv):
         """sap_connect should not expose a password parameter through MCP."""
         import asyncio
