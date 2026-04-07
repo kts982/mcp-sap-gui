@@ -33,6 +33,7 @@ Desktop.ini
 
 # Logs
 *.log
+sap_audit.jsonl
 
 # Local config
 .env
