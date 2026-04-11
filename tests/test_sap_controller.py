@@ -2352,8 +2352,12 @@ class TestSetBatchFields:
         controller = self._make_controller_with_session()
         readonly_field = MagicMock(Changeable=False)
         # Simulate COM raising when writing to a read-only field
+        def _raise_not_changeable(_self, _v):
+            raise Exception("not changeable")
+
         type(readonly_field).text = property(
-            fget=lambda self: "", fset=lambda self, v: (_ for _ in ()).throw(Exception("not changeable")),
+            fget=lambda self: "",
+            fset=_raise_not_changeable,
         )
 
         controller._session.findById.return_value = readonly_field
@@ -3555,7 +3559,6 @@ class TestGetScreenElementsFiltering:
 
     def test_invalid_container_raises_error(self):
         """Invalid container IDs should raise instead of looking like empty screens."""
-        from mcp_sap_gui.sap_controller import SAPGUIError
 
         controller = self._make_controller_with_session()
         controller._session.findById.side_effect = Exception("not found")

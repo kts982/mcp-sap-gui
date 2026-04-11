@@ -184,6 +184,7 @@ class TestTransactionBlocking:
     def test_allowlist_violation_raises_specific_error(self, mock_win32com):
         """Allowlist denials should mention the allowlist rather than the blocklist."""
         import asyncio
+
         import mcp_sap_gui.server as _srv
 
         _srv._session_mgr = SessionManager()
@@ -1792,7 +1793,7 @@ class TestSaveConfirmation:
 
         with patch.object(srv, "_ctrl", return_value=mock_controller), \
              patch.object(srv, "_com", new_callable=lambda: lambda fn: _async_wrap(fn)):
-            result = await srv.sap_send_key("Save", ctx)
+            await srv.sap_send_key("Save", ctx)
 
         ctx.elicit.assert_called_once()
         mock_controller.send_vkey.assert_called_once()
@@ -1842,7 +1843,7 @@ class TestSaveConfirmation:
     async def test_save_unsupported_elicitation_raises(self, srv):
         """McpError (capability failure) is converted to ValueError."""
         from mcp.shared.exceptions import McpError
-        from mcp.types import ErrorData, INVALID_REQUEST
+        from mcp.types import INVALID_REQUEST, ErrorData
 
         ctx = _make_elicit_ctx(
             elicit_side_effect=McpError(
@@ -1884,7 +1885,7 @@ class TestSaveConfirmation:
 
         with patch.object(srv, "_ctrl", return_value=mock_controller), \
              patch.object(srv, "_com", new_callable=lambda: lambda fn: _async_wrap(fn)):
-            result = await srv.sap_send_key("Enter", ctx)
+            await srv.sap_send_key("Enter", ctx)
 
         ctx.elicit.assert_not_called()
         mock_controller.send_vkey.assert_called_once()
