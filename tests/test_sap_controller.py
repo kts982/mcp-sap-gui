@@ -777,6 +777,56 @@ class TestGridEnhancements:
         for i, row in enumerate(result["data"]):
             assert row["_absolute_row_index"] == i
 
+    def test_read_table_alv_scrolls_to_render_offscreen_rows(self):
+        """ALV read scrolls so off-screen rows render before GetCellValue.
+
+        GuiGridView.GetCellValue only returns a real value for rows inside the
+        currently rendered scroll window; off-screen rows yield the internal row
+        handle ("0000000062"-style). Reading a grid taller than one screen must
+        advance firstVisibleRow so every row renders, otherwise off-screen rows
+        are silently dropped or corrupted. This simulates a 67-row grid with a
+        16-row visible window.
+        """
+        controller = self._make_controller_with_session()
+        total_rows = 67
+        visible = 16
+        mock_grid = MagicMock()
+        mock_grid.ColumnCount = 1
+        mock_grid.ColumnOrder.return_value = "MATNR"
+        mock_grid.GetColumnTooltip.return_value = ""
+        mock_grid.GetDisplayedColumnTitle.return_value = "Material"
+        mock_grid.RowCount = total_rows
+        mock_grid.VisibleRowCount = visible
+
+        # Track the rendered window via firstVisibleRow assignments. SAP clamps
+        # the value so the last window cannot scroll past RowCount - visible.
+        state = {"first": 0}
+
+        def set_first(value):
+            state["first"] = min(value, total_rows - visible)
+
+        type(mock_grid).firstVisibleRow = property(
+            lambda self: state["first"], lambda self, v: set_first(v)
+        )
+
+        def get_cell_value(row, col):
+            window_start = state["first"]
+            if window_start <= row < window_start + visible:
+                return f"MAT{row:03d}"
+            return "0000000062"  # off-screen placeholder handle
+
+        mock_grid.GetCellValue.side_effect = get_cell_value
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.read_table("wnd[0]/usr/grid", max_rows=total_rows)
+
+        assert len(result["data"]) == total_rows
+        for i, row in enumerate(result["data"]):
+            assert row["_absolute_row_index"] == i
+            assert row["MATNR"] == f"MAT{i:03d}"
+        # No row should contain the off-screen placeholder handle.
+        assert all(row["MATNR"] != "0000000062" for row in result["data"])
+
     def test_alv_toolbar_includes_tooltip_and_enabled(self):
         """get_alv_toolbar now includes tooltip and enabled per button."""
         controller = self._make_controller_with_session()

@@ -174,6 +174,43 @@ class TablesMixin:
                 "Could not read table",
             )
 
+    def _read_alv_rows(self, grid, columns, start_row, end_row):
+        """Read ALV rows in [start_row, end_row), scrolling so every row renders.
+
+        GuiGridView.GetCellValue(row, col) only returns a real value when ``row``
+        is inside the grid's currently rendered scroll window; for off-screen rows
+        it returns a placeholder (the internal row handle, e.g. "0000000062").
+        We advance ``firstVisibleRow`` one visible-window at a time so each row is
+        rendered before we read it. Without this, an ALV read past the first
+        screenful silently drops or corrupts every off-screen row.
+        """
+        try:
+            visible = int(grid.VisibleRowCount)
+        except Exception:
+            visible = 0
+        if visible < 1:
+            visible = 1
+
+        data = []
+        row = start_row
+        while row < end_row:
+            try:
+                grid.firstVisibleRow = row
+            except Exception:
+                pass
+            window_end = min(row + visible, end_row)
+            for r in range(row, window_end):
+                row_data = {}
+                for col in columns:
+                    try:
+                        row_data[col] = grid.GetCellValue(r, col)
+                    except Exception:
+                        row_data[col] = None
+                row_data["_absolute_row_index"] = r
+                data.append(row_data)
+            row = window_end
+        return data
+
     def _read_alv_grid(self, grid, table_id: str, max_rows: int,
                        col_filter: List[str] = None,
                        columns_only: bool = False,
@@ -209,15 +246,7 @@ class TablesMixin:
         start_row = max(0, start_row)
         if not columns_only:
             end_row = min(start_row + max_rows, grid.RowCount)
-            for row in range(start_row, end_row):
-                row_data = {}
-                for col in columns:
-                    try:
-                        row_data[col] = grid.GetCellValue(row, col)
-                    except Exception:
-                        row_data[col] = None
-                row_data["_absolute_row_index"] = row
-                data.append(row_data)
+            data = self._read_alv_rows(grid, columns, start_row, end_row)
 
         result = {
             "table_id": table_id,
