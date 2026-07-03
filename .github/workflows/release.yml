@@ -33,6 +33,7 @@ jobs:
       - name: Verify tag matches package version
         run: |
           python - <<'PY'
+          import json
           import os
           import tomllib
           from pathlib import Path
@@ -42,7 +43,12 @@ jobs:
           actual = os.environ["GITHUB_REF_NAME"]
           if actual != expected:
               raise SystemExit(f"Tag {actual!r} does not match package version {expected!r}")
-          print(f"Verified tag {actual} matches package version.")
+
+          server = json.loads(Path("server.json").read_text(encoding="utf-8"))
+          mismatches = [server["version"]] + [p["version"] for p in server["packages"]]
+          if any(v != version for v in mismatches):
+              raise SystemExit(f"server.json versions {mismatches!r} do not all match {version!r}")
+          print(f"Verified tag {actual} matches package and server.json versions.")
           PY
 
       - name: Build distribution artifacts
@@ -86,4 +92,45 @@ jobs:
           prerelease: ${{ contains(needs.build.outputs.tag_name, '-') }}
           files: |
             dist/*
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Remove non-distribution files
+        run: rm -f dist/SHA256SUMS.txt
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  mcp-registry:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish
 

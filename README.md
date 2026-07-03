@@ -1,5 +1,7 @@
 # MCP SAP GUI Server
 
+<!-- mcp-name: io.github.kts982/mcp-sap-gui -->
+
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that enables AI assistants to interact with SAP GUI for Windows through the SAP GUI Scripting API.
 
 It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
