@@ -17,7 +17,7 @@ This project is intentionally focused on **real SAP GUI automation**, not browse
 
 ## Current Release Shape
 
-The current public release is **`0.2.0`**.
+The current public release is **`0.2.1`**.
 
 That means:
 
@@ -52,7 +52,7 @@ The current strengths are:
 
 ## What It Is Not Trying To Be Yet
 
-`0.2.0` is not yet:
+`0.2.1` is not yet:
 
 - a remote multi-user SAP automation service
 - a Fiori or browser automation product
