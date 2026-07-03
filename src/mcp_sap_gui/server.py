@@ -700,7 +700,7 @@ async def sap_get_session_info(ctx: Context) -> dict:
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_execute_transaction(tcode: str, ctx: Context) -> dict:
-    """Execute an SAP transaction code (e.g., MM03, VA01, SE80).
+    """Execute (start/run) an SAP transaction code (tcode), e.g. MM03, VA01, SM30.
 
     Navigates to the transaction's initial screen. Always check the
     screen info in the response to understand what screen you landed on.
@@ -726,10 +726,10 @@ async def sap_send_key(
     ],
     ctx: Context,
 ) -> dict:
-    """Send a keyboard key.
+    """Press a keyboard key / function key in the SAP window (sendVKey).
 
-    Common keys: Enter, F1 (Help), F3 (Back), F4 (Search help),
-    F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel).
+    Common keys: Enter (confirm), F1 (Help), F3 (Back), F4 (search help /
+    value help), F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel/Escape).
     Also supports Shift+F1..F9 and Ctrl+F, Ctrl+G, Ctrl+P.
 
     F11 / Save requires user confirmation via elicitation before proceeding."""
@@ -745,7 +745,8 @@ async def sap_send_key(
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_screen_info(ctx: Context) -> dict:
-    """Get current SAP screen info (transaction, program, screen number, title, status).
+    """Get current SAP screen info: transaction, program, screen number, window
+    title, and status bar message (success/error/warning text).
 
     Reads from ``session.ActiveWindow`` so the response always reflects
     what the user sees.  The ``active_window`` field tells you which
@@ -775,9 +776,10 @@ async def sap_read_field(field_id: str, ctx: Context) -> dict:
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
-    """Set a value in a field on the current SAP screen.
+    """Set (type/enter) a value into an input field on the current SAP screen.
 
-    For setting multiple fields at once, use sap_set_batch_fields instead.
+    Works on GuiTextField and GuiCTextField input fields. For filling in
+    multiple fields of a form at once, use sap_set_batch_fields instead.
     After setting a field, you may need to press Enter to trigger validation."""
     _check_write()
     _check_okcode_bypass(field_id, value)
@@ -787,7 +789,7 @@ async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_press_button(button_id: str, ctx: Context) -> dict:
-    """Press a button on the current SAP screen.
+    """Press (click) a pushbutton or toolbar button on the current SAP screen.
 
     Returns screen info after the press so you can detect navigation or popups.
     Use sap_get_toolbar_buttons to discover toolbar button IDs.
@@ -869,9 +871,10 @@ async def sap_set_batch_fields(
     validate: bool = False,
     skip_readonly: bool = False,
 ) -> dict:
-    """Set multiple field values at once (dict of field_id to value).
+    """Fill in multiple input fields at once (dict of field_id to value).
 
-    More efficient than repeated sap_set_field calls.
+    Use this to fill a form or selection screen in one call — more
+    efficient than repeated sap_set_field calls.
 
     Args:
         fields: Dict mapping field_id -> value.
@@ -893,7 +896,8 @@ async def sap_set_batch_fields(
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_read_textedit(textedit_id: str, ctx: Context, max_lines: int = 0) -> dict:
-    """Read the content of a multiline text editor (GuiTextedit).
+    """Read the content of a multiline text editor (GuiTextedit) —
+    long texts, notes, comments, document text.
 
     Returns full text and line count. Use max_lines to cap output for
     large text editors (0 = all lines)."""
@@ -903,7 +907,8 @@ async def sap_read_textedit(textedit_id: str, ctx: Context, max_lines: int = 0) 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_set_textedit(textedit_id: str, text: str, ctx: Context) -> dict:
-    """Set the content of a multiline text editor (GuiTextedit)."""
+    """Write text into a multiline text editor (GuiTextedit) —
+    long texts, notes, comments, document text."""
     _check_write()
     c = _ctrl(ctx)
     return await _com(lambda: c.set_textedit(textedit_id, text))
@@ -934,7 +939,8 @@ async def sap_read_table(
     columns_only: bool = False,
     start_row: int = 0,
 ) -> dict:
-    """Read data from an ALV grid or table on the current screen.
+    """Read rows from a table on the current screen — ALV grid (report/list
+    output) or TableControl (SM30 maintenance view, customizing screens).
 
     Auto-detects the table type. The response includes a 'table_type' field
     ('GuiGridView' for ALV or 'GuiTableControl') so you know which
@@ -1242,7 +1248,7 @@ async def sap_expand_tree_node(tree_id: str, node_key: str, ctx: Context) -> dic
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_collapse_tree_node(tree_id: str, node_key: str, ctx: Context) -> dict:
-    """Collapse a folder node in a tree control"""
+    """Collapse a folder node in a tree control (e.g. SPRO/customizing tree)."""
     _check_write()
     c = _ctrl(ctx)
     return await _com(lambda: c.collapse_tree_node(tree_id, node_key))
