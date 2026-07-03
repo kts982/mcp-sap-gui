@@ -4,7 +4,18 @@ This server is client-agnostic. If your MCP client can launch a local `stdio` se
 
 ## Shared Launch Definition
 
-Use this launch definition as the baseline in any client:
+Use this launch definition as the baseline in any client. It installs the
+released package from PyPI on first launch — no clone needed:
+
+```text
+Command:   uvx
+Arguments: mcp-sap-gui[screenshots]
+Transport: stdio
+```
+
+Running from a source checkout instead? Use this baseline (examples below
+show this form — substitute `uvx` + `mcp-sap-gui[screenshots]` for the
+command/arguments when using the PyPI install):
 
 ```text
 Command:   uv

@@ -48,22 +48,23 @@ in system D01."
 
 ## Quick Start
 
-1. Install dependencies:
+1. Install [uv](https://docs.astral.sh/uv/) (it ships with `uvx`), if not already installed:
 
 ```bash
-uv sync --extra screenshots
+pip install uv
 ```
 
 2. Start SAP Logon Pad and open an SAP GUI session, or at least have SAP Logon running.
 
-3. Configure your MCP client to launch this server:
+3. Configure your MCP client to launch this server. No clone or manual install needed — `uvx` fetches the [released package from PyPI](https://pypi.org/project/mcp-sap-gui/) and runs it in an isolated environment:
 
 ```text
-Command:   uv
-Arguments: run python -m mcp_sap_gui.server
+Command:   uvx
+Arguments: mcp-sap-gui[screenshots]
 Transport: stdio
-Working directory: <path-to-mcp-sap-gui>
 ```
+
+(Working from a source checkout instead? See [Installation](#installation).)
 
 4. Try one of these prompts:
 
@@ -114,9 +115,22 @@ SAP GUI Scripting must be enabled both client-side and server-side:
 
 ## Installation
 
+### From PyPI (recommended for users)
+
+Nothing to clone. `uvx` downloads the latest release and runs it in an isolated environment:
+
+```bash
+# Smoke test the published package
+uvx "mcp-sap-gui[screenshots]" --help
+```
+
+The `[screenshots]` extra adds screenshot optimization (reduces screenshot size by 70-90%) and is recommended. Point your MCP client at `uvx` with argument `mcp-sap-gui[screenshots]` — see [MCP Setup](#mcp-setup) below.
+
+### From source (for development)
+
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/kts982/mcp-sap-gui.git
 cd mcp-sap-gui
 
 # Install uv (if not already installed)
@@ -172,11 +186,14 @@ This server communicates over **stdio** (stdin/stdout JSON-RPC), which is the st
 For any client, the core launch configuration is the same:
 
 ```text
-Command:   uv
-Arguments: run python -m mcp_sap_gui.server
+Command:   uvx
+Arguments: mcp-sap-gui[screenshots]
 Transport: stdio
-Working directory: <path-to-mcp-sap-gui>
 ```
+
+Running from a source checkout instead of PyPI? Use
+`uv run --directory <path-to-mcp-sap-gui> python -m mcp_sap_gui.server`
+as the command.
 
 ### Client Setup Links
 
@@ -211,9 +228,8 @@ If you want to configure it globally for Claude Code (available in any project),
   "mcpServers": {
     "sap-gui": {
       "type": "stdio",
-      "command": "uv",
-      "args": ["run", "python", "-m", "mcp_sap_gui.server"],
-      "cwd": "<path-to-mcp-sap-gui>"
+      "command": "uvx",
+      "args": ["mcp-sap-gui[screenshots]"]
     }
   }
 }
@@ -234,20 +250,18 @@ Add to your Claude Desktop config file:
 {
   "mcpServers": {
     "sap-gui": {
-      "command": "uv",
-      "args": [
-        "run", "--directory", "<path-to-mcp-sap-gui>",
-        "python", "-m", "mcp_sap_gui.server"
-      ],
-      "cwd": "<path-to-mcp-sap-gui>"
+      "command": "uvx",
+      "args": ["mcp-sap-gui[screenshots]"]
     }
   }
 }
 ```
 
-> **Note:** The `--directory` flag is required so `uv` finds the project's
-> virtual environment regardless of the working directory Claude Desktop
-> uses when launching the process.
+> **Note:** Running from a source checkout instead of PyPI? Use
+> `"command": "uv"` with
+> `"args": ["run", "--directory", "<path-to-mcp-sap-gui>", "python", "-m", "mcp_sap_gui.server"]`
+> — the `--directory` flag is required so `uv` finds the project's virtual
+> environment regardless of the working directory Claude Desktop uses.
 
 **Read-only mode** (recommended when exploring/querying data):
 
@@ -255,12 +269,8 @@ Add to your Claude Desktop config file:
 {
   "mcpServers": {
     "sap-gui": {
-      "command": "uv",
-      "args": [
-        "run", "--directory", "<path-to-mcp-sap-gui>",
-        "python", "-m", "mcp_sap_gui.server", "--read-only"
-      ],
-      "cwd": "<path-to-mcp-sap-gui>"
+      "command": "uvx",
+      "args": ["mcp-sap-gui[screenshots]", "--read-only"]
     }
   }
 }
@@ -272,13 +282,11 @@ Add to your Claude Desktop config file:
 {
   "mcpServers": {
     "sap-gui": {
-      "command": "uv",
+      "command": "uvx",
       "args": [
-        "run", "--directory", "<path-to-mcp-sap-gui>",
-        "python", "-m", "mcp_sap_gui.server",
+        "mcp-sap-gui[screenshots]",
         "--allowed-transactions", "MM03", "VA03", "ME23N"
-      ],
-      "cwd": "<path-to-mcp-sap-gui>"
+      ]
     }
   }
 }
@@ -293,12 +301,12 @@ After editing the config, restart Claude Desktop for changes to take effect.
 The server uses stdio transport. Point any MCP client at:
 
 ```
-Command:   uv run python -m mcp_sap_gui.server
+Command:   uvx mcp-sap-gui[screenshots]
 Arguments: [--read-only] [--profile exploration|operator|full] [--audit-log FILE] [--debug] [--allowed-transactions T1 T2 ...]
 Transport: stdio
 ```
 
-Ensure the working directory is set to the project root (where `pyproject.toml` lives).
+For a source checkout, use `uv run --directory <path-to-mcp-sap-gui> python -m mcp_sap_gui.server` instead.
 
 ---
 
