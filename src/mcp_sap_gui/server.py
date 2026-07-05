@@ -1430,10 +1430,15 @@ async def sap_set_policy_profile(
 
     Default profile is 'full' unless the server was started with --profile."""
     allowed_tags = _PROFILES[profile]
-    await ctx.disable_components(match_all=True)
+    # Subtractive semantics (same as the server-level --profile path): touch
+    # only read/write/destructive-tagged tools. Untagged components — the
+    # code-mode meta-tools (execute/search/get_schema/tags), prompts,
+    # resources — must survive profile switches.
+    all_tags = {"read", "write", "destructive"}
     await ctx.enable_components(tags=allowed_tags)
-    # Re-enable this tool so the profile can be changed again
-    await ctx.enable_components(names={"sap_set_policy_profile"})
+    disallowed = all_tags - allowed_tags
+    if disallowed:
+        await ctx.disable_components(tags=disallowed)
     return {
         "profile": profile,
         "enabled_tags": sorted(allowed_tags),
