@@ -266,7 +266,7 @@ class TestT09BatchFieldValidationContract:
                     "transaction": "MM03",
                     "program": "SAPLMGMM",
                     "screen_number": 60,
-                    "title": "HA9(1)/200 Display Material (Initial Screen)",
+                    "title": "D01(1)/100 Display Material (Initial Screen)",
                     "message": (
                         "The material TESTMAT_VERIFY does not exist or is not activated"
                     ),
@@ -316,7 +316,7 @@ class TestT10PopupClassificationContract:
         # Minimal popup with one editable field — matches the F4 search
         # help dialog the live run encountered (Restrict Value Range)
         mock_popup = MagicMock()
-        mock_popup.Text = "HA9(1)/200 Restrict Value Range"
+        mock_popup.Text = "D01(1)/100 Restrict Value Range"
 
         mock_usr = MagicMock()
         field = MagicMock()
@@ -520,9 +520,9 @@ class TestT13AuditContract:
             params = MagicMock()
             params.name = "sap_connect"
             params.arguments = {
-                "system_description": "HA9",
+                "system_description": "D01",
                 "password": "do-not-log-me",
-                "user": "KTSIO",
+                "user": "TESTUSER",
             }
             ctx = MiddlewareContext(
                 message=params,
@@ -545,4 +545,4 @@ class TestT13AuditContract:
         assert "do-not-log-me" not in records[0].message
         log = json.loads(records[0].message)
         assert log["args"]["password"] == "***"
-        assert log["args"]["user"] == "KTSIO"
+        assert log["args"]["user"] == "TESTUSER"

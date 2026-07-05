@@ -41,12 +41,14 @@ class TestSAPGUIController:
         from mcp_sap_gui.sap_controller import SAPGUIController, SAPGUINotAvailableError
 
         controller = SAPGUIController()
-        controller._win32com.GetObject.side_effect = Exception("host=ha9.internal path=C:\\secret")
+        controller._win32com.GetObject.side_effect = Exception(
+            "host=srv042.internal path=C:\\secret"
+        )
 
         with pytest.raises(SAPGUINotAvailableError) as exc_info:
             controller._get_sap_gui()
 
-        assert "ha9.internal" not in str(exc_info.value)
+        assert "srv042.internal" not in str(exc_info.value)
         assert "C:\\secret" not in str(exc_info.value)
 
 
@@ -1553,12 +1555,12 @@ class TestSensitiveLogging:
     def test_read_field_sanitizes_client_error_message(self):
         """Field read errors should not expose raw COM details."""
         controller = self._make_controller_with_session()
-        controller._session.findById.side_effect = Exception("host=ha9.internal path=C:\\secret")
+        controller._session.findById.side_effect = Exception("host=srv042.internal path=C:\\secret")
 
         result = controller.read_field("wnd[0]/usr/txtFIELD")
 
         assert result["error"] == "Could not read field"
-        assert "ha9.internal" not in result["error"]
+        assert "srv042.internal" not in result["error"]
 
 
 class TestTreeParentKeyFix:
