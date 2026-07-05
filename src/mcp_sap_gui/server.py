@@ -1522,6 +1522,56 @@ def sap_gui_guide() -> str:
 
 
 # ===========================================================================
+# Code mode (experimental, opt-in via --code-mode)
+# ===========================================================================
+
+_CODE_MODE_EXECUTE_DESCRIPTION = """\
+Run a Python script that chains SAP GUI tools via `await call_tool(name, params)`.
+Only the script's `return` value enters the conversation — use it for the final answer
+(print output is discarded; every call_tool MUST be awaited).
+
+SAP-specific rules:
+- After every state-changing call (set_field, press_button, send_key,
+  execute_transaction, cell/tree writes), check the returned
+  screen.active_window: if it is not "wnd[0]", a popup appeared — call
+  sap_get_popup_window and handle it before continuing.
+- Read large tables in pages: loop sap_read_table with start_row until
+  total_rows is reached; aggregate locally and return only the aggregate.
+- Never call sap_screenshot inside a script (image results are unusable in the
+  sandbox) — call it directly as a normal tool instead.
+- Sandbox limits: plain async code only; no classes; imports restricted to
+  sys, os, typing, asyncio, re, datetime, json.
+"""
+
+
+def _build_code_mode_transform():
+    """Construct the CodeMode transform with SAP-tuned settings.
+
+    Kept as a separate function so tests can attach the identical transform
+    to a test server. Imports lazily: fastmcp's code-mode extra
+    (pydantic-monty) is an optional dependency group.
+    """
+    from fastmcp.experimental.transforms.code_mode import (
+        CodeMode,
+        GetSchemas,
+        GetTags,
+        MontySandboxProvider,
+        Search,
+    )
+
+    return CodeMode(
+        sandbox_provider=MontySandboxProvider(
+            # Defaults (30 s / 50 calls) are too tight for table pagination
+            # loops over slow SAP screens.
+            limits={"max_duration_secs": 120, "max_memory": 100_000_000},
+        ),
+        discovery_tools=[GetTags(), Search(default_detail="detailed"), GetSchemas()],
+        max_tool_calls=200,
+        execute_description=_CODE_MODE_EXECUTE_DESCRIPTION,
+    )
+
+
+# ===========================================================================
 # Main entry point
 # ===========================================================================
 
@@ -1550,6 +1600,11 @@ def main():
                         help="Default policy profile (default: full)")
     parser.add_argument("--audit-log", metavar="FILE",
                         help="Write audit log to FILE (JSON lines)")
+    parser.add_argument("--code-mode", action="store_true",
+                        help="EXPERIMENTAL: replace the tool catalog with "
+                             "search/get_schema/tags/execute meta-tools; agents "
+                             "script SAP flows in a sandbox (requires the "
+                             "'code-mode' extra)")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
     args = parser.parse_args()
@@ -1581,6 +1636,18 @@ def main():
             mcp.disable(tags={tag})
         logger.info("Server profile: %s (enabled tags: %s)",
                      args.profile, ", ".join(sorted(allowed_tags)))
+
+    if args.code_mode:
+        try:
+            import pydantic_monty  # noqa: F401  # fail fast, not on first execute
+        except ImportError:
+            parser.error(
+                "--code-mode requires the Monty sandbox. Install the extra: "
+                "uv sync --extra code-mode  (or: pip install 'mcp-sap-gui[code-mode]')"
+            )
+        mcp.add_transform(_build_code_mode_transform())
+        logger.info("Code mode: tool catalog replaced with meta-tools "
+                    "(search/get_schema/tags/execute)")
 
     if args.transport == "http":
         logger.info("Starting HTTP transport on %s:%d", args.host, args.port)

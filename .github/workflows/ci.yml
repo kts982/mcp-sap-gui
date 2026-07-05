@@ -33,7 +33,7 @@ jobs:
         run: python -m pip install --upgrade pip uv
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev --extra screenshots
+        run: uv sync --frozen --extra dev --extra screenshots --extra code-mode
 
       - name: Run Ruff
         run: uv run ruff check src tests
