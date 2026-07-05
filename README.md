@@ -113,6 +113,27 @@ SAP GUI Scripting must be enabled both client-side and server-side:
 - Transaction `RZ11` → Parameter `sapgui/user_scripting` → Set to `TRUE`
 - Requires SAP Basis administrator access
 
+### Deploying Where Scripting Is Restricted
+
+Many organizations disable SAP GUI Scripting globally as a hardening default. Enabling it does not have to be all-or-nothing: SAP ships graduated server-side controls that let a Basis team enable scripting narrowly — typically for named users on a development system — while keeping it off for everyone else.
+
+| Profile parameter (`RZ11`/`RZ10`) | Effect |
+|---|---|
+| `sapgui/user_scripting = TRUE` | Master switch; required for any scripting |
+| `sapgui/user_scripting_per_user = TRUE` | Scripting works only for users holding authorization object `S_SCR` (class `BC_A`, activity 16); all other users stay blocked (SAP Note 983990) |
+| `sapgui/user_scripting_set_readonly = TRUE` | Scripts may read screen state but cannot send anything that changes server state (SAP Note 692245) |
+| `sapgui/user_scripting_force_notification = TRUE` | Users always see a notification/consent dialog when a script attaches; cannot be suppressed in local SAP GUI options (SAP Note 3591984) |
+| `sapgui/user_scripting_disable_recording = TRUE` | Blocks recording of new scripts; playback still works |
+
+Useful facts when proposing this to a Basis/security team:
+
+- Per-user and read-only modes are **combinable** since SAP GUI 7.40 PL17 / 7.50 PL4: full API for `S_SCR` holders, read-only for everyone else (SAP Note 2565390).
+- A dynamic `RZ11` change to `sapgui/user_scripting` is **not persistent** — it reverts at the next application server restart, which suits a time-boxed evaluation on a development system.
+- Server-side, scripted actions run under the SAP user's normal authorizations and appear in logs as ordinary user activity. The user's authorization profile is the effective security boundary — pair a dedicated minimal-authorization account with this server's `--allowed-transactions`, `--profile`, and `--audit-log` options for defense in depth.
+- Authoritative reference: [SAP GUI Scripting Security Guide](https://help.sap.com/doc/97d2d0bc2ed248a4a85a0bec608704f8/800.13/en-US/sap_gui_scripting_sec_guide.pdf) (help.sap.com).
+
+**Why the Scripting API is required at all:** SAP GUI for Windows draws dynpro screens on a custom canvas that exposes no usable structure to Windows UI Automation or other accessibility APIs — the Scripting API is the only structured way to read and drive SAP GUI screens. Commercial RPA products have the same dependency and fall back to screenshot/OCR-based automation when scripting is disabled; this project deliberately avoids that approach because it is imprecise and brittle.
+
 ## Installation
 
 ### From PyPI (recommended for users)
@@ -174,6 +195,12 @@ uv run python -m mcp_sap_gui.server --profile exploration
 
 # Audit log to file (JSON lines)
 uv run python -m mcp_sap_gui.server --audit-log sap_audit.jsonl
+
+# EXPERIMENTAL: code mode — replaces the tool catalog with search/get_schema/
+# tags/execute meta-tools; agents script chained SAP flows in a sandbox.
+# Faster and cheaper on long chained flows (e.g. full table dumps), slower on
+# quick one-shot questions. Requires: uv sync --extra code-mode
+uv run --extra code-mode python -m mcp_sap_gui.server --code-mode
 
 # Debug mode
 uv run python -m mcp_sap_gui.server --debug
@@ -406,6 +433,7 @@ This server provides powerful automation capabilities. **Use responsibly.**
 - **Implement transaction whitelists** for automation
 - **Enable audit logging** on SAP side
 - **Use dedicated service accounts** with minimal authorizations
+- **Enable scripting per-user, not globally** — `sapgui/user_scripting_per_user` with the `S_SCR` authorization limits scripting to named users (see [Deploying Where Scripting Is Restricted](#deploying-where-scripting-is-restricted))
 - **Run on isolated systems** (test/sandbox, not production)
 
 ### SAP Licensing
@@ -525,6 +553,7 @@ mcp-sap-gui/
 ### "Scripting disabled" error
 - Enable scripting server-side: `RZ11` → `sapgui/user_scripting` = `TRUE`
 - Requires SAP Basis administrator
+- Organization won't enable scripting globally? See [Deploying Where Scripting Is Restricted](#deploying-where-scripting-is-restricted) for per-user and read-only enablement options
 
 ### "Element not found"
 - Use `sap_get_screen_elements()` to discover available field IDs
