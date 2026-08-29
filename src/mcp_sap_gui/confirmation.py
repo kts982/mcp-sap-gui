@@ -27,6 +27,7 @@ tool body on the single-threaded COM executor.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
@@ -38,6 +39,8 @@ from mcp.shared.exceptions import McpError
 
 from .audit import logger as audit_logger
 from .preview import _normalize_fields, _overflow_line
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Point taxonomy
@@ -287,17 +290,25 @@ class ConfirmationMiddleware(Middleware):
     """Gate write tools behind a blocking user confirmation.
 
     Register AFTER ``AuditMiddleware`` so blocked calls still get an audit line.
+
+    ``active_points`` and ``precheck`` are injected by the RUNNING server
+    module at registration.  The middleware must never import the server
+    module by name: under ``python -m mcp_sap_gui.server`` the running module
+    is ``__main__``, and a ``from . import server`` here loads a SECOND copy
+    of server.py with its own empty globals (``_session_mgr = None``, default
+    config) — the gate then reads confirmation points from the wrong module
+    and silently never fires.  Found live; pinned by tests/test_stdio_gate.py.
     """
+
+    def __init__(self, *, active_points, precheck) -> None:
+        self._active_points = active_points
+        self._precheck = precheck
 
     async def on_call_tool(
         self,
         context: MiddlewareContext[mcp.types.CallToolRequestParams],
         call_next: CallNext[mcp.types.CallToolRequestParams, ToolResult],
     ) -> ToolResult:
-        # Deferred import: server.py imports this module at module scope, so
-        # the reverse edge can only be resolved per call.
-        from . import server
-
         ctx = context.fastmcp_context
         if ctx is None:
             return await call_next(context)
@@ -305,7 +316,7 @@ class ConfirmationMiddleware(Middleware):
         tool_name = context.message.name
         args = context.message.arguments or {}
 
-        active = server.active_confirmation_points(ctx)
+        active = self._active_points(ctx)
         tags: set[str] = set()
         if "all_writes" in active:
             # Only needed for the tag-driven point; skip the lookup otherwise.
@@ -314,11 +325,12 @@ class ConfirmationMiddleware(Middleware):
         point = point_for_call(tool_name, args, active, tags)
         if point is None:
             return await call_next(context)
+        logger.debug("confirmation gate: tool=%s point=%s", tool_name, point)
 
         # Ordering fix: this middleware runs upstream of the tool body, so a
         # call that read-only mode or the transaction policy would reject must
         # be rejected here — never prompt for a call that cannot run.
-        server.precheck_before_confirmation(tool_name, args)
+        self._precheck(tool_name, args)
 
         try:
             result = await ctx.elicit(

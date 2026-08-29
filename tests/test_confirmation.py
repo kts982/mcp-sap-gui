@@ -655,7 +655,11 @@ class TestTagLookupFailsClosed:
             return MagicMock()
 
         with pytest.raises(ToolError, match="declined by user"):
-            await _confirm_mod.ConfirmationMiddleware().on_call_tool(mw_ctx, _next)
+            middleware = _confirm_mod.ConfirmationMiddleware(
+                active_points=srv.active_confirmation_points,
+                precheck=srv.precheck_before_confirmation,
+            )
+            await middleware.on_call_tool(mw_ctx, _next)
 
         ctx.elicit.assert_awaited_once()
         assert ran == []

@@ -468,9 +468,10 @@ Some transactions use split-screen layouts:
 
 mcp = FastMCP("mcp-sap-gui", instructions=_INSTRUCTIONS, lifespan=_lifespan)
 mcp.add_middleware(AuditMiddleware())
-# Order matters: add_middleware is outermost-first, so audit must stay outside
-# the confirmation gate or blocked calls vanish from the audit log.
-mcp.add_middleware(ConfirmationMiddleware())
+# ConfirmationMiddleware is registered further down, after its injected
+# helpers are defined. add_middleware is outermost-first, so audit (added
+# here) stays outside the confirmation gate and blocked calls keep their
+# audit line.
 register_prompts(mcp)
 _session_mgr: Optional[SessionManager] = None
 config = ServerConfig()
@@ -598,6 +599,18 @@ def precheck_before_confirmation(tool_name: str, args) -> None:
                     _check_okcode_bypass(fid, str(val))
     except ValueError as exc:
         raise ToolError(f"Error calling tool '{tool_name}': {exc}") from exc
+
+
+# Registered here, not next to AuditMiddleware: the gate needs the RUNNING
+# module's helpers injected as callables. Importing the server module by name
+# from the middleware instead would load a second module copy under
+# `python -m mcp_sap_gui.server` and read empty globals (see
+# ConfirmationMiddleware's docstring). Audit was added earlier, so it stays
+# outermost.
+mcp.add_middleware(ConfirmationMiddleware(
+    active_points=active_confirmation_points,
+    precheck=precheck_before_confirmation,
+))
 
 
 def _is_transaction_allowed(tcode: str) -> tuple[bool, str]:
