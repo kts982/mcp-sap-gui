@@ -1,5 +1,7 @@
 [build-system]
-requires = ["hatchling"]
+# Exact pin: build backends are not covered by uv.lock, so an unpinned
+# hatchling would let release builds execute a freshly published backend.
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]

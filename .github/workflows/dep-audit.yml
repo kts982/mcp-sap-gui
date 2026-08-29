@@ -1,0 +1,46 @@
+name: Dependency Audit
+
+# Fails when a locked dependency has a known vulnerability. Path-filtered so
+# it blocks dependency-changing PRs/pushes only; the weekly schedule catches
+# CVEs published while the repo is idle.
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/dep-audit.yml"
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/dep-audit.yml"
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned tooling
+        run: python -m pip install uv==0.12.7 pip-audit==2.10.1
+
+      - name: Export frozen lock as pylock.toml
+        run: uv export --frozen --all-extras --format pylock.toml -o pylock.toml
+
+      - name: Audit locked dependencies
+        run: pip-audit --locked .

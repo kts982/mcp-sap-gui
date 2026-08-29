@@ -5,8 +5,9 @@ on:
     tags:
       - "v*"
 
+# Least privilege by default; jobs that need more declare it themselves.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -19,15 +20,15 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
       - name: Install uv
-        run: python -m pip install --upgrade pip uv
+        run: python -m pip install uv==0.12.7
 
       - name: Capture tag
         id: tag
@@ -57,6 +58,13 @@ jobs:
       - name: Build distribution artifacts
         run: uv build
 
+      - name: Generate CycloneDX SBOM
+        run: >-
+          uv export --frozen
+          --extra screenshots --extra code-mode --extra apps
+          --format cyclonedx1.5
+          -o dist/mcp-sap-gui-sbom.cdx.json
+
       - name: Generate checksums
         run: |
           python - <<'PY'
@@ -72,7 +80,7 @@ jobs:
           PY
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-dist
           path: dist/*
@@ -80,16 +88,18 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-dist
           path: dist
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           generate_release_notes: true
           prerelease: ${{ contains(needs.build.outputs.tag_name, '-') }}
@@ -105,16 +115,16 @@ jobs:
 
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-dist
           path: dist
 
       - name: Remove non-distribution files
-        run: rm -f dist/SHA256SUMS.txt
+        run: rm -f dist/SHA256SUMS.txt dist/*.cdx.json
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
   mcp-registry:
     needs: pypi
@@ -125,15 +135,22 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Install mcp-publisher
+      - name: Install mcp-publisher (pinned, digest-verified)
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.1
+          # sha256 of mcp-publisher_linux_amd64.tar.gz, cross-checked against
+          # the release's registry_1.8.1_checksums.txt on 2026-08-29.
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
 
       - name: Authenticate to MCP Registry
         run: ./mcp-publisher login github-oidc
 
       - name: Publish server to MCP Registry
         run: ./mcp-publisher publish
-
