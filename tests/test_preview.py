@@ -274,6 +274,22 @@ class TestBuildPreviewCard:
         assert "WRITE" in payload
         assert "nothing has been written" in payload
 
+    def test_values_table_renders_above_the_screenshot(self):
+        # Approval information must be visible without scrolling past the
+        # screenshot; serialization preserves component order.
+        payload = json.dumps(
+            build_preview_card(
+                screen=SCREEN,
+                session=SESSION,
+                pending_fields=PENDING,
+                image_data_uri="data:image/png;base64," + PNG_B64,
+            ).to_json(),
+            default=str,
+        )
+        assert payload.index("Values about to be written") < payload.index(
+            "data:image/png;base64,"
+        )
+
     def test_card_without_image_or_fields(self):
         payload = json.dumps(
             build_preview_card(screen=SCREEN, session=SESSION).to_json(), default=str

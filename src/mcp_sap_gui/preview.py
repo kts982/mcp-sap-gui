@@ -309,8 +309,8 @@ def build_preview_card(
                 Text(status)
             if note_text:
                 Text(note_text)
-            if image_data_uri:
-                Image(src=image_data_uri, alt=f"Current SAP screen — {heading}")
+            # Decision-relevant values render above the screenshot so the
+            # approval information is visible without scrolling.
             if rows:
                 Separator()
                 with Card():
@@ -331,6 +331,9 @@ def build_preview_card(
                                         TableCell(value, css_class="font-mono")
                         if overflow:
                             Text(_overflow_line(overflow), css_class=muted)
+            if image_data_uri:
+                Separator()
+                Image(src=image_data_uri, alt=f"Current SAP screen — {heading}")
             Separator()
             Text(f"{_CLOSING_LINE} {_FOOTER_LINE}", css_class=muted)
     return app
