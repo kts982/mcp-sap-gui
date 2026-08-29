@@ -81,6 +81,7 @@ Read the first 20 rows of the visible table
 
 - **Windows** (SAP GUI only runs on Windows)
 - **SAP GUI for Windows** installed
+  - Live compatibility verified with SAP GUI for Windows 8.10 64-bit Patch 0
 - **SAP Logon Pad** running (for COM connections)
 - **SAP GUI Scripting enabled** on your SAP systems
 - **Python 3.10+**
@@ -201,6 +202,9 @@ uv run python -m mcp_sap_gui.server --audit-log sap_audit.jsonl
 # Faster and cheaper on long chained flows (e.g. full table dumps), slower on
 # quick one-shot questions. Requires: uv sync --extra code-mode
 uv run --extra code-mode python -m mcp_sap_gui.server --code-mode
+
+# Same, from the published PyPI package (no checkout needed)
+uvx "mcp-sap-gui[screenshots,code-mode]" --code-mode
 
 # Debug mode
 uv run python -m mcp_sap_gui.server --debug

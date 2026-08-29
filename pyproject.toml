@@ -29,7 +29,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "fastmcp>=3.4.1,<4",
+    # FastMCP permits breaking changes in minor releases; patches are safe.
+    # Ceiling bumps (3.5, 3.6, ...) are deliberate, validated steps.
+    "fastmcp>=3.4.7,<3.5",
     "pywin32>=306; platform_system == 'Windows'",
     "python-dotenv>=1.0",
 ]
@@ -44,11 +46,13 @@ dev = [
     "mypy>=1.5.0",
     "ruff>=0.1.0",
 ]
-agent = [
-    "claude-agent-sdk>=0.1.0",
-]
 code-mode = [
-    "fastmcp[code-mode]>=3.4.1,<4",
+    "fastmcp[code-mode]>=3.4.7,<3.5",
+]
+apps = [
+    "fastmcp[apps]>=3.4.7,<3.5",
+    # prefab-ui docs warn of frequent breaking changes - pin exact (like monty in code-mode)
+    "prefab-ui==0.20.2",
 ]
 
 [project.scripts]

@@ -28,6 +28,8 @@ That means:
 
 The server currently exposes **57 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
 
+There is also an experimental, opt-in **code mode** (`--code-mode`, requires the `code-mode` extra): it replaces the tool catalog with `search`/`get_schema`/`tags`/`execute` meta-tools so agents script chained SAP flows in a sandbox instead of calling tools one at a time.
+
 ## Why This Exists
 
 SAP work is full of repetitive GUI-heavy flows:
