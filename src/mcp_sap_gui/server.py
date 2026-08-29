@@ -28,11 +28,22 @@ from typing import List, Literal, Optional
 
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
+from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.server.lifespan import lifespan
+from fastmcp.tools import ToolResult
 from fastmcp.utilities.types import Image
 from mcp.shared.exceptions import McpError
+from mcp.types import ImageContent, TextContent
 
 from .audit import AuditMiddleware
+from .preview import (
+    SCREENSHOT_INCLUDED,
+    SCREENSHOT_OMITTED,
+    SCREENSHOT_UNAVAILABLE,
+    build_preview_card,
+    build_preview_text,
+    prefab_available,
+)
 from .prompts import (
     WORKFLOW_TARGET_PARAMETERS,
     WorkflowName,
@@ -276,6 +287,9 @@ opens documentation, not the activity.
 the "Position..." button instead.
 - **Reading huge trees**: Use `search_tree_nodes` + `get_tree_node_children`, \
 not `read_tree` on large trees like SPRO.
+- **Writing without showing the user**: Offer `sap_preview` before significant \
+writes (batch field fills, F11 / Save) so the user can see the screen and the \
+pending values first — it is read-only and never saves.
 """
 
 
@@ -1402,6 +1416,123 @@ async def sap_screenshot(ctx: Context) -> Image:
     if "error" in result:
         raise ValueError(result["error"])
     return Image(data=base64.b64decode(result["data"]), format="png")
+
+
+# ===========================================================================
+# Preview / approval card
+# ===========================================================================
+
+def _client_supports_ui(ctx: Context) -> bool:
+    """Report whether the calling host negotiated the MCP Apps UI extension.
+
+    Returns False outside a request context and for every SDK/in-memory
+    client (the Python client cannot advertise the extension).
+    """
+    try:
+        return bool(ctx.client_supports_extension(UI_EXTENSION_ID))
+    except Exception:
+        return False
+
+
+_prefab_hint_logged = False
+
+
+def _hint_missing_prefab_once() -> None:
+    """Tell the operator once that the card would render if the extra existed."""
+    global _prefab_hint_logged
+    if not _prefab_hint_logged:
+        _prefab_hint_logged = True
+        logger.info(
+            "client supports MCP Apps UI but prefab-ui is not installed; "
+            "install the apps extra to enable the card"
+        )
+
+
+async def _preview_screenshot_b64(c) -> str | None:
+    """Capture the current window as base64 PNG, or None on failure.
+
+    A preview must never fail because the screenshot did; capture problems
+    (no pillow, HardCopy error) degrade to a preview without the image.
+    """
+    try:
+        result = await _com(c.take_screenshot)
+    except Exception as exc:
+        logger.warning("Preview screenshot unavailable: %s", exc)
+        return None
+    if not isinstance(result, dict) or result.get("error"):
+        return None
+    data = result.get("data")
+    return data if isinstance(data, str) and data else None
+
+
+# fastmcp stamps its internal prefab marker (_meta.ui = true) when app=True is
+# used without prefab-ui installed, an untested shape for hosts that expect
+# _meta.ui to be an object. Only claim app support when a card can be built.
+_APP_KWARGS = {"app": True} if prefab_available() else {}
+
+
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ, **_APP_KWARGS)
+async def sap_preview(
+    ctx: Context,
+    note: str = "",
+    pending_fields: dict[str, str] | None = None,
+    include_screenshot: bool = True,
+) -> ToolResult:
+    """Render a preview card of the current SAP screen for the user:
+    screenshot, session/transaction info, status bar, and the values the
+    agent is about to write (pending_fields). Call before significant
+    writes (batch fills, F11 save) or whenever the user asks to see
+    what's about to happen. Read-only: nothing is written or saved."""
+    c = _ctrl(ctx)
+    screen = await _com(c.get_screen_info)
+    session = _to_dict(await _com(c.get_session_info))
+
+    png_b64 = await _preview_screenshot_b64(c) if include_screenshot else None
+    if not include_screenshot:
+        screenshot_state = SCREENSHOT_OMITTED
+    elif png_b64:
+        screenshot_state = SCREENSHOT_INCLUDED
+    else:
+        screenshot_state = SCREENSHOT_UNAVAILABLE
+
+    # Authored first and unconditionally: it is the result whenever the card
+    # cannot be built. content must always be passed explicitly, else
+    # ToolResult serializes the raw card dump as model-visible text.
+    text = build_preview_text(
+        screen=screen,
+        session=session,
+        note=note,
+        pending_fields=pending_fields,
+        screenshot=screenshot_state,
+    )
+    content: list = [TextContent(type="text", text=text)]
+
+    wants_card = _client_supports_ui(ctx)
+    if wants_card and not prefab_available():
+        _hint_missing_prefab_once()
+    if wants_card and prefab_available():
+        try:
+            card = build_preview_card(
+                screen=screen,
+                session=session,
+                note=note,
+                pending_fields=pending_fields,
+                image_data_uri=(
+                    "data:image/png;base64," + png_b64 if png_b64 else None
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Preview card unavailable, falling back to text: %s", exc)
+        else:
+            # The card carries the image; a second copy as an ImageContent
+            # block would double a ~300 KB payload.
+            return ToolResult(content=content, structured_content=card)
+
+    if png_b64:
+        content.append(
+            ImageContent(type="image", data=png_b64, mimeType="image/png")
+        )
+    return ToolResult(content=content)
 
 
 # ===========================================================================

@@ -20,13 +20,26 @@ _SECRET_PATTERNS = frozenset({"password", "pwd", "bcode", "secret", "token"})
 logger = logging.getLogger("mcp_sap_gui.audit")
 
 
+def _is_secret_key(key: Any) -> bool:
+    key_lower = str(key).lower()
+    return any(p in key_lower for p in _SECRET_PATTERNS)
+
+
 def _mask_secrets(args: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of args with secret-looking values masked."""
+    """Return a copy of args with secret-looking values masked.
+
+    Recurses one level into dict-valued arguments: tool arguments that carry
+    field maps (``sap_set_batch_fields``, ``sap_preview.pending_fields``) hide
+    their sensitive keys one level down, and MCP arguments never nest deeper.
+    """
     masked = {}
     for key, value in args.items():
-        key_lower = key.lower()
-        if any(p in key_lower for p in _SECRET_PATTERNS):
+        if _is_secret_key(key):
             masked[key] = "***"
+        elif isinstance(value, dict):
+            masked[key] = {
+                k: ("***" if _is_secret_key(k) else v) for k, v in value.items()
+            }
         elif isinstance(value, str) and any(
             p in value.lower() for p in _SECRET_PATTERNS
         ):

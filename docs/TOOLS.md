@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **57 MCP tools**.
+`mcp-sap-gui` currently exposes **58 MCP tools**.
 
 Two practical rules:
 
@@ -133,6 +133,21 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 |------|-------------|
 | `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter |
 | `sap_screenshot` | Capture a screenshot of the active SAP window |
+
+## Preview
+
+| Tool | Description |
+|------|-------------|
+| `sap_preview` | Show the user a read-only preview of the current screen (screenshot, transaction, session, status bar) together with `pending_fields`, the values the agent is about to write. Call it before batch fills or `F11` / Save, or whenever the user asks to see what is about to happen |
+
+`sap_preview` never writes and never saves; it does not replace the `F11` / Save
+confirmation, which stays enforced in `sap_send_key`. Every client receives the
+written summary plus the screenshot as an image block. Clients that support the
+MCP Apps UI extension instead receive a rendered card carrying the screenshot
+and the pending-values table (requires the optional `apps` extra; see
+[Rendered Preview Cards](../README.md#rendered-preview-cards) for offline
+deployments). Values whose field name looks sensitive (`PWD`, `BCODE`,
+`PASSWORD`) are rendered as `***` in both.
 
 ## Workflow Guidance
 

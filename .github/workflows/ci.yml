@@ -41,6 +41,12 @@ jobs:
       - name: Run pytest
         run: uv run pytest -q
 
+      # sap_preview must degrade to text when prefab-ui is absent, which the
+      # all-extras job above cannot prove.
+      - name: Test without apps extra
+        if: matrix.python-version == '3.12'
+        run: uv run --isolated --frozen --extra dev python -m pytest tests/test_preview.py -q
+
       - name: Smoke test CLI help
         if: matrix.python-version == '3.12'
         run: uv run python -m mcp_sap_gui.server --help

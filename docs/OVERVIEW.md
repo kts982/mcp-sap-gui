@@ -26,7 +26,7 @@ That means:
 - MCP `stdio` (default) and `streamable HTTP` transports
 - interactive MCP client usage only
 
-The server currently exposes **57 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
+The server currently exposes **58 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
 
 There is also an experimental, opt-in **code mode** (`--code-mode`, requires the `code-mode` extra): it replaces the tool catalog with `search`/`get_schema`/`tags`/`execute` meta-tools so agents script chained SAP flows in a sandbox instead of calling tools one at a time.
 

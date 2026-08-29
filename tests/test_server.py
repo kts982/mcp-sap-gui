@@ -681,6 +681,8 @@ class TestToolRegistration:
             "sap_get_tree_node_children",
             # Discovery
             "sap_get_screen_elements", "sap_screenshot",
+            # Preview
+            "sap_preview",
             # Policy
             "sap_set_policy_profile",
             # Workflow guidance
@@ -758,6 +760,7 @@ class TestToolRegistration:
             "sap_get_popup_window", "sap_get_toolbar_buttons",
             "sap_read_shell_content", "sap_read_tree", "sap_find_tree_node_by_path",
             "sap_search_tree_nodes", "sap_get_screen_elements", "sap_screenshot",
+            "sap_preview",
             "sap_set_policy_profile", "sap_get_workflow_guide",
             "sap_get_transaction_guide",
         }
@@ -1553,6 +1556,27 @@ class TestAuditMiddleware:
         """Empty args return empty dict."""
         from mcp_sap_gui.audit import _mask_secrets
         assert _mask_secrets({}) == {}
+
+    def test_mask_secrets_recurses_into_field_maps(self):
+        """Nested field maps (sap_set_batch_fields, sap_preview) are masked."""
+        from mcp_sap_gui.audit import _mask_secrets
+        result = _mask_secrets({
+            "fields": {
+                "wnd[0]/usr/pwdRSYST-BCODE": "hunter2",
+                "wnd[0]/usr/txtMATNR": "MAT-001",
+            },
+        })
+        assert result["fields"]["wnd[0]/usr/pwdRSYST-BCODE"] == "***"
+        assert result["fields"]["wnd[0]/usr/txtMATNR"] == "MAT-001"
+
+    def test_mask_secrets_recurses_into_pending_fields(self):
+        """sap_preview's pending_fields labels are masked by key."""
+        from mcp_sap_gui.audit import _mask_secrets
+        result = _mask_secrets({
+            "pending_fields": {"Password": "s3cret", "Name": "Greece"},
+        })
+        assert result["pending_fields"]["Password"] == "***"
+        assert result["pending_fields"]["Name"] == "Greece"
 
     def test_middleware_registered_on_server(self, srv):
         """AuditMiddleware is registered on the FastMCP server."""

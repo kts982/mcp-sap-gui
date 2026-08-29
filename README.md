@@ -14,9 +14,8 @@ Current release: `0.2.2` for local Windows use over MCP `stdio`.
 
 ## Status
 
-- GitHub workflows are included for `CI`, `Docs`, and tag-based `Release`.
-- Forgejo workflows are included for `CI` and `Docs`.
-- GitHub is the public mirror: `kts982/mcp-sap-gui`.
+- GitHub workflows are included for `CI`, `Docs`, `Dependency Audit`, and tag-based `Release`.
+- Primary repository: GitHub (`kts982/mcp-sap-gui`).
 
 ## What This Does
 
@@ -374,7 +373,7 @@ These prevent common agent mistakes like guessing element IDs, ignoring popups, 
 
 ## Available Tools
 
-The server currently exposes **57 MCP tools**.
+The server currently exposes **58 MCP tools**.
 
 | Category | Count | What it covers |
 |---|---:|---|
@@ -385,6 +384,7 @@ The server currently exposes **57 MCP tools**.
 | Popup / Toolbar / Shell | 4 | Popup inspection and handling, toolbar discovery, shell content |
 | Trees | 10 | Read/search/expand/select/click SAP tree controls |
 | Discovery | 2 | Screen element discovery and screenshots |
+| Preview | 1 | Show the user the current screen plus the values the agent is about to write |
 | Workflow Guidance | 1 | Return step-by-step guidance for known multi-tool SAP workflows |
 | Transaction Guidance | 1 | Return a generic, read-first guide for supported SAP transactions |
 
@@ -393,11 +393,34 @@ The most important patterns:
 - `sap_read_table` to start with any SAP table/grid
 - `sap_get_popup_window` when `active_window` reports a popup; it now classifies the dialog and suggests a safe next step
 - `sap_handle_popup(action="auto")` when you want the server to dismiss only clearly safe informational popups and otherwise leave the dialog untouched
+- `sap_preview` before significant writes (batch field fills, `F11` / Save) so the user sees the screen and the pending values first
 - `sap_get_workflow_guide` when you want the proven sequence for a known workflow
 - `sap_get_transaction_guide` when you want a generic guide for a supported transaction such as `/SCWM/MON`, `SCWM/MON`, or `warehouse monitor`
 - `sap_read_tree` plus search/expand helpers for SPRO-style navigation
 
 For the full tool catalog, grouped by category with short descriptions, see **[docs/TOOLS.md](docs/TOOLS.md)**.
+
+### Rendered Preview Cards
+
+`sap_preview` is read-only and always returns a written summary plus the screenshot as an image, so it works in every MCP client. Clients that support the MCP Apps UI extension (for example VS Code Copilot) instead get a rendered card with the screenshot and a pending-values table. Install the optional extra to enable the card:
+
+```bash
+uv sync --extra apps          # or: uvx "mcp-sap-gui[screenshots,apps]"
+```
+
+**Restricted or offline networks:** by default the card renderer is loaded from the jsDelivr CDN, so the card silently fails to render on workstations without outbound internet access. Set `PREFAB_BUNDLED_RENDERER=1` in the server's environment to make the renderer self-contained (a ~6.3 MB inline resource, no third-party domains):
+
+```json
+{
+  "mcpServers": {
+    "sap-gui": {
+      "command": "uvx",
+      "args": ["mcp-sap-gui[screenshots,apps]"],
+      "env": { "PREFAB_BUNDLED_RENDERER": "1" }
+    }
+  }
+}
+```
 
 ## Security Considerations
 
@@ -513,6 +536,25 @@ sap_set_batch_fields(
 # Returns per-field results plus post-Enter screen feedback
 ```
 
+### Show The User What Is About To Change
+
+> "Before adding country GR, show me the values."
+
+```python
+# Read-only: renders the current screen plus the pending values.
+sap_preview(
+    note="About to add country GR to V_T005",
+    pending_fields={
+        "Country Key (V_T005-LAND1)": "GR",
+        "Name": "Greece",
+        "Currency": "EUR",
+    },
+)
+# The user confirms in chat, then the agent writes and saves:
+sap_set_batch_fields({...}, validate=True)
+sap_send_key("Save")   # still requires explicit confirmation via elicitation
+```
+
 ## Project Structure
 
 ```
@@ -534,9 +576,11 @@ mcp-sap-gui/
 │       ├── fields.py          # FieldsMixin (read/write fields, buttons, combos)
 │       ├── tables.py          # TablesMixin (ALV grid + TableControl operations)
 │       ├── trees.py           # TreesMixin (tree read, expand, select, click)
-│       └── discovery.py       # DiscoveryMixin (popups, toolbars, screenshots)
+│       ├── discovery.py       # DiscoveryMixin (popups, toolbars, screenshots)
+│       └── preview.py         # sap_preview text + Prefab card builders
 ├── tests/
 │   ├── test_sap_controller.py # Controller unit tests
+│   ├── test_preview.py        # sap_preview builders + card/text branches
 │   └── test_server.py         # Server security & routing tests
 ├── examples/
 │   └── basic_usage.py         # Direct controller example
