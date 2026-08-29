@@ -23,6 +23,8 @@ Current release: `0.2.2` for local Windows use over MCP `stdio`.
 
 <img src="docs/images/sap-preview-card.png" alt="sap_preview approval card rendered inline in VS Code Copilot Chat" width="640">
 
+**Confirmation points — nothing is written without you.** Tell the agent once (*"ask me before every field write"*) and the server enforces it: `sap_set_confirmation_points` activates categories of write operations that pause for your explicit approval before anything reaches SAP. Enforced server-side by middleware — declining blocks the call no matter what the agent does, removing a gate asks you first, and admins can pin gates for every session with `--confirm`. Details: [Security Considerations](#security-considerations).
+
 ## What This Does
 
 This server allows AI assistants to:
@@ -36,6 +38,7 @@ This server allows AI assistants to:
 - Read and interact with tree controls (TableTree, ColumnTree, SimpleTree)
 - Take screenshots of SAP windows
 - Discover screen elements for automation
+- Show you previews before writing, and pause for your approval at confirmation points you choose
 
 ## Example Conversation
 
@@ -460,7 +463,7 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 4. **Transaction Whitelist** - `--allowed-transactions` limits execution to specific approved t-codes. This is the recommended production mode.
 
-5. **Policy Profiles** - `--profile` controls which tools are visible: `exploration` (read-only), `operator` (read + write), `full` (all, default). Profiles can also be switched per-session via `sap_set_policy_profile`
+5. **Policy Profiles** - `--profile` controls which tools are visible: `exploration` (read-only), `operator` (read + write), `full` (all, default). Profiles can also be switched per-session via `sap_set_policy_profile` — but the server `--profile` is a floor: a session can restrict itself further, never grant itself more than the server allows
 
 6. **Tool Tags** - Every tool is tagged `read` or `write` for policy profile filtering. All tools carry MCP `readOnlyHint`/`destructiveHint` annotations so clients can display appropriate UI hints
 
