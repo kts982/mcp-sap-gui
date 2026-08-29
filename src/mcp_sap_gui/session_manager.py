@@ -40,6 +40,11 @@ class SessionManager:
 
     def __init__(self) -> None:
         self._sessions: Dict[int, ManagedSession] = {}
+        # Session-added confirmation points, keyed like _sessions but stored
+        # separately: the confirmation middleware consults them on *every*
+        # tool call, and get_or_create would eagerly build a SAPGUIController
+        # for calls that never touch SAP.
+        self._confirmation_points: Dict[int, set] = {}
         self._executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
@@ -69,11 +74,31 @@ class SessionManager:
         managed.touch()
         return managed
 
+    def get_confirmation_points(self, session_key: int) -> set:
+        """Return the confirmation points this session added.
+
+        Read-only lookup: never creates a session binding, so the confirmation
+        middleware can call it on every tool call.  The server floor and the
+        always-on ``save`` point are merged in by the caller.
+        """
+        return set(self._confirmation_points.get(session_key, ()))
+
+    def set_confirmation_points(self, session_key: int, points: Any) -> set:
+        """Replace the confirmation points this session added."""
+        stored = set(points)
+        self._confirmation_points[session_key] = stored
+        return set(stored)
+
     def release(self, session_key: int) -> Dict[str, Any]:
         """Release and clean up a managed session.
 
         Owned sessions (opened via ``sap_connect``) are closed.
         Attached sessions (via ``sap_connect_existing``) are detached.
+
+        Confirmation points are deliberately NOT dropped here: their lifetime
+        is the MCP session, not the SAP binding.  Clearing them on release
+        would let ``sap_disconnect`` (or a no-op disconnect) silently disarm
+        every gate the user asked for.
 
         Safe to call from the COM executor thread.
         """
@@ -121,5 +146,10 @@ class SessionManager:
         return result
 
     def shutdown(self) -> None:
-        """Shut down the COM executor.  Call *after* ``release_all``."""
+        """Shut down the COM executor.  Call *after* ``release_all``.
+
+        The only place confirmation points are cleared: they outlive SAP
+        connect/disconnect cycles and die with the server.
+        """
+        self._confirmation_points.clear()
         self._executor.shutdown(wait=False)

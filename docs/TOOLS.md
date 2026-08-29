@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **58 MCP tools**.
+`mcp-sap-gui` currently exposes **59 MCP tools**.
 
 Two practical rules:
 
@@ -23,7 +23,27 @@ Every tool is tagged `read` or `write`. Three profiles control which tools are v
 | `operator` | `read`, `write` | Normal SAP work: navigate transactions, fill fields, press buttons. The built-in transaction policy still applies, and save-key confirmation may still prompt the user. |
 | `full` | `read`, `write` | All tools. Default. |
 
-Set the default profile at startup with `--profile operator`, or switch per-session with `sap_set_policy_profile`.
+Set the default profile at startup with `--profile operator`, or switch per-session with `sap_set_policy_profile`. A session can only restrict the profile, never widen it beyond the server's `--profile` floor.
+
+## Confirmation Points
+
+A confirmation point is a category of write operations that requires blocking user approval (MCP elicitation) before the server executes it. The gate is server-side middleware, so it holds regardless of what the agent does, including inside the `--code-mode` sandbox.
+
+| Point | Gated tools |
+|---|---|
+| `save` | `sap_send_key("F11")` / `sap_send_key("Save")` and `sap_press_button` on the Save toolbar button (`wnd[0]/tbar[0]/btn[11]`). Always on, cannot be turned off |
+| `transactions` | `sap_execute_transaction` |
+| `batch_fields` | `sap_set_batch_fields` |
+| `field_writes` | `sap_set_field`, `sap_modify_cell`, `sap_set_textedit`, `sap_select_checkbox`, `sap_select_radio_button`, `sap_select_combobox_entry` |
+| `all_writes` | Every `write`-tagged tool. Deliberately strict and noisy: many write tools only select, scroll or navigate. Under `all_writes`, `sap_send_key("F11")` prompts twice — once for the category, once for the unchanged save gate |
+
+Activate points per session with `sap_set_confirmation_points`, or for every session with `--confirm POINT [POINT ...]`. Adding a point is silent; removing a session point asks the user first and a declined removal keeps it. Points set by `--confirm` and the `save` point can never be removed.
+
+Declining a confirmation returns an error and nothing is executed. Clients without elicitation support fail closed — the gated call errors rather than running unconfirmed, matching the save gate. Removal fails closed on those clients too, so a point activated there cannot be turned off again and blocks that whole category for the rest of the session. Confirmation outcomes (`accepted`, `declined`, `unsupported_client`) are written to the audit log.
+
+Points are scoped to the MCP session, not the SAP connection: they survive `sap_disconnect` and a later reconnect.
+
+Known gap: menu paths (System → Save) and ALV / application-toolbar Save buttons are not mapped to the `save` point, because those IDs are positional and locale-dependent.
 
 ## Connection
 
@@ -36,7 +56,8 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_list_connections` | List all currently open SAP connections and sessions |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen |
 | `sap_disconnect` | Disconnect from the current SAP session (detaches attached sessions, closes owned sessions) |
-| `sap_set_policy_profile` | Switch the active policy profile for this session (exploration, operator, full) |
+| `sap_set_policy_profile` | Switch the active policy profile for this session (exploration, operator, full); capped by the server `--profile` floor |
+| `sap_set_confirmation_points` | Choose which write categories need blocking user approval for this session (see [Confirmation Points](#confirmation-points)) |
 
 ## Navigation
 

@@ -29,6 +29,7 @@ from typing import List, Literal, Optional
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 from fastmcp.apps import UI_EXTENSION_ID
+from fastmcp.exceptions import ToolError
 from fastmcp.server.lifespan import lifespan
 from fastmcp.tools import ToolResult
 from fastmcp.utilities.types import Image
@@ -36,6 +37,15 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ImageContent, TextContent
 
 from .audit import AuditMiddleware
+from .confirmation import (
+    SAVE_POINT,
+    SETTABLE_POINTS,
+    ConfirmationMiddleware,
+    build_relax_prompt,
+    effective_points,
+    log_confirmation_event,
+    points_with_provenance,
+)
 from .preview import (
     SCREENSHOT_INCLUDED,
     SCREENSHOT_OMITTED,
@@ -147,6 +157,16 @@ def _normalize_transaction_list(codes: Optional[List[str]]) -> Optional[List[str
 # Configuration
 # ---------------------------------------------------------------------------
 
+# Profile definitions: which tag sets are visible in each profile.
+# Declared here (not next to the profile tool) because ServerConfig validates
+# against it at import time.
+_PROFILES: dict[str, set[str]] = {
+    "exploration": {"read"},
+    "operator": {"read", "write"},
+    "full": {"read", "write", "destructive"},
+}
+
+
 @dataclass
 class ServerConfig:
     """Configuration for the MCP SAP GUI server."""
@@ -157,6 +177,12 @@ class ServerConfig:
     blocked_transactions: List[str] = field(
         default_factory=lambda: list(_DEFAULT_BLOCKED_TRANSACTIONS)
     )
+    # Server-level policy floor (--profile). A session may restrict below this
+    # but never above it. Modelled on --read-only: no runtime mutator exists.
+    profile: str = "full"
+    # Server-level confirmation points (--confirm). Always active, never
+    # removable by sap_set_confirmation_points.
+    confirmation_floor: List[str] = field(default_factory=list)
 
     # Behavior settings
     auto_connect_existing: bool = True
@@ -166,6 +192,20 @@ class ServerConfig:
     def __post_init__(self):
         self.blocked_transactions = _normalize_transaction_list(self.blocked_transactions) or []
         self.allowed_transactions = _normalize_transaction_list(self.allowed_transactions)
+        unknown = sorted(set(self.confirmation_floor) - set(SETTABLE_POINTS))
+        if unknown:
+            raise ValueError(
+                f"Unknown confirmation point(s): {', '.join(unknown)}. "
+                f"Valid points: {', '.join(SETTABLE_POINTS)}"
+            )
+        self.confirmation_floor = sorted(set(self.confirmation_floor))
+        # Validated here so _effective_profile can trust it: an unrecognised
+        # profile must not silently degrade into "no floor at all".
+        if self.profile not in _PROFILES:
+            raise ValueError(
+                f"Unknown policy profile: {self.profile!r}. "
+                f"Valid profiles: {', '.join(sorted(_PROFILES))}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +331,15 @@ not `read_tree` on large trees like SPRO.
 - **Writing without showing the user**: Offer `sap_preview` before significant \
 writes (batch field fills, F11 / Save) so the user can see the screen and the \
 pending values first — it is read-only and never saves.
+
+## Confirmation Points
+
+Some operations are gated: the server pauses the call and asks the user to \
+approve it. `save` (F11 / Save key, Save toolbar button) is always gated; the \
+user or the deployment can add `transactions`, `batch_fields`, `field_writes` \
+or `all_writes` via `sap_set_confirmation_points`. Expect a prompt on those \
+calls, call `sap_preview` first so the user sees what is pending, and treat a \
+"declined by user" error as a stop signal — do not retry or route around it.
 """
 
 
@@ -419,6 +468,9 @@ Some transactions use split-screen layouts:
 
 mcp = FastMCP("mcp-sap-gui", instructions=_INSTRUCTIONS, lifespan=_lifespan)
 mcp.add_middleware(AuditMiddleware())
+# Order matters: add_middleware is outermost-first, so audit must stay outside
+# the confirmation gate or blocked calls vanish from the audit log.
+mcp.add_middleware(ConfirmationMiddleware())
 register_prompts(mcp)
 _session_mgr: Optional[SessionManager] = None
 config = ServerConfig()
@@ -501,6 +553,51 @@ def _check_write():
     """Raise if server is in read-only mode."""
     if config.read_only:
         raise ValueError("Write operations disabled in read-only mode")
+
+
+def active_confirmation_points(ctx: Context) -> set[str]:
+    """Return the confirmation points active for the calling session.
+
+    Effective set = server floor (``--confirm``) + session-added points +
+    the always-on ``save`` point.
+    """
+    session_points: set[str] = set()
+    if _session_mgr is not None:
+        try:
+            session_points = _session_mgr.get_confirmation_points(_session_key(ctx))
+        except Exception:  # pragma: no cover — defensive, never block a call
+            session_points = set()
+    return effective_points(config.confirmation_floor, session_points)
+
+
+def precheck_before_confirmation(tool_name: str, args) -> None:
+    """Re-run the cheap in-body policy checks before eliciting.
+
+    The confirmation middleware runs upstream of the tool body, so without
+    this a rejected call would still prompt the user first — and a blocked
+    transaction would reach the approval dialog. Only called for calls the
+    gate is about to block on, which are writes by construction.
+
+    Rejections are re-raised in fastmcp's own "Error calling tool 'x': ..."
+    shape so a gated rejection is byte-identical to an ungated one; otherwise
+    the error text is an oracle for which points are active.
+    """
+    get = args.get if hasattr(args, "get") else (lambda _k, _d=None: None)
+    try:
+        _check_write()
+        if tool_name == "sap_execute_transaction":
+            tcode = get("tcode")
+            if isinstance(tcode, str):
+                _enforce_transaction_policy(tcode)
+        elif tool_name == "sap_set_field":
+            _check_okcode_bypass(get("field_id"), get("value"))
+        elif tool_name == "sap_set_batch_fields":
+            fields = get("fields")
+            if isinstance(fields, dict):
+                for fid, val in fields.items():
+                    _check_okcode_bypass(fid, str(val))
+    except ValueError as exc:
+        raise ToolError(f"Error calling tool '{tool_name}': {exc}") from exc
 
 
 def _is_transaction_allowed(tcode: str) -> tuple[bool, str]:
@@ -1543,12 +1640,24 @@ async def sap_preview(
 # Policy profile tools
 # ===========================================================================
 
-# Profile definitions: which tag sets are visible in each profile
-_PROFILES: dict[str, set[str]] = {
-    "exploration": {"read"},
-    "operator": {"read", "write"},
-    "full": {"read", "write", "destructive"},
-}
+# _PROFILES is defined in the Configuration section above: ServerConfig
+# validates its `profile` field against it at import time.
+
+
+def _effective_profile(requested: str) -> tuple[str, set[str]]:
+    """Cap a requested session profile at the server-level --profile floor.
+
+    fastmcp session rules override global transforms, so a session could
+    otherwise re-enable tools the server hid with ``mcp.disable(tags=...)``.
+    Profiles are nested (exploration ⊂ operator ⊂ full), so intersecting the
+    tag sets always lands exactly on one of them.
+    """
+    # ServerConfig.__post_init__ guarantees config.profile is a known profile.
+    tags = _PROFILES[requested] & _PROFILES[config.profile]
+    for name in ("exploration", "operator", "full"):
+        if _PROFILES[name] == tags:
+            return name, tags
+    return requested, tags  # pragma: no cover — profiles are nested
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
@@ -1563,8 +1672,10 @@ async def sap_set_policy_profile(
     - operator: read + write tools (normal SAP interaction)
     - full: all tools including destructive (transaction execution)
 
+    A session can only restrict, never widen: if the server was started with
+    --profile, a request above that floor is capped to the floor.
     Default profile is 'full' unless the server was started with --profile."""
-    allowed_tags = _PROFILES[profile]
+    effective, allowed_tags = _effective_profile(profile)
     # Subtractive semantics (same as the server-level --profile path): touch
     # only read/write/destructive-tagged tools. Untagged components — the
     # code-mode meta-tools (execute/search/get_schema/tags), prompts,
@@ -1574,10 +1685,125 @@ async def sap_set_policy_profile(
     disallowed = all_tags - allowed_tags
     if disallowed:
         await ctx.disable_components(tags=disallowed)
+    if effective != profile:
+        message = (
+            f"Session profile '{profile}' capped to '{effective}' by the "
+            f"server --profile floor"
+        )
+    else:
+        message = f"Session switched to '{profile}' profile"
     return {
-        "profile": profile,
+        "profile": effective,
+        "requested_profile": profile,
+        "server_profile_floor": config.profile,
         "enabled_tags": sorted(allowed_tags),
-        "message": f"Session switched to '{profile}' profile",
+        "message": message,
+    }
+
+
+# ===========================================================================
+# Confirmation point tools
+# ===========================================================================
+
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
+async def sap_set_confirmation_points(
+    points: list[Literal["batch_fields", "field_writes", "transactions", "all_writes"]],
+    ctx: Context,
+) -> dict:
+    """Choose which SAP operations need the user's explicit approval first.
+
+    Replaces this session's set of confirmation points. When a point is
+    active, every matching tool call pauses and asks the user to approve it
+    (MCP elicitation) before anything reaches SAP; declining returns an error
+    and nothing is executed.
+
+    Points:
+    - transactions: sap_execute_transaction
+    - batch_fields: sap_set_batch_fields
+    - field_writes: sap_set_field, sap_modify_cell, sap_set_textedit,
+      sap_select_checkbox, sap_select_radio_button, sap_select_combobox_entry
+    - all_writes: every write-tagged tool. Strict and noisy — many write tools
+      only select, scroll or navigate, and they will all prompt. Under
+      all_writes, sap_send_key("F11") asks twice: once for the category and
+      once for the unchanged save gate.
+
+    'save' (F11 / Save key, Save toolbar button) is always on and cannot be
+    turned off. Points set by the server's --confirm flag cannot be removed
+    either. Adding a point is silent; *removing* one asks the user first, and
+    a declined removal keeps the point.
+
+    Confirmation prompts block until the user answers, and on clients without
+    elicitation support the gated call fails instead of running unconfirmed
+    (same fail-closed rule as the save gate). On such a client points also
+    cannot be removed, so activating one there blocks that whole category for
+    the rest of the session. Call sap_preview before a gated action so the
+    user can see the screen and pending values first."""
+    if _session_mgr is None:
+        # Fail loudly: reporting success for points that are not stored
+        # anywhere would be a silent safety failure.
+        raise RuntimeError("Server not initialised – lifespan has not started")
+
+    requested = set()
+    for point in points:
+        if point not in SETTABLE_POINTS:
+            raise ValueError(
+                f"Unknown confirmation point '{point}'. "
+                f"Valid points: {', '.join(SETTABLE_POINTS)}"
+            )
+        requested.add(point)
+
+    key = _session_key(ctx)
+    floor = set(config.confirmation_floor)
+    current = _session_mgr.get_confirmation_points(key)
+    # Dropping a floor point (or 'save') is a no-op, not a relaxation, so it
+    # never reaches the user.
+    removals = sorted((current - requested) - floor)
+
+    declined: list[str] = []
+    if removals:
+        try:
+            result = await ctx.elicit(
+                message=build_relax_prompt(removals),
+                response_type=bool,
+            )
+        except McpError as exc:
+            # Fail closed: the points stay active. Swallowing this would make
+            # an unsupported client the easiest way to disable the gate.
+            for point in removals:
+                log_confirmation_event(point, "sap_set_confirmation_points",
+                                       "unsupported_client")
+            raise ValueError(
+                f"Disabling a confirmation point requires confirmation but the "
+                f"client does not support elicitation: {exc}"
+            ) from exc
+
+        accepted = result.action == "accept" and getattr(result, "data", None) is True
+        for point in removals:
+            log_confirmation_event(
+                point, "sap_set_confirmation_points",
+                "accepted" if accepted else "declined",
+            )
+        if not accepted:
+            declined = removals
+
+    stored = (requested | set(declined)) - floor
+    _session_mgr.set_confirmation_points(key, stored)
+
+    active = sorted(effective_points(floor, stored))
+    if declined:
+        message = (
+            f"User declined to disable: {', '.join(declined)}. "
+            f"Active confirmation points: {', '.join(active)}"
+        )
+    else:
+        message = f"Active confirmation points: {', '.join(active)}"
+    return {
+        "points": points_with_provenance(floor, stored),
+        "active": active,
+        "removal_declined": declined,
+        "always_on": [SAVE_POINT],
+        "settable": list(SETTABLE_POINTS),
+        "message": message,
     }
 
 
@@ -1733,6 +1959,12 @@ def main():
     parser.add_argument("--profile", choices=["exploration", "operator", "full"],
                         default="full",
                         help="Default policy profile (default: full)")
+    parser.add_argument("--confirm", nargs="+", metavar="POINT",
+                        choices=list(SETTABLE_POINTS), default=[],
+                        help="Require blocking user confirmation for these "
+                             "operation categories in every session "
+                             f"(choices: {', '.join(SETTABLE_POINTS)}). "
+                             "Sessions can add points but never remove these")
     parser.add_argument("--audit-log", metavar="FILE",
                         help="Write audit log to FILE (JSON lines)")
     parser.add_argument("--code-mode", action="store_true",
@@ -1761,7 +1993,13 @@ def main():
     config = ServerConfig(
         read_only=args.read_only,
         allowed_transactions=args.allowed_transactions,
+        profile=args.profile,
+        confirmation_floor=list(args.confirm or []),
     )
+
+    if config.confirmation_floor:
+        logger.info("Confirmation floor: %s (plus always-on '%s')",
+                    ", ".join(config.confirmation_floor), SAVE_POINT)
 
     # Apply server-level policy profile (hides tools globally)
     if args.profile != "full":

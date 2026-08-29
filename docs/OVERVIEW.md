@@ -26,7 +26,7 @@ That means:
 - MCP `stdio` (default) and `streamable HTTP` transports
 - interactive MCP client usage only
 
-The server currently exposes **58 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
+The server currently exposes **59 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
 
 There is also an experimental, opt-in **code mode** (`--code-mode`, requires the `code-mode` extra): it replaces the tool catalog with `search`/`get_schema`/`tags`/`execute` meta-tools so agents script chained SAP flows in a sandbox instead of calling tools one at a time.
 
@@ -48,7 +48,7 @@ The current strengths are:
 
 - strong SAP GUI coverage across fields, tables, ALV grids, trees, menus, and popups
 - discovery-first workflows that reduce brittle hardcoded IDs
-- safety controls: read-only mode, transaction blocklists/allowlists, tag-based policy profiles, and save confirmation via elicitation-capable clients
+- safety controls: read-only mode, transaction blocklists/allowlists, tag-based policy profiles, save confirmation via elicitation-capable clients, and user-defined confirmation points that make whole categories of writes ask before they run
 - built-in MCP guidance so clients start with better navigation patterns
 - unit-tested server and controller behavior
 

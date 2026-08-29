@@ -208,6 +208,9 @@ uv run python -m mcp_sap_gui.server --transport http --host 0.0.0.0 --port 9000
 # Policy profile (restrict visible tools)
 uv run python -m mcp_sap_gui.server --profile exploration
 
+# Confirmation points (ask the user before these categories run, every session)
+uv run python -m mcp_sap_gui.server --confirm field_writes transactions
+
 # Audit log to file (JSON lines)
 uv run python -m mcp_sap_gui.server --audit-log sap_audit.jsonl
 
@@ -347,7 +350,7 @@ The server uses stdio transport. Point any MCP client at:
 
 ```
 Command:   uvx mcp-sap-gui[screenshots]
-Arguments: [--read-only] [--profile exploration|operator|full] [--audit-log FILE] [--debug] [--allowed-transactions T1 T2 ...]
+Arguments: [--read-only] [--profile exploration|operator|full] [--confirm POINT ...] [--audit-log FILE] [--debug] [--allowed-transactions T1 T2 ...]
 Transport: stdio
 ```
 
@@ -388,11 +391,11 @@ These prevent common agent mistakes like guessing element IDs, ignoring popups, 
 
 ## Available Tools
 
-The server currently exposes **58 MCP tools**.
+The server currently exposes **59 MCP tools**.
 
 | Category | Count | What it covers |
 |---|---:|---|
-| Connection & Policy | 6 | Connect to SAP, attach to open sessions, inspect sessions, disconnect, set policy profile |
+| Connection & Policy | 7 | Connect to SAP, attach to open sessions, inspect sessions, disconnect, set policy profile, set confirmation points |
 | Navigation | 3 | Execute transactions, send keys, inspect current screen |
 | Fields & UI | 13 | Read/write fields, buttons, tabs, comboboxes, textedit, focus |
 | Tables & Grids | 17 | ALV grids, TableControls, row selection, column info, cell ops |
@@ -409,6 +412,7 @@ The most important patterns:
 - `sap_get_popup_window` when `active_window` reports a popup; it now classifies the dialog and suggests a safe next step
 - `sap_handle_popup(action="auto")` when you want the server to dismiss only clearly safe informational popups and otherwise leave the dialog untouched
 - `sap_preview` before significant writes (batch field fills, `F11` / Save) so the user sees the screen and the pending values first
+- `sap_set_confirmation_points` to make categories of writes ask the user for approval before they run
 - `sap_get_workflow_guide` when you want the proven sequence for a known workflow
 - `sap_get_transaction_guide` when you want a generic guide for a supported transaction such as `/SCWM/MON`, `SCWM/MON`, or `warehouse monitor`
 - `sap_read_tree` plus search/expand helpers for SPRO-style navigation
@@ -462,11 +466,19 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 7. **Save Confirmation** - `sap_send_key("F11")` and `sap_send_key("Save")` now require explicit user confirmation via MCP elicitation. If the client does not support elicitation, the save is blocked instead of proceeding silently.
 
-8. **Audit Logging** - `--audit-log FILE` writes every tool call (name, arguments, timing, outcome) as JSON lines. Secrets in arguments are masked automatically
+8. **Confirmation Points** - Named categories of write operations that require blocking user approval before the server executes them. `save` (the `F11` / `Save` key and the `wnd[0]/tbar[0]/btn[11]` Save toolbar button) is always on. `transactions`, `batch_fields`, `field_writes` and `all_writes` can be activated per session with `sap_set_confirmation_points`, or for every session with `--confirm POINT [POINT ...]`.
 
-9. **Secure Credential Resolution** - `sap_connect` resolves credentials from a `.env` file (`SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT`, `SAP_LANGUAGE`). Passwords are never accepted as MCP tool parameters and never appear in client logs, tool-call history, or audit logs. Copy `.env.example` to `.env` to get started
+   The gate is enforced server-side by middleware, so it applies no matter what the agent does — including inside the experimental `--code-mode` sandbox. Adding a point is silent; *removing* a session point asks the user first, and points set by `--confirm` cannot be removed at all. Declining returns an error and nothing is executed, and clients without elicitation support fail closed (the gated call errors instead of running unconfirmed). Every confirmation is written to the audit log with its outcome (`accepted`, `declined`, `unsupported_client`).
 
-10. **ID Validation And Normalization** - User-supplied SAP window and element IDs are validated before `findById()` is called. Standard IDs like `wnd[0]/usr/...` are accepted, and full session paths like `/app/con[0]/ses[0]/wnd[0]/usr/...` are normalized to the short form automatically.
+   On a client without elicitation support, removal fails closed too: a point activated there cannot be turned off again, so it blocks that whole category for the rest of the session. Points survive `sap_disconnect` — their lifetime is the MCP session, not the SAP connection.
+
+   `all_writes` covers every write-tagged tool, including selection, scrolling and navigation helpers that change no business data — it is deliberately strict and noisy, and under it `sap_send_key("F11")` prompts twice (once for the category, once for the unchanged save gate).
+
+9. **Audit Logging** - `--audit-log FILE` writes every tool call (name, arguments, timing, outcome) as JSON lines. Secrets in arguments are masked automatically
+
+10. **Secure Credential Resolution** - `sap_connect` resolves credentials from a `.env` file (`SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT`, `SAP_LANGUAGE`). Passwords are never accepted as MCP tool parameters and never appear in client logs, tool-call history, or audit logs. Copy `.env.example` to `.env` to get started
+
+11. **ID Validation And Normalization** - User-supplied SAP window and element IDs are validated before `findById()` is called. Standard IDs like `wnd[0]/usr/...` are accepted, and full session paths like `/app/con[0]/ses[0]/wnd[0]/usr/...` are normalized to the short form automatically.
 
 ### Recommendations for Production Use
 
@@ -592,9 +604,11 @@ mcp-sap-gui/
 │       ├── tables.py          # TablesMixin (ALV grid + TableControl operations)
 │       ├── trees.py           # TreesMixin (tree read, expand, select, click)
 │       ├── discovery.py       # DiscoveryMixin (popups, toolbars, screenshots)
+│       ├── confirmation.py    # Confirmation points + blocking-confirmation middleware
 │       └── preview.py         # sap_preview text + Prefab card builders
 ├── tests/
 │   ├── test_sap_controller.py # Controller unit tests
+│   ├── test_confirmation.py   # Confirmation points: gate, tool, CLI floor
 │   ├── test_preview.py        # sap_preview builders + card/text branches
 │   └── test_server.py         # Server security & routing tests
 ├── examples/
