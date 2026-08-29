@@ -72,6 +72,7 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/mcp_sap_gui/prompts.py" = ["E501"]  # prompt text is long-form markdown
+"tests/test_sap_controller.py" = ["N802"]  # COM-API fakes mirror SAP GUI naming
 
 [tool.mypy]
 python_version = "3.10"

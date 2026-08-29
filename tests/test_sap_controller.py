@@ -2082,9 +2082,10 @@ class TestGuiTableControl:
             initial_scroll_position=20,
         )
 
-        vis_offset = controller._scroll_table_control_to_row(mock_table, 25)
+        table, vis_offset = controller._scroll_table_control_to_row(mock_table, 25)
 
         assert vis_offset == 5  # 25 - 20
+        assert table is mock_table  # no scroll -> no re-find
         # Scrollbar should NOT have been changed
         assert mock_table.VerticalScrollbar.Position == 20
 
@@ -2098,10 +2099,13 @@ class TestGuiTableControl:
             initial_scroll_position=0,
         )
 
-        vis_offset = controller._scroll_table_control_to_row(mock_table, 50)
+        table, vis_offset = controller._scroll_table_control_to_row(mock_table, 50)
 
         assert vis_offset == 0  # 50 - 50 (scrollbar set to 50)
         assert mock_table.VerticalScrollbar.Position == 50
+        # The scroll invalidates the old reference; a fresh one is re-found
+        controller._session.findById.assert_called_once_with(mock_table.Id)
+        assert table is controller._session.findById.return_value
 
     def test_select_table_row_from_scrolled_position(self):
         """select_table_row scrolls and selects the correct row."""
@@ -4072,4 +4076,264 @@ class TestHandlePopup:
 
         with pytest.raises(ValueError, match="button_text is required"):
             controller.handle_popup("press", "")
+
+
+# ===========================================================================
+# GuiTableControl scroll staleness (re-find after scroll)
+# ===========================================================================
+
+
+class _StaleScrollbar:
+    """Scrollbar view onto a _TableControlSim through one COM reference."""
+
+    def __init__(self, ref):
+        self._ref = ref
+        self.Minimum = 0
+
+    @property
+    def Maximum(self):
+        self._ref._check()
+        sim = self._ref._sim
+        return max(0, sim.total_rows - sim.visible_rows)
+
+    @property
+    def Position(self):
+        self._ref._check()
+        return self._ref._sim.scroll_position
+
+    @Position.setter
+    def Position(self, value):
+        self._ref._check()
+        sim = self._ref._sim
+        sim.scroll_position = max(0, min(int(value), self.Maximum))
+        # The scroll triggers a server round-trip that re-renders the
+        # control: every existing COM reference into it goes stale.
+        self._ref._stale = True
+
+
+class _StaleCell:
+    Type = "GuiTextField"
+
+    def __init__(self, sim, abs_row, col_idx):
+        self._sim = sim
+        self._abs_row = abs_row
+        self._col_idx = col_idx
+        self.Name = f"COL{col_idx}"
+
+    @property
+    def Text(self):
+        return f"R{self._abs_row}C{self._col_idx}"
+
+    @Text.setter
+    def Text(self, value):
+        self._sim.written[(self._abs_row, self._col_idx)] = value
+
+    def SetFocus(self):
+        self._sim.focused.append((self._abs_row, self._col_idx))
+
+
+class _StaleAbsRow:
+    def __init__(self, sim, abs_row):
+        self._sim = sim
+        self._abs_row = abs_row
+        self.Selectable = True
+
+    @property
+    def Selected(self):
+        return self._abs_row in self._sim.selected
+
+    @Selected.setter
+    def Selected(self, value):
+        if value:
+            self._sim.selected.append(self._abs_row)
+
+
+class _StaleColumns:
+    def __init__(self, ref):
+        self._ref = ref
+
+    @property
+    def Count(self):
+        self._ref._check()
+        return self._ref._sim.col_count
+
+    def __call__(self, i):
+        self._ref._check()
+        col = MagicMock()
+        col.Title = f"Title{i}"
+        col.Tooltip = f"Tooltip{i}"
+        return col
+
+
+class _TableControlRef:
+    """One COM reference to the simulated table control."""
+
+    Type = "GuiTableControl"
+    TableFieldName = "SIM_TABLE"
+
+    def __init__(self, sim):
+        self._sim = sim
+        self._stale = False
+        self.Id = sim.FULL_ID
+        self.VerticalScrollbar = _StaleScrollbar(self)
+        self.Columns = _StaleColumns(self)
+
+    def _check(self):
+        if self._stale:
+            raise RuntimeError(
+                "COM reference went stale: table control was re-rendered "
+                "after a scroll; re-find via findById is required"
+            )
+
+    @property
+    def VisibleRowCount(self):
+        self._check()
+        return self._sim.visible_rows
+
+    @property
+    def RowCount(self):
+        self._check()
+        return self._sim.total_rows
+
+    def GetCell(self, vis_row, col_idx):
+        self._check()
+        sim = self._sim
+        if not (0 <= vis_row < sim.visible_rows):
+            raise RuntimeError(f"visible row {vis_row} out of range")
+        return _StaleCell(sim, sim.scroll_position + vis_row, col_idx)
+
+    def GetAbsoluteRow(self, abs_row):
+        self._check()
+        return _StaleAbsRow(self._sim, abs_row)
+
+
+class _TableControlSim:
+    """Shared state behind successive COM references to one table control.
+
+    Models the SAP GUI behavior where changing ``VerticalScrollbar.Position``
+    re-renders the control server-side, so previously obtained COM
+    references raise on the next access and a fresh ``findById`` is needed.
+    """
+
+    FULL_ID = "/app/con[0]/ses[0]/wnd[0]/usr/tblSIM"
+    SHORT_ID = "wnd[0]/usr/tblSIM"
+
+    def __init__(self, total_rows=25, visible_rows=10, col_count=3):
+        self.total_rows = total_rows
+        self.visible_rows = visible_rows
+        self.col_count = col_count
+        self.scroll_position = 0
+        self.written = {}
+        self.focused = []
+        self.selected = []
+        self.refs_handed_out = 0
+
+    def new_ref(self):
+        self.refs_handed_out += 1
+        return _TableControlRef(self)
+
+
+class TestTableControlScrollStaleness:
+    """Every operation that scrolls a GuiTableControl must re-acquire the
+    COM reference before touching cells/rows again."""
+
+    def _make_controller_with_sim(self, **kwargs):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        sim = _TableControlSim(**kwargs)
+
+        def find_by_id(element_id):
+            if element_id in (sim.SHORT_ID, sim.FULL_ID):
+                return sim.new_ref()
+            return MagicMock()  # windows etc.
+
+        controller._session.findById.side_effect = find_by_id
+        return controller, sim
+
+    def test_scroll_helper_returns_fresh_reference_and_offset(self):
+        controller, sim = self._make_controller_with_sim()
+        table = controller._find_element(sim.SHORT_ID)
+
+        fresh, offset = controller._scroll_table_control_to_row(table, 20)
+
+        # Row 20 needs Position 20, clamped to Maximum 15 -> offset 5
+        assert sim.scroll_position == 15
+        assert offset == 5
+        assert fresh is not table
+        assert fresh.GetCell(offset, 0).Text == "R20C0"
+        with pytest.raises(RuntimeError, match="stale"):
+            table.GetCell(offset, 0)
+
+    def test_scroll_helper_keeps_reference_when_already_visible(self):
+        controller, sim = self._make_controller_with_sim()
+        table = controller._find_element(sim.SHORT_ID)
+
+        same, offset = controller._scroll_table_control_to_row(table, 3)
+
+        assert same is table
+        assert offset == 3
+        assert sim.refs_handed_out == 1  # no re-find without a scroll
+
+    def test_modify_cell_survives_scroll(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.modify_cell(sim.SHORT_ID, 20, 2, "NEW")
+
+        assert result.get("status") == "success", result
+        assert sim.written == {(20, 2): "NEW"}
+
+    def test_set_current_cell_survives_scroll(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.set_current_cell(sim.SHORT_ID, 18, 1)
+
+        assert result.get("status") == "success", result
+        assert sim.focused == [(18, 1)]
+
+    def test_double_click_cell_survives_scroll(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.double_click_table_cell(sim.SHORT_ID, 20, 0)
+
+        assert result.get("status") == "double_clicked", result
+        assert sim.selected == [20]
+        assert sim.focused == [(20, 0)]
+
+    def test_select_table_row_survives_scroll(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.select_table_row(sim.SHORT_ID, 20)
+
+        assert result.get("status") == "success", result
+        assert sim.selected == [20]
+
+    def test_select_multiple_rows_survives_scroll(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.select_multiple_rows(sim.SHORT_ID, [2, 20])
+
+        assert result.get("status") == "success", result
+        assert sim.selected == [2, 20]
+
+    def test_read_table_with_start_row_survives_scroll(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.read_table(sim.SHORT_ID, max_rows=10, start_row=15)
+
+        assert "error" not in result, result
+        assert result["first_visible_row"] == 15
+        assert result["rows_returned"] == 10
+        assert result["data"][0]["COL0"] == "R15C0"
+        assert result["data"][-1]["COL2"] == "R24C2"
+
+    def test_scroll_table_control_survives_scroll(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.scroll_table_control(sim.SHORT_ID, 15)
+
+        assert result.get("status") == "success", result
+        assert result["position"] == 15
+        assert result["visible_rows"] == 10
+        assert result["total_rows"] == 25
 

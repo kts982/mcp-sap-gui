@@ -82,24 +82,28 @@ class TablesMixin:
         except Exception:
             return None
 
-    def _scroll_table_control_to_row(self, table, abs_row: int) -> int:
+    def _scroll_table_control_to_row(self, table, abs_row: int) -> tuple:
         """Scroll a GuiTableControl so *abs_row* is visible.
 
-        Returns the **visible-row offset** to pass to ``GetCell()``.
-        ``GetCell`` uses visible-row indexing (0 = first visible row),
-        so callers must use the returned offset, not the original
-        *abs_row*.
+        Returns a ``(table, visible_row_offset)`` tuple.  Pass the offset
+        to ``GetCell()`` — it uses visible-row indexing (0 = first visible
+        row) — and use the returned *table* for all further access: when a
+        scroll was needed, it is a freshly re-acquired COM reference.
+        Changing ``VerticalScrollbar.Position`` triggers a server
+        round-trip that re-renders the control and invalidates existing
+        references into it.
         """
         visible = table.VisibleRowCount
         scrollbar = table.VerticalScrollbar
         current_top = scrollbar.Position
 
         if current_top <= abs_row < current_top + visible:
-            return abs_row - current_top  # already visible
+            return table, abs_row - current_top  # already visible
 
+        full_id = table.Id  # capture before the reference goes stale
         new_pos = max(scrollbar.Minimum, min(abs_row, scrollbar.Maximum))
         scrollbar.Position = new_pos
-        return abs_row - new_pos
+        return self._session.findById(full_id), abs_row - new_pos
 
     def _resolve_table_control_column(self, table, column) -> int:
         """Resolve a column name/index to a numeric column index for GuiTableControl."""
@@ -305,9 +309,14 @@ class TablesMixin:
 
             # Scroll to start_row if explicitly requested
             if start_row > 0:
+                full_id = table.Id  # capture before the reference goes stale
                 new_pos = max(scrollbar.Minimum, min(start_row, scrollbar.Maximum))
                 try:
                     scrollbar.Position = new_pos
+                    # The scroll round-trip re-renders the control and
+                    # invalidates existing references — re-acquire.
+                    table = self._session.findById(full_id)
+                    scrollbar = table.VerticalScrollbar
                 except Exception:
                     pass  # best-effort scroll
                 start_position = scrollbar.Position
@@ -576,7 +585,7 @@ class TablesMixin:
                 # indexing and works regardless of scroll position.
                 # Some popup tables throw COM errors on scroll.
                 try:
-                    self._scroll_table_control_to_row(table, row)
+                    table, _ = self._scroll_table_control_to_row(table, row)
                 except Exception:
                     pass
                 table.GetAbsoluteRow(row).Selected = True
@@ -610,7 +619,7 @@ class TablesMixin:
             table = self._find_element(table_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
-                vis_row = self._scroll_table_control_to_row(table, row)
+                table, vis_row = self._scroll_table_control_to_row(table, row)
                 col_idx = self._resolve_table_control_column(table, column)
                 table.GetAbsoluteRow(row).Selected = True
                 cell = table.GetCell(vis_row, col_idx)
@@ -654,7 +663,7 @@ class TablesMixin:
             table = self._find_element(grid_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
-                vis_row = self._scroll_table_control_to_row(table, row)
+                table, vis_row = self._scroll_table_control_to_row(table, row)
                 col_idx = self._resolve_table_control_column(table, column)
                 cell = table.GetCell(vis_row, col_idx)
                 cell.Text = value
@@ -693,7 +702,7 @@ class TablesMixin:
             table = self._find_element(grid_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
-                vis_row = self._scroll_table_control_to_row(table, row)
+                table, vis_row = self._scroll_table_control_to_row(table, row)
                 col_idx = self._resolve_table_control_column(table, column)
                 cell = table.GetCell(vis_row, col_idx)
                 cell.SetFocus()
@@ -799,6 +808,7 @@ class TablesMixin:
             scrollbar = table.VerticalScrollbar
             scroll_max = scrollbar.Maximum
             new_pos = max(scrollbar.Minimum, min(position, scroll_max))
+            full_id = table.Id  # capture before the reference goes stale
             try:
                 scrollbar.Position = new_pos
             except Exception as scroll_err:
@@ -817,6 +827,13 @@ class TablesMixin:
                     "total_rows": table.RowCount,
                     "hint": "Scrollbar failed; use navigation buttons or Position dialog.",
                 }
+
+            # The scroll round-trip re-renders the control and invalidates
+            # existing references — re-acquire before reading row counts.
+            try:
+                table = self._session.findById(full_id)
+            except Exception:
+                pass
 
             return {
                 "table_id": table_id,
@@ -1090,7 +1107,7 @@ class TablesMixin:
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 for row in rows:
-                    self._scroll_table_control_to_row(table, row)
+                    table, _ = self._scroll_table_control_to_row(table, row)
                     table.GetAbsoluteRow(row).Selected = True
             else:
                 # ALV: comma-separated row list
