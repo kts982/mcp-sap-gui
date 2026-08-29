@@ -6,8 +6,11 @@ proves the text-only degradation path (CI runs this file both ways).
 """
 
 import base64
+import importlib.util
+import io
 import json
 import logging
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,7 +21,12 @@ from fastmcp.server.context import Context
 # Module-level server import (no importlib.reload) avoids beartype circular
 # import problems.
 import mcp_sap_gui.server as _server_mod
-from mcp_sap_gui.preview import build_preview_card, build_preview_text, prefab_available
+from mcp_sap_gui.preview import (
+    build_preview_card,
+    build_preview_text,
+    downscale_png_b64,
+    prefab_available,
+)
 from mcp_sap_gui.session_manager import SessionManager
 
 needs_prefab = pytest.mark.skipif(
@@ -569,3 +577,79 @@ class TestPreviewCardBranch:
         assert result.structured_content is None
         assert len(_image_blocks(result)) == 1
         assert "prefab-ui is not installed" in caplog.text
+
+
+# ===========================================================================
+# Card image downscaling
+# ===========================================================================
+
+needs_pillow = pytest.mark.skipif(
+    importlib.util.find_spec("PIL") is None,
+    reason="pillow (screenshots extra) not installed",
+)
+
+
+def _real_png_b64(width, height):
+    from PIL import Image as PILImage
+
+    buf = io.BytesIO()
+    PILImage.new("RGB", (width, height), "white").save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+class TestDownscalePngB64:
+    @needs_pillow
+    def test_wide_image_is_downscaled_preserving_aspect(self):
+        from PIL import Image as PILImage
+
+        out = downscale_png_b64(_real_png_b64(1600, 400))
+        img = PILImage.open(io.BytesIO(base64.b64decode(out)))
+        assert (img.width, img.height) == (960, 240)
+
+    @needs_pillow
+    def test_narrow_image_is_returned_unchanged(self):
+        src = _real_png_b64(320, 200)
+        assert downscale_png_b64(src) == src
+
+    def test_undecodable_data_is_returned_unchanged(self):
+        # Runs with or without pillow: both must pass the data through.
+        assert downscale_png_b64(PNG_B64) == PNG_B64
+        assert downscale_png_b64("not even base64 !!") == "not even base64 !!"
+
+
+class TestCardImageDownscaleWiring:
+    """Only the card's embedded copy is downscaled; sap_screenshot and the
+    text branch's image block keep full resolution."""
+
+    @needs_prefab
+    @needs_pillow
+    async def test_card_embeds_downscaled_copy(self, monkeypatch):
+        from PIL import Image as PILImage
+
+        monkeypatch.setattr(
+            Context,
+            "client_supports_extension",
+            lambda self, extension_id: extension_id == UI_EXTENSION_ID,
+        )
+        wide = _real_png_b64(1600, 400)
+        ctrl = _make_controller(screenshot=wide)
+        with patch.object(_server_mod, "_ctrl", return_value=ctrl):
+            async with Client(_server_mod.mcp) as client:
+                result = await client.call_tool("sap_preview", {})
+        payload = json.dumps(result.structured_content, default=str)
+        assert wide not in payload
+        match = re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", payload)
+        assert match
+        img = PILImage.open(io.BytesIO(base64.b64decode(match.group(1))))
+        assert img.width == 960
+
+    @needs_pillow
+    async def test_text_branch_image_block_keeps_full_resolution(self):
+        wide = _real_png_b64(1600, 400)
+        ctrl = _make_controller(screenshot=wide)
+        with patch.object(_server_mod, "_ctrl", return_value=ctrl):
+            async with Client(_server_mod.mcp) as client:
+                result = await client.call_tool("sap_preview", {})
+        images = _image_blocks(result)
+        assert len(images) == 1
+        assert images[0].data == wide

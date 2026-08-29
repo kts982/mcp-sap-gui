@@ -17,6 +17,12 @@ Current release: `0.2.2` for local Windows use over MCP `stdio`.
 - GitHub workflows are included for `CI`, `Docs`, `Dependency Audit`, and tag-based `Release`.
 - Primary repository: GitHub (`kts982/mcp-sap-gui`).
 
+## What's New
+
+**`sap_preview` — see it before it happens.** The agent can now show you an approval card at any checkpoint: before a batch write, before saving, or whenever you ask (*"before adding country GR, show me the values"*). It carries the current screenshot, session context, and the exact values about to be written — password-shaped values masked. On MCP Apps hosts (VS Code Copilot Chat) it renders as a rich inline card; everywhere else you get the same summary as text plus the screenshot. Saving still goes through the confirmation gate. Details: [Rendered Preview Cards](#rendered-preview-cards).
+
+<img src="docs/images/sap-preview-card.png" alt="sap_preview approval card rendered inline in VS Code Copilot Chat" width="640">
+
 ## What This Does
 
 This server allows AI assistants to:
@@ -167,6 +173,15 @@ uv sync --extra screenshots
 uv sync --extra dev --extra screenshots
 
 ```
+
+**Windows note for source checkouts:** while an MCP server launched from this checkout is running, its process holds locks on native DLLs in `.venv` (pywin32, watchfiles). Running `uv sync` or upgrading dependencies during that time can fail with "Access is denied" or leave `.venv` half-updated — stop or restart the MCP client first, then sync. If two MCP clients (e.g. Claude Code and VS Code) launch the server from the same checkout, point the second one at an isolated environment instead of the shared `.venv`:
+
+```text
+Command:   uv
+Arguments: run --isolated --no-project --with "mcp-sap-gui[screenshots,apps] @ file:///<path-to-checkout>" python -m mcp_sap_gui.server
+```
+
+(`uvx mcp-sap-gui` users are unaffected — every `uvx` launch uses its own cached environment.)
 
 ## Usage
 

@@ -42,6 +42,7 @@ from .preview import (
     SCREENSHOT_UNAVAILABLE,
     build_preview_card,
     build_preview_text,
+    downscale_png_b64,
     prefab_available,
 )
 from .prompts import (
@@ -1517,8 +1518,11 @@ async def sap_preview(
                 session=session,
                 note=note,
                 pending_fields=pending_fields,
+                # Card copy only: sap_screenshot and the text branch's image
+                # block keep full resolution.
                 image_data_uri=(
-                    "data:image/png;base64," + png_b64 if png_b64 else None
+                    "data:image/png;base64," + downscale_png_b64(png_b64)
+                    if png_b64 else None
                 ),
             )
         except Exception as exc:

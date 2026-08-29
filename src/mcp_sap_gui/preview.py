@@ -12,7 +12,9 @@ extra installed.
 
 from __future__ import annotations
 
+import base64
 import importlib.util
+import io
 import re
 from typing import Any, Mapping
 
@@ -22,6 +24,7 @@ __all__ = [
     "SCREENSHOT_UNAVAILABLE",
     "build_preview_card",
     "build_preview_text",
+    "downscale_png_b64",
     "prefab_available",
 ]
 
@@ -54,6 +57,35 @@ _WHITESPACE_RE = re.compile(r"\s+")
 def prefab_available() -> bool:
     """Report whether the optional ``apps`` extra (prefab-ui) is importable."""
     return importlib.util.find_spec("prefab_ui") is not None
+
+
+# Card-only cosmetic cap: keeps the rendered card compact and roughly halves
+# its payload. Full resolution still reaches hosts via sap_screenshot and the
+# preview's image content block.
+_CARD_IMAGE_MAX_WIDTH = 960
+
+
+def downscale_png_b64(png_b64: str, max_width: int = _CARD_IMAGE_MAX_WIDTH) -> str:
+    """Downscale a base64 PNG to *max_width*, preserving aspect ratio.
+
+    Returns the input unchanged when the image is already narrow enough,
+    pillow is not installed, or the data cannot be decoded — a preview must
+    never fail because of its illustration.
+    """
+    try:
+        from PIL import Image as PILImage
+
+        raw = base64.b64decode(png_b64)
+        with PILImage.open(io.BytesIO(raw)) as img:
+            if img.width <= max_width:
+                return png_b64
+            height = max(1, round(img.height * max_width / img.width))
+            resized = img.resize((max_width, height))
+        buf = io.BytesIO()
+        resized.save(buf, format="PNG", optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return png_b64
 
 
 # ---------------------------------------------------------------------------
