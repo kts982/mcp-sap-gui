@@ -11,6 +11,7 @@ ID handling:
 
 - Pass normal SAP GUI IDs such as `wnd[0]/usr/...`, `wnd[0]/tbar[1]/btn[8]`, or `wnd[0]/mbar/menu[3]/menu[0]`.
 - Full session paths such as `/app/con[0]/ses[0]/wnd[0]/usr/...` are accepted and normalized automatically.
+- Docking containers sit beside the user area, not inside it: the dialog-structure tree of a view cluster (SM34, most IMG activities) is under `wnd[0]/shellcont/...`. `sap_get_screen_elements` lists them as `docking_containers`; pass `container_id="wnd[0]"` with `max_depth=1` to see all top-level areas of a window. Switch views in such a tree with `sap_double_click_tree_item(tree_id, node_key, "Column1")`; `sap_double_click_tree_node` does not navigate there.
 - Malformed IDs are rejected before they reach SAP GUI scripting.
 
 ## Policy Profiles
@@ -152,8 +153,8 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter |
-| `sap_screenshot` | Capture a screenshot of the active SAP window |
+| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any |
+| `sap_screenshot` | Capture a screenshot of the active SAP window. `save_path` also writes a full-resolution PNG (never overwrites an existing file) and returns its path and pixel size; `inline=false` skips the image when only the file is needed |
 
 ## Preview
 

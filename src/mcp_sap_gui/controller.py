@@ -23,9 +23,13 @@ logger = logging.getLogger(__name__)
 
 _WINDOW_ID_RE = re.compile(r"^wnd\[(\d+)\]$")
 _NORMALIZED_WND_PATH_RE = re.compile(r"(?:^|/)(wnd\[\d+\].*)$")
+# Top-level window children: user area, menu/status/title bars, toolbars and
+# docking containers. The latter (wnd[0]/shellcont, wnd[0]/shellcont[1]) sit
+# BESIDE usr and hold the dialog-structure tree of view clusters (SM34, most
+# IMG activities) and the SE80 repository tree.
 _ELEMENT_ID_RE = re.compile(
     r"^wnd\[(\d+)\]"
-    r"(?:/(?:usr|mbar|sbar|tbar\[\d+\])"
+    r"(?:/(?:usr|mbar|sbar|titl|tbar\[\d+\]|shellcont(?:\[\d+\])?)"
     r"(?:/[A-Za-z0-9_.:%\\-]+(?:\[[A-Za-z0-9_,]+\])*)*)$"
 )
 
@@ -139,9 +143,22 @@ class SAPGUIControllerBase:
             raise ValueError(
                 "Invalid SAP element ID: "
                 f"{element_id!r}. Expected format like 'wnd[0]/usr/...', "
-                "'wnd[0]/mbar/...', 'wnd[0]/sbar', or 'wnd[0]/tbar[0]/...'."
+                "'wnd[0]/mbar/...', 'wnd[0]/sbar', 'wnd[0]/tbar[0]/...', "
+                "or 'wnd[0]/shellcont/...' (docking container)."
             )
         return normalized
+
+    def _validate_container_id(self, container_id: Any) -> str:
+        """Validate a discovery container: an element ID or a bare window.
+
+        A bare ``wnd[n]`` is accepted here only, so the window's top-level
+        children (incl. docking containers) can be listed; every other tool
+        keeps the stricter element grammar.
+        """
+        normalized = self._normalize_element_id(container_id)
+        if _WINDOW_ID_RE.fullmatch(normalized):
+            return normalized
+        return self._validate_element_id(container_id)
 
     def _find_window(self, window_id: Any):
         """Validate and resolve an SAP window by short ID."""
@@ -492,6 +509,7 @@ class SAPGUIControllerBase:
         self._require_session()
         try:
             # Ensure proper format
+            tcode = tcode.strip()
             if not tcode.startswith("/"):
                 tcode = f"/n{tcode}"
 
@@ -508,7 +526,11 @@ class SAPGUIControllerBase:
                 except Exception:
                     previous_session_count = None
 
-            if opens_new_session or upper.startswith("/*"):
+            # A bare /n leaves the current transaction; StartTransaction("")
+            # has nothing to start, so it goes through the command field too.
+            leaves_transaction = upper.strip() == "/N"
+
+            if opens_new_session or leaves_transaction or upper.startswith("/*"):
                 self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
                 self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
                 if opens_new_session and previous_session_id:
@@ -666,7 +688,9 @@ class SAPGUIControllerBase:
                 ("MessageNumber", "message_number"),
             ]:
                 try:
-                    info[key] = getattr(sbar, attr)
+                    value = getattr(sbar, attr)
+                    # SAP pads MessageId to 20 characters ("00          ...")
+                    info[key] = value.strip() if isinstance(value, str) else value
                 except Exception:
                     info[key] = ""
             # Message parameters (up to 4)

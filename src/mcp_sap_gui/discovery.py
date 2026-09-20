@@ -12,6 +12,11 @@ from .models import SAPGUIError, ScreenElement
 
 logger = logging.getLogger(__name__)
 
+# GuiFrameWindow.HardCopy image type. It must be the numeric constant: a
+# string like "PNG" is ignored and SAP GUI writes an uncompressed BMP
+# (18 MB for a maximised window, versus 1.3 MB as PNG).
+_HARDCOPY_PNG = 2
+
 
 class DiscoveryMixin:
     """Mixin for discovery and inspection operations on SAP GUI screens."""
@@ -505,7 +510,9 @@ class DiscoveryMixin:
         Useful for discovering field IDs when automating a new transaction.
 
         Args:
-            container_id: Starting container (default: main user area)
+            container_id: Starting container (default: main user area). A
+                bare window ("wnd[0]") lists its top-level children, incl.
+                docking containers that live beside the user area.
             max_depth: Maximum recursion depth
             type_filter: Comma-separated SAP element types to include
                 (e.g. "GuiTextField,GuiCTextField"). Empty = all types.
@@ -521,7 +528,9 @@ class DiscoveryMixin:
             type_filter_set = {t.strip() for t in type_filter.split(",") if t.strip()}
 
         try:
-            container = self._find_element(container_id)
+            container = self._session.findById(
+                self._validate_container_id(container_id)
+            )
             elements = self._enumerate_elements(
                 container, max_depth,
                 type_filter_set=type_filter_set,
@@ -539,6 +548,28 @@ class DiscoveryMixin:
             )
             raise SAPGUIError(f"Failed to enumerate elements in '{container_id}'")
 
+    def get_docking_containers(self, window_id: str = "wnd[0]") -> List[str]:
+        """List a window's docking containers as short IDs.
+
+        Docking containers (``wnd[0]/shellcont``, ``wnd[0]/shellcont[1]``) are
+        siblings of the user area, so discovery under ``wnd[0]/usr`` never
+        reaches them. They hold the dialog-structure tree of view clusters
+        (SM34, most IMG activities) and the SE80 repository tree.
+        """
+        self._require_session()
+
+        try:
+            window = self._find_window(window_id)
+            containers = []
+            for i in range(window.Children.Count):
+                child_id = self._normalize_element_id(window.Children(i).Id)
+                if child_id.rsplit("/", 1)[-1].startswith("shellcont"):
+                    containers.append(child_id)
+            return containers
+        except Exception as e:
+            logger.debug("Could not list docking containers of %s: %s", window_id, e)
+            return []
+
     def _enumerate_elements(self, container, max_depth: int,
                             current_depth: int = 0,
                             type_filter_set: set = None,
@@ -549,6 +580,15 @@ class DiscoveryMixin:
         if current_depth >= max_depth:
             return elements
 
+        def prop(obj, name, default):
+            # COM raises more than AttributeError for an unsupported property
+            # (GuiTitlebar.Changeable -> IndexError), which getattr's default
+            # does not absorb; one such child must not hide its siblings.
+            try:
+                return getattr(obj, name)
+            except Exception:
+                return default
+
         try:
             for i in range(container.Children.Count):
                 child = container.Children(i)
@@ -556,10 +596,10 @@ class DiscoveryMixin:
                 element = ScreenElement(
                     id=child.Id,
                     type=child.Type,
-                    name=getattr(child, 'Name', ''),
-                    text=str(getattr(child, 'Text', ''))[:200],
-                    changeable=getattr(child, 'Changeable', False),
-                    visible=getattr(child, 'Visible', True),
+                    name=prop(child, 'Name', ''),
+                    text=str(prop(child, 'Text', ''))[:200],
+                    changeable=prop(child, 'Changeable', False),
+                    visible=prop(child, 'Visible', True),
                 )
 
                 # Apply filters — but always recurse into containers
@@ -646,7 +686,7 @@ class DiscoveryMixin:
             # Find the topmost window (popups are wnd[1], wnd[2], etc.)
             window_id = self._find_topmost_window()
             window = self._find_window(window_id)
-            window.HardCopy(filepath, "PNG")
+            window.HardCopy(filepath, _HARDCOPY_PNG)
 
             # Optimize image size with Pillow if available
             self._optimize_screenshot(filepath)
@@ -673,6 +713,108 @@ class DiscoveryMixin:
             if temp_filepath and os.path.exists(temp_filepath):
                 os.remove(temp_filepath)
             return self._error_result({}, e, "Could not capture screenshot")
+
+    def save_screenshot(self, save_path: str, inline: bool = True) -> Dict[str, Any]:
+        """
+        Save a screenshot of the current SAP window to a PNG file.
+
+        The file keeps the full resolution SAP GUI renders (the inline image
+        is downscaled to 1920px), which is what a document needs. An existing
+        file is never overwritten.
+
+        Args:
+            save_path: Target file; must end in ".png" and its directory must
+                exist. Relative paths resolve against the server's working
+                directory.
+            inline: Also return the (downscaled) image as base64 ``data``.
+
+        Returns:
+            Dict with the absolute filepath, pixel size, window and, when
+            *inline* is set, the base64 image data
+        """
+        self._require_session()
+
+        import base64
+        import os
+        import shutil
+        import tempfile
+
+        temp_filepath = None
+        try:
+            target = self._resolve_screenshot_path(save_path)
+
+            window_id = self._find_topmost_window()
+            self._find_window(window_id).HardCopy(target, _HARDCOPY_PNG)
+            if not os.path.isfile(target):
+                raise SAPGUIError("SAP GUI did not write the screenshot file")
+
+            result: Dict[str, Any] = {
+                "format": "png",
+                "filepath": target,
+                "window": window_id,
+                "size_bytes": os.path.getsize(target),
+            }
+            size = self._png_size(target)
+            if size is not None:
+                result["width"], result["height"] = size
+
+            if inline:
+                # Optimize a copy: the saved file stays at full resolution.
+                temp_file = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    prefix="sap_screenshot_",
+                    suffix=".png",
+                )
+                temp_filepath = temp_file.name
+                temp_file.close()
+                shutil.copyfile(target, temp_filepath)
+                self._optimize_screenshot(temp_filepath)
+                with open(temp_filepath, "rb") as f:
+                    result["data"] = base64.b64encode(f.read()).decode()
+
+            return result
+
+        except Exception as e:
+            return self._error_result({}, e, "Could not save screenshot")
+        finally:
+            if temp_filepath and os.path.exists(temp_filepath):
+                os.remove(temp_filepath)
+
+    def _resolve_screenshot_path(self, save_path: Any) -> str:
+        """Validate a screenshot target and return it as an absolute path."""
+        import os
+
+        if not isinstance(save_path, str) or not save_path.strip():
+            raise ValueError("save_path must be a file path ending in '.png'")
+
+        target = os.path.abspath(os.path.expanduser(save_path.strip()))
+        if not target.lower().endswith(".png"):
+            raise ValueError(f"save_path must end in '.png': {save_path!r}")
+        if not os.path.isdir(os.path.dirname(target)):
+            raise ValueError(
+                f"Directory does not exist: {os.path.dirname(target)!r}"
+            )
+        if os.path.exists(target):
+            raise ValueError(
+                f"File already exists: {target!r}. Screenshots never "
+                "overwrite a file; choose another name."
+            )
+        return target
+
+    @staticmethod
+    def _png_size(filepath: str) -> tuple[int, int] | None:
+        """Read (width, height) from a PNG header without needing Pillow."""
+        import struct
+
+        try:
+            with open(filepath, "rb") as f:
+                header = f.read(24)
+        except OSError:
+            return None
+        if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+            return None
+        width, height = struct.unpack(">II", header[16:24])
+        return width, height
 
     def _optimize_screenshot(self, filepath: str) -> None:
         """

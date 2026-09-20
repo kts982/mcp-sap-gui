@@ -1379,7 +1379,7 @@ class TestActiveWindowImproved:
         result = controller.take_screenshot("test.png")
 
         controller._session.findById.assert_called_once_with("wnd[2]")
-        hardcopy_target.HardCopy.assert_called_once_with("test.png", "PNG")
+        hardcopy_target.HardCopy.assert_called_once_with("test.png", 2)
         assert result["window"] == "wnd[2]"
 
     def test_take_screenshot_uses_unique_temp_file_when_no_path(self, tmp_path):
@@ -1413,7 +1413,7 @@ class TestActiveWindowImproved:
             result = controller.take_screenshot()
 
         mock_temp.assert_called_once()
-        hardcopy_target.HardCopy.assert_called_once_with(str(screenshot_path), "PNG")
+        hardcopy_target.HardCopy.assert_called_once_with(str(screenshot_path), 2)
         assert result["data"] == base64.b64encode(b"png-bytes").decode()
         assert not screenshot_path.exists()
 

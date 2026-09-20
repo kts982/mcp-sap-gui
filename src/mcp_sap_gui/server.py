@@ -18,7 +18,7 @@ Security Note:
 """
 
 import asyncio
-import base64
+import json
 import logging
 import os
 import re
@@ -32,7 +32,6 @@ from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.exceptions import ToolError
 from fastmcp.server.lifespan import lifespan
 from fastmcp.tools import ToolResult
-from fastmcp.utilities.types import Image
 from mcp.shared.exceptions import McpError
 from mcp.types import ImageContent, TextContent
 
@@ -266,6 +265,9 @@ to reduce output on complex screens.
 2. `sap_get_toolbar_buttons` — lists toolbar button IDs (system bar + app bar).
 3. `sap_read_field` — reads a specific field's value and labels.
 
+A tree docked beside the screen (view clusters in SM34 / IMG activities) is NOT \
+under `wnd[0]/usr`: step 1 reports it as `docking_containers` (e.g. `wnd[0]/shellcont`).
+
 **CRITICAL: Never guess or hallucinate element IDs.** Always discover them first \
 with the tools above. SAP field IDs vary across systems and customizations.
 
@@ -324,6 +326,8 @@ opens documentation, not the activity.
 - **Ignoring popups**: Check `active_window` in every action response.
 - **F5 in table maintenance**: F5 means "New Entries", not refresh.
 - **double_click_tree_node in SPRO**: Opens docs, not activities. Use `click_tree_link`.
+- **double_click_tree_node in a view cluster (SM34)**: Does nothing. Use \
+`double_click_tree_item` with the tree's column name (usually "Column1").
 - **Scrolling TableControls manually**: Use `start_row` in `sap_read_table` or \
 the "Position..." button instead.
 - **Reading huge trees**: Use `search_tree_nodes` + `get_tree_node_children`, \
@@ -459,6 +463,29 @@ Some transactions use split-screen layouts:
 - Elements are nested inside `shellcont[0]`, `shellcont[1]`, etc.
 - Use `sap_get_screen_elements` with `max_depth=3` or higher
 - Example: Warehouse Monitor `/SCWM/MON` uses splitter with tree in `shellcont[0]`
+
+## Docking Containers (View Clusters)
+
+A docking container is attached to the window BESIDE the user area, so its ID \
+starts with `wnd[0]/shellcont` instead of `wnd[0]/usr`:
+- The dialog-structure tree of a view cluster (SM34, most IMG activities) is \
+typically `wnd[0]/shellcont/shell`; the tables it opens stay under `wnd[0]/usr`
+- `sap_get_screen_elements` on the user area reports them as `docking_containers`
+- `sap_get_screen_elements(container_id="wnd[0]", max_depth=1)` lists every \
+top-level area of a window (title, menu bar, toolbars, user area, status bar, \
+docking containers)
+- Read the structure with `sap_read_tree`; switch to a node's view with \
+`sap_double_click_tree_item(tree_id, node_key, "Column1")` (take the column name \
+from `column_names`). `sap_double_click_tree_node` reports success there but does \
+NOT switch the view — check that the window title changed
+- A dependent node (child level) needs its parent entry selected in the table first
+
+## Known Limits of SAP GUI Scripting
+
+- **Drag and drop cannot be scripted.** Screens that only work by dragging \
+(e.g. the RF menu manager `/SCWM/RFMENU`) cannot be driven; stop early and tell the user.
+- **A running program keeps its loaded version.** After a program was changed and \
+activated elsewhere, leave it (`/n`) and start it again before testing.
 """
 
 
@@ -623,8 +650,18 @@ def _is_transaction_allowed(tcode: str) -> tuple[bool, str]:
     return True, canonical
 
 
+def _is_leave_transaction_command(tcode: object) -> bool:
+    """Return True for a bare ``/n``: leave the current transaction."""
+    return isinstance(tcode, str) and tcode.strip().upper() == "/N"
+
+
 def _enforce_transaction_policy(tcode: str, *, source: str = "transaction") -> str:
     """Raise when a transaction is not permitted by the active policy."""
+    # A bare /n starts nothing, so there is no code to check against the
+    # block/allow lists; it returns to the session's start screen.
+    if _is_leave_transaction_command(tcode):
+        return "/N"
+
     allowed, canonical = _is_transaction_allowed(tcode)
     if allowed:
         return canonical
@@ -830,6 +867,7 @@ async def sap_execute_transaction(tcode: str, ctx: Context) -> dict:
     Navigates to the transaction's initial screen. Always check the
     screen info in the response to understand what screen you landed on.
     Some transactions require /n prefix for SCWM (e.g., /n/SCWM/MON).
+    A bare /n leaves the current transaction (unsaved data is lost).
 
     Subject to transaction blocklist/allowlist. Use sap_get_session_info
     to see the current transaction before navigating away."""
@@ -1500,33 +1538,71 @@ async def sap_get_screen_elements(
     Use max_depth=1 for a quick overview, max_depth=3+ for deeply nested
     layouts (splitter containers, tab strips with sub-containers).
 
-    Pass container_id='wnd[0]/mbar' to discover the menu bar structure."""
+    Pass container_id='wnd[0]/mbar' to discover the menu bar structure.
+
+    Docking containers sit BESIDE the user area, not inside it: the
+    dialog-structure tree of a view cluster (SM34, most IMG activities) and
+    the SE80 tree are under 'wnd[0]/shellcont'. When the window has any, the
+    response lists them as docking_containers; discover them with that id,
+    or pass container_id='wnd[0]' (max_depth=1) for all top-level areas."""
     c = _ctrl(ctx)
-    elements = await _com(
-        lambda: c.get_screen_elements(
+    usr_window = re.search(r"(wnd\[\d+\])/usr$", container_id.strip())
+
+    def _discover():
+        found = c.get_screen_elements(
             container_id, max_depth=max_depth,
             type_filter=type_filter,
             changeable_only=changeable_only,
         )
-    )
-    return {
+        docking = c.get_docking_containers(usr_window.group(1)) if usr_window else []
+        return found, docking
+
+    elements, docking = await _com(_discover)
+    result = {
         "element_count": len(elements),
         "elements": [e.__dict__ for e in elements],
     }
+    if docking:
+        result["docking_containers"] = docking
+    return result
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
-async def sap_screenshot(ctx: Context) -> Image:
+async def sap_screenshot(
+    ctx: Context,
+    save_path: str = "",
+    inline: bool = True,
+) -> ToolResult:
     """Take a screenshot of the current SAP window.
 
     Use as a fallback when structured tools (sap_get_screen_elements,
     sap_read_field, sap_read_table) return empty or confusing results,
-    e.g., on Web Dynpro screens where the element tree is non-standard."""
+    e.g., on Web Dynpro screens where the element tree is non-standard.
+
+    To put a screenshot into a document, pass save_path (must end in .png,
+    directory must exist, existing files are never overwritten). The file
+    keeps SAP GUI's full resolution; the inline image is capped at 1920px.
+    The response then also reports the absolute path and pixel size. Set
+    inline=False to skip the image when only the file is needed."""
     c = _ctrl(ctx)
-    result = await _com(c.take_screenshot)
+    if not save_path.strip():
+        result = await _com(c.take_screenshot)
+        if "error" in result:
+            raise ValueError(result["error"])
+        return ToolResult(content=[
+            ImageContent(type="image", data=result["data"], mimeType="image/png"),
+        ])
+
+    result = await _com(lambda: c.save_screenshot(save_path, inline=inline))
     if "error" in result:
         raise ValueError(result["error"])
-    return Image(data=base64.b64decode(result["data"]), format="png")
+    png_b64 = result.pop("data", None)
+    content: list = [TextContent(type="text", text=json.dumps(result))]
+    if png_b64:
+        content.append(
+            ImageContent(type="image", data=png_b64, mimeType="image/png")
+        )
+    return ToolResult(content=content)
 
 
 # ===========================================================================
