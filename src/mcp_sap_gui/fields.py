@@ -341,6 +341,7 @@ class FieldsMixin:
         *,
         skip_readonly: bool = False,
         validate: bool = False,
+        verbose: bool = False,
     ) -> Dict[str, Any]:
         """
         Set multiple field values at once.
@@ -356,9 +357,13 @@ class FieldsMixin:
             validate: When True, press Enter after setting fields and
                 include validation feedback (status bar, highlighted
                 fields) in the result.
+            verbose: When True, ``results`` lists every field. By default it
+                lists only the fields that did NOT succeed: echoing 71 table
+                cells back costs ~9k characters and says nothing the counts
+                do not.
 
         Returns:
-            Dict with per-field results and optional validation info
+            Dict with counts, per-field results and optional validation info
         """
         self._require_session()
 
@@ -386,7 +391,10 @@ class FieldsMixin:
             "succeeded": succeeded,
             "failed": failed,
             "skipped": skipped,
-            "results": results,
+            "results": results if verbose else {
+                fid: status for fid, status in results.items()
+                if status != "success"
+            },
         }
 
         if validate:

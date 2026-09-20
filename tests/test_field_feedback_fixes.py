@@ -10,6 +10,9 @@ tests had missed. Each class pins one of them:
 - a bare ``/n`` (leave the current transaction) was rejected as empty
 - ``sap_screenshot`` could not save to a file, so screenshots never reached a
   document
+- responses were heavy: absolute element IDs, one discovery element per table
+  cell, every field echoed by a batch fill, a dead popup dumped after confirm
+- a classic list (``WRITE`` output) could only be read from a screenshot
 """
 
 import base64
@@ -478,3 +481,359 @@ class TestScreenshotTool:
         with patch.object(srv, "_ctrl", return_value=mock_ctrl):
             with pytest.raises(ValueError, match="already exists"):
                 await srv.sap_screenshot(ctx, save_path="shot.png")
+
+
+# ===========================================================================
+# Response size
+# ===========================================================================
+
+def _child(element_id, type_, *, text="", changeable=False, children=()):
+    child = MagicMock(Id=element_id, Type=type_, Text=text,
+                      Changeable=changeable, Visible=True)
+    child.Name = element_id.rsplit("/", 1)[-1]
+    kids = list(children)
+    child.Children.Count = len(kids)
+    child.Children.side_effect = lambda i: kids[i]
+    return child
+
+
+class TestShortIdsInResponses:
+    """The session prefix is stripped on input anyway, so returning it only
+    costs tokens and suggests a session addressing that does not exist."""
+
+    def test_discovery_returns_short_ids(self):
+        controller = _make_controller_with_session()
+        usr = _child("/app/con[0]/ses[0]/wnd[0]/usr", "GuiUserArea", children=[
+            _child("/app/con[0]/ses[0]/wnd[0]/usr/ctxtP_DEVID", "GuiCTextField"),
+        ])
+        controller._session.findById.return_value = usr
+
+        elements = controller.get_screen_elements("wnd[0]/usr")
+
+        assert [e.id for e in elements] == ["wnd[0]/usr/ctxtP_DEVID"]
+
+    def test_popup_buttons_return_short_ids(self):
+        controller = _make_controller_with_session()
+        button = _child("/app/con[0]/ses[0]/wnd[1]/usr/btnBUTTON_1", "GuiButton", text="Yes")
+        button.Tooltip = ""
+        usr = _child("/app/con[0]/ses[0]/wnd[1]/usr", "GuiUserArea", children=[button])
+
+        def find_by_id(element_id):
+            if element_id == "wnd[1]":
+                return MagicMock(Text="Confirm")
+            if element_id == "wnd[1]/usr":
+                return usr
+            raise Exception("not found")
+        controller._session.findById.side_effect = find_by_id
+
+        popup = controller.get_popup_window()
+
+        assert popup["buttons"][0]["id"] == "wnd[1]/usr/btnBUTTON_1"
+
+
+class TestTableControlsStayOneElement:
+    def _screen(self):
+        cells = [
+            _child(f"/app/con[0]/ses[0]/wnd[0]/usr/tblT/txtV-F[{c},{r}]",
+                   "GuiTextField", changeable=True)
+            for r in range(3) for c in range(2)
+        ]
+        table = _child("/app/con[0]/ses[0]/wnd[0]/usr/tblT", "GuiTableControl",
+                       changeable=True, children=cells)
+        button = _child("/app/con[0]/ses[0]/wnd[0]/usr/btnPOSI", "GuiButton")
+        return _child("/app/con[0]/ses[0]/wnd[0]/usr", "GuiUserArea",
+                      children=[table, button])
+
+    def test_cells_are_not_listed_by_default(self):
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = self._screen()
+
+        elements = controller.get_screen_elements("wnd[0]/usr", max_depth=3)
+
+        assert [e.type for e in elements] == ["GuiTableControl", "GuiButton"]
+
+    def test_expand_tables_lists_the_cells(self):
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = self._screen()
+
+        elements = controller.get_screen_elements(
+            "wnd[0]/usr", max_depth=3, expand_tables=True,
+        )
+
+        assert len(elements) == 2 + 6
+
+    def test_changeable_filter_no_longer_floods_with_cells(self):
+        """changeable_only on an SM30 screen used to return every input cell."""
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = self._screen()
+
+        elements = controller.get_screen_elements(
+            "wnd[0]/usr", max_depth=3, changeable_only=True,
+        )
+
+        assert [e.type for e in elements] == ["GuiTableControl"]
+
+    async def test_tool_forwards_expand_tables(self, srv):
+        ctx = _make_mock_ctx()
+        mock_ctrl = MagicMock()
+        mock_ctrl.get_screen_elements.return_value = []
+        mock_ctrl.get_docking_containers.return_value = []
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            await srv.sap_get_screen_elements(ctx, expand_tables=True)
+
+        assert mock_ctrl.get_screen_elements.call_args.kwargs["expand_tables"] is True
+
+
+class TestTableControlColumnTemplates:
+    def _table(self, cells):
+        table = MagicMock()
+        table.Columns.Count = len(cells)
+        table.Columns.side_effect = lambda i: MagicMock(Title=f"Title {i}", Tooltip="")
+
+        def get_cell(row, col):
+            if cells[col] is None:
+                raise Exception("no cell")
+            return cells[col]
+        table.GetCell.side_effect = get_cell
+        return table
+
+    def test_schema_carries_cell_type_and_id_template(self):
+        controller = _make_controller_with_session()
+        key = MagicMock(Id="/app/con[0]/ses[0]/wnd[0]/usr/tblT/ctxtV_T005-LAND1[0,0]",
+                        Type="GuiCTextField")
+        key.Name = "V_T005-LAND1"
+        text = MagicMock(Id="/app/con[0]/ses[0]/wnd[0]/usr/tblT/txtV_T005-LANDX[1,0]",
+                         Type="GuiTextField")
+        text.Name = "V_T005-LANDX"
+
+        columns = controller._get_table_control_columns(
+            self._table([key, text]), with_cell_ids=True,
+        )
+
+        assert columns[0]["name"] == "V_T005-LAND1"
+        assert columns[0]["cell_type"] == "GuiCTextField"
+        assert columns[0]["cell_id"] == "wnd[0]/usr/tblT/ctxtV_T005-LAND1[0,{row}]"
+        assert columns[1]["cell_id"] == "wnd[0]/usr/tblT/txtV_T005-LANDX[1,{row}]"
+        assert "name_is_title" not in columns[0]
+
+    def test_data_reads_stay_lean(self):
+        controller = _make_controller_with_session()
+        cell = MagicMock(Id="/app/con[0]/ses[0]/wnd[0]/usr/tblT/txtF[0,0]", Type="GuiTextField")
+        cell.Name = "F"
+
+        columns = controller._get_table_control_columns(self._table([cell]))
+
+        assert "cell_id" not in columns[0] and "cell_type" not in columns[0]
+
+    def test_empty_table_flags_that_names_are_titles(self):
+        """Seen live: an empty view in display mode has no cells, so the
+        technical names cannot be read and the titles were passed off as names."""
+        controller = _make_controller_with_session()
+
+        columns = controller._get_table_control_columns(
+            self._table([None, None]), with_cell_ids=True,
+        )
+
+        assert [c["name"] for c in columns] == ["Title 0", "Title 1"]
+        assert all(c["name_is_title"] for c in columns)
+        assert "cell_id" not in columns[0]
+
+    def test_read_table_explains_the_title_fallback(self):
+        controller = _make_controller_with_session()
+        table = self._table([None])
+        table.RowCount = 0
+        table.VisibleRowCount = 10
+
+        result = controller._read_table_control(
+            table, "wnd[0]/usr/tblT", max_rows=10, columns_only=True,
+        )
+
+        assert "TITLES" in result["note"]
+
+
+class TestCompactBatchResult:
+    def _controller(self):
+        controller = _make_controller_with_session()
+
+        def find_by_id(element_id):
+            if element_id.endswith("BAD"):
+                raise Exception("not found")
+            return MagicMock()
+        controller._session.findById.side_effect = find_by_id
+        return controller
+
+    def test_only_failures_are_listed(self):
+        fields = {f"wnd[0]/usr/txtF{i}": "x" for i in range(70)}
+        fields["wnd[0]/usr/txtBAD"] = "x"
+
+        result = self._controller().set_batch_fields(fields)
+
+        assert (result["total"], result["succeeded"], result["failed"]) == (71, 70, 1)
+        assert list(result["results"]) == ["wnd[0]/usr/txtBAD"]
+
+    def test_all_good_gives_an_empty_results_dict(self):
+        result = self._controller().set_batch_fields({"wnd[0]/usr/txtF1": "x"})
+
+        assert result["succeeded"] == 1
+        assert result["results"] == {}
+
+    def test_verbose_lists_every_field(self):
+        result = self._controller().set_batch_fields(
+            {"wnd[0]/usr/txtF1": "x", "wnd[0]/usr/txtBAD": "x"}, verbose=True,
+        )
+
+        assert result["results"]["wnd[0]/usr/txtF1"] == "success"
+        assert result["results"]["wnd[0]/usr/txtBAD"].startswith("error")
+
+
+class TestCompactPopupResult:
+    def _controller(self, popup_after):
+        controller = _make_controller_with_session()
+        popup = {
+            "popup_exists": True, "window_id": "wnd[1]", "title": "Prompt for Request",
+            "texts": ["Request"], "has_inputs": True,
+            "classification": "input_required", "recommended_action": "read",
+            "buttons": [{"id": "wnd[1]/tbar[0]/btn[0]", "text": "Continue", "tooltip": ""}],
+            "interactive_elements": [
+                {"id": "wnd[1]/usr/ctxtKO008-TRKORR", "type": "GuiCTextField",
+                 "name": "KO008-TRKORR", "text": "DEVK900123", "changeable": True},
+                {"id": "wnd[1]/usr/txtEMPTY", "type": "GuiTextField",
+                 "name": "EMPTY", "text": "", "changeable": True},
+            ],
+        }
+        controller.get_popup_window = MagicMock(side_effect=[popup, popup_after])
+        controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
+        return controller
+
+    def test_closed_popup_keeps_the_trail_not_the_dead_ids(self):
+        controller = self._controller({"popup_exists": False})
+
+        result = controller.handle_popup("confirm")
+
+        assert result["action"] == "confirmed"
+        assert result["popup_closed"] is True
+        assert result["title"] == "Prompt for Request"
+        assert result["inputs"] == {"KO008-TRKORR": "DEVK900123"}
+        for dead in ("buttons", "interactive_elements", "popup_after"):
+            assert dead not in result
+
+    def test_a_follow_up_popup_stays_complete(self):
+        follow_up = {"popup_exists": True, "window_id": "wnd[1]", "title": "Next",
+                     "buttons": [{"id": "wnd[1]/tbar[0]/btn[0]", "text": "OK"}]}
+        controller = self._controller(follow_up)
+
+        result = controller.handle_popup("confirm")
+
+        assert result["popup_closed"] is False
+        assert result["popup_after"]["buttons"][0]["text"] == "OK"
+
+    def test_read_is_still_complete(self):
+        controller = self._controller({"popup_exists": False})
+
+        result = controller.handle_popup("read")
+
+        assert len(result["interactive_elements"]) == 2
+        assert result["buttons"]
+
+
+# ===========================================================================
+# Classic lists
+# ===========================================================================
+
+class TestReadList:
+    def _label(self, col, row, text, color=0):
+        return MagicMock(Id=f"/app/con[0]/ses[0]/wnd[0]/usr/lbl[{col},{row}]",
+                         Text=text, ColorIndex=color)
+
+    def _controller(self, children, scroll_max=0):
+        controller = _make_controller_with_session()
+        usr = MagicMock()
+        usr.Children.Count = len(children)
+        usr.Children.side_effect = lambda i: children[i]
+        usr.VerticalScrollbar = MagicMock(Maximum=scroll_max, Position=0, PageSize=40)
+        usr.HorizontalScrollbar = MagicMock(Maximum=0, Position=0, PageSize=100)
+        controller._session.findById.return_value = usr
+        return controller, usr
+
+    def test_labels_become_lines_at_their_columns(self):
+        controller, _ = self._controller([
+            self._label(10, 1, "4711"),          # out of order on purpose
+            self._label(0, 1, "Device"),
+            self._label(0, 0, "Log"),
+            self._label(0, 3, "Done"),
+        ])
+
+        result = controller.read_list()
+
+        assert result["is_list"] is True
+        assert result["first_row"] == 0
+        assert result["lines"] == ["Log", "Device    4711", "", "Done"]
+        assert "colors" not in result and "scroll" not in result
+
+    def test_semantic_colours_are_reported_per_row(self):
+        controller, _ = self._controller([
+            self._label(0, 0, "ok", color=2),
+            self._label(0, 1, "Error: device unknown", color=6),
+            self._label(0, 2, "Total", color=3),
+        ])
+
+        result = controller.read_list()
+
+        assert result["colors"] == {"1": ["negative"], "2": ["total"]}
+
+    def test_checkboxes_render_inline(self):
+        box = MagicMock(Id="/app/con[0]/ses[0]/wnd[0]/usr/chk[0,0]", Selected=True)
+        controller, _ = self._controller([box, self._label(3, 0, "Released")])
+
+        assert controller.read_list()["lines"] == ["[x]Released"]
+
+    def test_long_list_reports_scroll_state_and_pages(self):
+        controller, usr = self._controller([self._label(0, 0, "row")], scroll_max=500)
+
+        result = controller.read_list(scroll_to=40)
+
+        assert usr.VerticalScrollbar.Position == 40
+        assert result["scroll"]["vertical"]["maximum"] == 500
+        assert result["scroll"]["vertical"]["page_size"] == 40
+        # re-acquired after the scroll: the first reference is stale by then
+        assert controller._session.findById.call_count == 2
+
+    def test_max_lines_truncates(self):
+        controller, _ = self._controller([self._label(0, r, f"l{r}") for r in range(5)])
+
+        result = controller.read_list(max_lines=2)
+
+        assert result["lines"] == ["l0", "l1"]
+        assert result["truncated"] is True
+
+    def test_with_ids_gives_a_focusable_label_per_line(self):
+        controller, _ = self._controller([self._label(4, 2, "x")])
+
+        result = controller.read_list(with_ids=True)
+
+        assert result["line_ids"] == {"2": "wnd[0]/usr/lbl[4,2]"}
+
+    def test_a_screen_without_labels_is_not_a_list(self):
+        field = MagicMock(Id="/app/con[0]/ses[0]/wnd[0]/usr/ctxtP_DEVID")
+        controller, _ = self._controller([field])
+
+        result = controller.read_list()
+
+        assert result["is_list"] is False
+        assert "read_table" in result["note"]
+
+    def test_invalid_window_is_rejected(self):
+        controller, _ = self._controller([])
+
+        assert "Invalid SAP window ID" in controller.read_list("wnd[0]/usr")["error"]
+
+    async def test_tool_forwards_its_arguments(self, srv):
+        ctx = _make_mock_ctx()
+        mock_ctrl = MagicMock()
+        mock_ctrl.read_list.return_value = {"is_list": True, "lines": []}
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            await srv.sap_read_list(ctx, window_id="wnd[1]", scroll_to=47, with_ids=True)
+
+        mock_ctrl.read_list.assert_called_once_with(
+            "wnd[1]", max_lines=200, scroll_to=47, with_ids=True,
+        )

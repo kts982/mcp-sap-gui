@@ -288,7 +288,7 @@ class TestOkCodeBypassPrevention:
                 {"f": "v"}, ctx, validate=True,
             )
         mock_ctrl.set_batch_fields.assert_called_once_with(
-            {"f": "v"}, skip_readonly=False, validate=True,
+            {"f": "v"}, skip_readonly=False, validate=True, verbose=False,
         )
         assert result["validation"]["performed"] is True
 
@@ -306,7 +306,7 @@ class TestOkCodeBypassPrevention:
                 {"f": "v"}, ctx, skip_readonly=True,
             )
         mock_ctrl.set_batch_fields.assert_called_once_with(
-            {"f": "v"}, skip_readonly=True, validate=False,
+            {"f": "v"}, skip_readonly=True, validate=False, verbose=False,
         )
         assert result["skipped"] == 1
 
@@ -672,7 +672,7 @@ class TestToolRegistration:
             # Toolbar discovery
             "sap_get_toolbar_buttons",
             # Shell content
-            "sap_read_shell_content",
+            "sap_read_shell_content", "sap_read_list",
             # Tree
             "sap_read_tree", "sap_expand_tree_node", "sap_collapse_tree_node",
             "sap_select_tree_node", "sap_double_click_tree_node",
@@ -758,7 +758,8 @@ class TestToolRegistration:
             "sap_get_alv_toolbar", "sap_get_column_info", "sap_get_current_cell",
             "sap_get_table_control_row_info", "sap_get_cell_info",
             "sap_get_popup_window", "sap_get_toolbar_buttons",
-            "sap_read_shell_content", "sap_read_tree", "sap_find_tree_node_by_path",
+            "sap_read_shell_content", "sap_read_list", "sap_read_tree",
+            "sap_find_tree_node_by_path",
             "sap_search_tree_nodes", "sap_get_screen_elements", "sap_screenshot",
             "sap_preview",
             "sap_set_policy_profile", "sap_set_confirmation_points",

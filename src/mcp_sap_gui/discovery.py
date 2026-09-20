@@ -6,6 +6,7 @@ screenshot capabilities for the SAP GUI controller.
 """
 
 import logging
+import re
 from typing import Any, Dict, List
 
 from .models import SAPGUIError, ScreenElement
@@ -141,7 +142,7 @@ class DiscoveryMixin:
                     btn = tbar.Children(i)
                     if getattr(btn, 'Type', '') in ('GuiButton',):
                         buttons.append({
-                            "id": btn.Id,
+                            "id": self._normalize_element_id(btn.Id),
                             "text": getattr(btn, 'Text', '').strip(),
                             "tooltip": getattr(btn, 'Tooltip', '').strip(),
                         })
@@ -179,13 +180,13 @@ class DiscoveryMixin:
 
                 if ctype == 'GuiButton':
                     buttons.append({
-                        "id": child.Id,
+                        "id": self._normalize_element_id(child.Id),
                         "text": text,
                         "tooltip": getattr(child, 'Tooltip', '').strip(),
                     })
                 elif ctype in self._POPUP_INTERACTIVE_TYPES:
                     interactive_elements.append({
-                        "id": child.Id,
+                        "id": self._normalize_element_id(child.Id),
                         "type": ctype,
                         "name": getattr(child, 'Name', ''),
                         "text": text,
@@ -378,6 +379,18 @@ class DiscoveryMixin:
                 "Enter (fallback)" if fallback_vkey == 0 else "F12 (fallback)"
             )
 
+        # The popup that was acted on is gone, so its element IDs are dead
+        # weight. Keep the trail of what it said and which values it held.
+        inputs = {
+            (el.get("name") or el.get("id", "")): el["text"]
+            for el in popup.pop("interactive_elements", [])
+            if el.get("text")
+        }
+        if inputs:
+            popup["inputs"] = inputs
+        for key in ("buttons", "has_inputs", "recommended_action", "safe_auto_action"):
+            popup.pop(key, None)
+
         # Return updated screen state after the action
         try:
             popup["screen"] = self.get_screen_info()
@@ -386,8 +399,10 @@ class DiscoveryMixin:
 
         try:
             popup_after = self.get_popup_window()
-            popup["popup_after"] = popup_after
             popup["popup_closed"] = not popup_after.get("popup_exists", False)
+            if not popup["popup_closed"]:
+                # A follow-up popup is the new state: that one stays complete.
+                popup["popup_after"] = popup_after
         except Exception:
             pass
 
@@ -423,7 +438,7 @@ class DiscoveryMixin:
                     btype = getattr(btn, 'Type', '')
                     if btype in ('GuiButton',):
                         buttons.append({
-                            "id": btn.Id,
+                            "id": self._normalize_element_id(btn.Id),
                             "text": getattr(btn, 'Text', '').strip(),
                             "tooltip": getattr(btn, 'Tooltip', '').strip(),
                             "enabled": getattr(btn, 'Changeable', True) is not False,
@@ -497,13 +512,154 @@ class DiscoveryMixin:
             )
 
     # =========================================================================
+    # Classic List Reading
+    # =========================================================================
+
+    # ABAP list colours (FORMAT COLOR). 0 and 2 are the plain background /
+    # normal text and carry no meaning worth reporting.
+    _LIST_COLORS = {
+        1: "heading", 3: "total", 4: "key",
+        5: "positive", 6: "negative", 7: "group",
+    }
+    _LIST_CELL_RE = re.compile(r"/([a-z]+)\[(\d+),(\d+)\]$")
+
+    def read_list(self, window_id: str = "wnd[0]", max_lines: int = 200,
+                  scroll_to: int = -1, with_ids: bool = False) -> Dict[str, Any]:
+        """
+        Read a classic ABAP list (WRITE output) as lines of text.
+
+        A classic list (report output, program SAPMSSY0; also many F4 hit
+        lists) has no table object: every word is a GuiLabel named
+        ``lbl[col,row]``. Discovery returns one element per label (about 500
+        for a single page); this reassembles them into the lines a user sees.
+
+        Args:
+            window_id: Window holding the list (a popup for F4 hit lists)
+            max_lines: Maximum number of lines to return
+            scroll_to: Vertical scrollbar position to move to first; -1 reads
+                the page that is currently shown
+            with_ids: Also return, per line, the ID of its first label (to set
+                the focus on a line before F2 / double-click)
+
+        Returns:
+            Dict with the lines of the visible page, colours of the lines that
+            have a semantic one, and the scroll state for paging
+        """
+        self._require_session()
+
+        try:
+            window_id = self._validate_window_id(window_id)
+            usr_id = f"{window_id}/usr"
+            usr = self._session.findById(usr_id)
+
+            if scroll_to >= 0:
+                usr.VerticalScrollbar.Position = scroll_to
+                # Scrolling re-renders the page: the old reference is stale.
+                usr = self._session.findById(usr_id)
+
+            rows: Dict[int, list] = {}
+            for i in range(usr.Children.Count):
+                child = usr.Children(i)
+                match = self._LIST_CELL_RE.search(child.Id)
+                if not match:
+                    continue
+                kind, col, row = match.group(1), int(match.group(2)), int(match.group(3))
+                if kind == "chk":
+                    text = "[x]" if self._list_prop(child, "Selected", False) else "[ ]"
+                    color = None
+                else:
+                    text = str(self._list_prop(child, "Text", ""))
+                    color = self._LIST_COLORS.get(
+                        self._list_prop(child, "ColorIndex", 0)
+                    ) if kind == "lbl" else None
+                rows.setdefault(row, []).append((col, text, color, child.Id))
+
+            if not rows:
+                return {
+                    "window": window_id,
+                    "is_list": False,
+                    "lines": [],
+                    "note": (
+                        "No list labels on this screen. For ALV grids and table "
+                        "controls use read_table."
+                    ),
+                }
+
+            first_row = min(rows)
+            last_row = min(max(rows), first_row + max(max_lines, 1) - 1)
+            lines: List[str] = []
+            colors: Dict[str, List[str]] = {}
+            ids: Dict[str, str] = {}
+            for row in range(first_row, last_row + 1):
+                line = ""
+                row_colors: List[str] = []
+                cells = sorted(rows.get(row, []), key=lambda cell: cell[0])
+                for col, text, color, _cell_id in cells:
+                    line = line.ljust(col) + text
+                    if color and color not in row_colors:
+                        row_colors.append(color)
+                lines.append(line.rstrip())
+                if row_colors:
+                    colors[str(row)] = row_colors
+                if with_ids and cells:
+                    ids[str(row)] = self._normalize_element_id(cells[0][3])
+
+            result: Dict[str, Any] = {
+                "window": window_id,
+                "is_list": True,
+                "first_row": first_row,
+                "lines": lines,
+            }
+            if colors:
+                result["colors"] = colors
+            if with_ids:
+                result["line_ids"] = ids
+            if max(rows) > last_row:
+                result["truncated"] = True
+            scroll = self._list_scroll_state(usr)
+            if scroll:
+                result["scroll"] = scroll
+            return result
+
+        except Exception as e:
+            return self._error_result({"window": window_id}, e, "Could not read list")
+
+    @staticmethod
+    def _list_prop(obj, name: str, default):
+        """Read a COM property that may be unsupported on this element."""
+        try:
+            return getattr(obj, name)
+        except Exception:
+            return default
+
+    def _list_scroll_state(self, usr) -> Dict[str, Any]:
+        """Vertical (and, when the list is wider than the window, horizontal)
+        scrollbar state, so the caller can page with scroll_to."""
+        state: Dict[str, Any] = {}
+        for key, attr in (("vertical", "VerticalScrollbar"),
+                          ("horizontal", "HorizontalScrollbar")):
+            try:
+                bar = getattr(usr, attr)
+                maximum = bar.Maximum
+                if maximum > 0:
+                    state[key] = {
+                        "position": bar.Position,
+                        "maximum": maximum,
+                        "page_size": bar.PageSize,
+                    }
+            except Exception:
+                continue
+        return state
+
+    # =========================================================================
     # Screen Element Discovery
     # =========================================================================
 
     def get_screen_elements(self, container_id: str = "wnd[0]/usr",
                             max_depth: int = 3,
                             type_filter: str = "",
-                            changeable_only: bool = False) -> List[ScreenElement]:
+                            changeable_only: bool = False,
+                            expand_tables: bool = False) -> List[ScreenElement]:
         """
         Enumerate all elements on the current screen.
 
@@ -517,6 +673,10 @@ class DiscoveryMixin:
             type_filter: Comma-separated SAP element types to include
                 (e.g. "GuiTextField,GuiCTextField"). Empty = all types.
             changeable_only: If True, only return editable/input elements
+            expand_tables: If True, also list every visible cell of a
+                GuiTableControl. Off by default: an empty two-column table is
+                76 elements, and read_table / get_column_info describe the
+                columns (incl. a cell-ID template) far more compactly.
 
         Returns:
             List of ScreenElement objects
@@ -535,6 +695,7 @@ class DiscoveryMixin:
                 container, max_depth,
                 type_filter_set=type_filter_set,
                 changeable_only=changeable_only,
+                expand_tables=expand_tables,
             )
             return elements
         except ValueError:
@@ -573,7 +734,8 @@ class DiscoveryMixin:
     def _enumerate_elements(self, container, max_depth: int,
                             current_depth: int = 0,
                             type_filter_set: set = None,
-                            changeable_only: bool = False) -> List[ScreenElement]:
+                            changeable_only: bool = False,
+                            expand_tables: bool = False) -> List[ScreenElement]:
         """Recursively enumerate screen elements."""
         elements = []
 
@@ -594,7 +756,7 @@ class DiscoveryMixin:
                 child = container.Children(i)
 
                 element = ScreenElement(
-                    id=child.Id,
+                    id=self._normalize_element_id(child.Id),
                     type=child.Type,
                     name=prop(child, 'Name', ''),
                     text=str(prop(child, 'Text', ''))[:200],
@@ -611,12 +773,18 @@ class DiscoveryMixin:
                 if include:
                     elements.append(element)
 
+                # A table control stays ONE element: its cells are read with
+                # the table tools, not dumped one element per cell.
+                if element.type == "GuiTableControl" and not expand_tables:
+                    continue
+
                 # Recurse into containers regardless of filters
                 if hasattr(child, 'Children') and child.Children.Count > 0:
                     child_elements = self._enumerate_elements(
                         child, max_depth, current_depth + 1,
                         type_filter_set=type_filter_set,
                         changeable_only=changeable_only,
+                        expand_tables=expand_tables,
                     )
                     elements.extend(child_elements)
 

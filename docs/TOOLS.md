@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **59 MCP tools**.
+`mcp-sap-gui` currently exposes **60 MCP tools**.
 
 Two practical rules:
 
@@ -81,7 +81,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_select_combobox_entry` | Select a combobox entry by key or visible value |
 | `sap_select_tab` | Select a tab strip tab |
 | `sap_get_combobox_entries` | List combobox entries |
-| `sap_set_batch_fields` | Set multiple fields in one call, with optional `validate` and `skip_readonly` support for safer form fill |
+| `sap_set_batch_fields` | Set multiple fields in one call, with optional `validate` and `skip_readonly` support for safer form fill. Returns counts and lists only the fields that did not succeed (`verbose=true` lists all). Works on table-control cells via the `cell_id` templates from `sap_read_table(columns_only=true)` |
 | `sap_read_textedit` | Read a multiline text editor |
 | `sap_set_textedit` | Set a multiline text editor |
 | `sap_set_focus` | Set focus to a screen element |
@@ -97,7 +97,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_read_table` | Read rows and columns from a table or grid |
+| `sap_read_table` | Read rows and columns from a table or grid. With `columns_only=true` a TableControl also reports each column's `cell_type` and a `cell_id` template (`{row}` = zero-based visible row). Columns of a table without rows are flagged `name_is_title`: no cell exists yet to read the technical name from |
 | `sap_select_table_row` | Select a row |
 | `sap_double_click_cell` | Double-click a cell |
 | `sap_modify_cell` | Modify an editable cell |
@@ -133,6 +133,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification |
 | `sap_get_toolbar_buttons` | List standard SAP toolbar buttons |
 | `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers |
+| `sap_read_list` | Read a classic ABAP list (`WRITE` output, F4 hit lists) as lines of text, with list colours and paging. One page is ~500 label elements to discovery; this returns the lines |
 
 ## Trees
 
@@ -153,7 +154,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any |
+| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any. A table control is one element (`expand_tables=true` lists its cells); IDs are returned in the short `wnd[0]/...` form |
 | `sap_screenshot` | Capture a screenshot of the active SAP window. `save_path` also writes a full-resolution PNG (never overwrites an existing file) and returns its path and pixel size; `inline=false` skips the image when only the file is needed |
 
 ## Preview

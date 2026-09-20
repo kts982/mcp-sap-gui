@@ -394,7 +394,7 @@ These prevent common agent mistakes like guessing element IDs, ignoring popups, 
 
 ## Available Tools
 
-The server currently exposes **59 MCP tools**.
+The server currently exposes **60 MCP tools**.
 
 | Category | Count | What it covers |
 |---|---:|---|

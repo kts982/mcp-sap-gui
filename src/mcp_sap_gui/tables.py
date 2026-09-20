@@ -7,6 +7,7 @@ interaction for both ALV grids (GuiGridView) and classic table controls
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from .models import _TOOLBAR_BUTTON_TYPES, VKey
@@ -23,15 +24,22 @@ class TablesMixin:
 
     # ---- GuiTableControl helpers ----
 
-    def _get_table_control_columns(self, table) -> list:
+    def _get_table_control_columns(self, table, with_cell_ids: bool = False) -> list:
         """Get column metadata from a GuiTableControl's Columns collection.
 
-        Each column entry has: index, name, title, tooltip.
+        Each column entry has: index, name, title, tooltip. With
+        *with_cell_ids* (schema discovery) it also carries ``cell_type`` and a
+        ``cell_id`` template such as ``wnd[0]/usr/tblX/ctxtV-FIELD[0,{row}]``,
+        where ``{row}`` is the zero-based VISIBLE row. That is what a caller
+        needs to fill cells with set_batch_fields, without guessing the
+        txt/ctxt/cmb prefix or dumping every cell through discovery.
 
         Note: The SAP GUI Scripting API docs state that GuiTableColumn members
         in the Columns collection "do not support properties like id or name".
         Column names are therefore extracted from the first row's cell Name
-        property, with Title as fallback.
+        property. A table without rows (an empty view in display mode) has no
+        cells, so the title is the only name available; such columns are
+        flagged ``name_is_title``.
         """
         columns = []
         col_count = table.Columns.Count
@@ -39,14 +47,23 @@ class TablesMixin:
         # Get column names from first row's cells (safer than col.Name
         # which is documented as unsupported on GuiTableColumn)
         cell_names = []
+        cell_details = []
         for i in range(col_count):
             name = None
+            details = {}
             try:
                 cell = table.GetCell(0, i)
                 name = getattr(cell, 'Name', None)
+                if with_cell_ids:
+                    cell_id = self._normalize_element_id(cell.Id)
+                    details = {
+                        "cell_type": cell.Type,
+                        "cell_id": re.sub(r",\d+\]$", ",{row}]", cell_id),
+                    }
             except Exception:
                 pass
             cell_names.append(name)
+            cell_details.append(details)
 
         # Get column titles and tooltips from the Columns collection
         for i in range(col_count):
@@ -65,7 +82,12 @@ class TablesMixin:
                 info["title"] = ""
                 info["tooltip"] = ""
 
-            info["name"] = cell_names[i] or info.get("title") or f"col_{i}"
+            if cell_names[i]:
+                info["name"] = cell_names[i]
+                info.update(cell_details[i])
+            else:
+                info["name"] = info.get("title") or f"col_{i}"
+                info["name_is_title"] = True
             columns.append(info)
         return columns
 
@@ -283,7 +305,9 @@ class TablesMixin:
         the actual data), so reading stops early when an all-empty row is
         encountered.
         """
-        all_columns_info = self._get_table_control_columns(table)
+        all_columns_info = self._get_table_control_columns(
+            table, with_cell_ids=columns_only,
+        )
         all_column_names = [c["name"] for c in all_columns_info]
         all_col_count = len(all_columns_info)
 
@@ -373,6 +397,12 @@ class TablesMixin:
         }
         if columns_only:
             result["columns_only"] = True
+        if any(c.get("name_is_title") for c in columns_info):
+            result["note"] = (
+                "The table has no rows, so technical column names are not "
+                "available yet: the names shown are column TITLES. Read the "
+                "schema again once a row exists (e.g. after New Entries)."
+            )
         return result
 
     def get_alv_toolbar(self, grid_id: str) -> Dict[str, Any]:
@@ -740,7 +770,7 @@ class TablesMixin:
             table = self._find_element(grid_id)
 
             if getattr(table, 'Type', '') == "GuiTableControl":
-                columns = self._get_table_control_columns(table)
+                columns = self._get_table_control_columns(table, with_cell_ids=True)
                 return {
                     "grid_id": grid_id,
                     "table_type": "GuiTableControl",

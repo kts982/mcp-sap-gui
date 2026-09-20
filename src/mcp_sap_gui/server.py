@@ -449,6 +449,17 @@ These appear when you execute SPRO activities or use SM30:
 5. To read all entries, use `sap_read_table` with `start_row` pagination
 6. Check `total_rows` in response to know total entry count
 
+## Classic Lists (WRITE Output)
+
+A report that prints a plain list (program `SAPMSSY0`, screen 120) has no table \
+object — every word is a `GuiLabel` named `lbl[col,row]`, so discovery returns \
+hundreds of elements per page:
+- Read it with `sap_read_list`: the visible page as lines of text, plus the list \
+colour of a line (`negative` = red / error, `positive`, `total`, `heading`)
+- Page through a long list with `scroll_to` (see `scroll` in the response)
+- F4 hit lists in a popup are the same kind of list: `window_id="wnd[1]"`
+- To act on a line, read with `with_ids=true`, `sap_set_focus` that label, then F2
+
 ## Web Dynpro Screens
 
 Some newer SAP screens use Web Dynpro technology:
@@ -1033,11 +1044,17 @@ async def sap_set_batch_fields(
     ctx: Context,
     validate: bool = False,
     skip_readonly: bool = False,
+    verbose: bool = False,
 ) -> dict:
     """Fill in multiple input fields at once (dict of field_id to value).
 
     Use this to fill a form or selection screen in one call — more
-    efficient than repeated sap_set_field calls.
+    efficient than repeated sap_set_field calls. Table-control cells work
+    too: take the cell_id template of each column from
+    sap_read_table(columns_only=true) and replace {row}.
+
+    The result gives counts; `results` lists only the fields that did NOT
+    succeed (all of them with verbose=true).
 
     Args:
         fields: Dict mapping field_id -> value.
@@ -1045,6 +1062,7 @@ async def sap_set_batch_fields(
             feedback. Skipped when no fields were actually set.
         skip_readonly: Silently skip fields whose element reports
             Changeable == False instead of counting them as failures.
+        verbose: List every field in `results`, not only the failures.
     """
     _check_write()
     for fid, val in fields.items():
@@ -1053,6 +1071,7 @@ async def sap_set_batch_fields(
     return await _com(
         lambda: c.set_batch_fields(
             fields, skip_readonly=skip_readonly, validate=validate,
+            verbose=verbose,
         )
     )
 
@@ -1111,7 +1130,9 @@ async def sap_read_table(
     sap_scroll_table_control for TableControl).
 
     Use columns_only=true for schema discovery (returns column metadata
-    only, no data). Use columns to fetch only specific columns (CSV).
+    only, no data). For a TableControl it also gives each column's cell_type
+    and a cell_id template ({row} = zero-based visible row) for
+    sap_set_batch_fields. Use columns to fetch only specific columns (CSV).
     Use start_row to paginate through large tables."""
     c = _ctrl(ctx)
     capped = min(max_rows, config.max_table_rows)
@@ -1381,6 +1402,37 @@ async def sap_read_shell_content(shell_id: str, ctx: Context) -> dict:
     return await _com(lambda: c.read_shell_content(shell_id))
 
 
+@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
+async def sap_read_list(
+    ctx: Context,
+    window_id: str = "wnd[0]",
+    max_lines: int = 200,
+    scroll_to: int = -1,
+    with_ids: bool = False,
+) -> dict:
+    """Read a classic ABAP list (WRITE output of a report) as lines of text.
+
+    Use it when a report shows a plain list rather than an ALV grid (program
+    SAPMSSY0, screen 120), and for F4 hit lists in a popup (window_id=
+    'wnd[1]'). Such a list has no table object: every word is its own label,
+    so sap_get_screen_elements returns ~500 elements for one page. This
+    returns the page as the lines the user sees, with no screenshot needed.
+
+    - colors: rows whose text has a semantic list colour, e.g. 'negative'
+      (red, errors), 'positive' (green), 'total', 'heading'
+    - scroll: present when the list is longer than the page; pass
+      scroll_to=position+page_size to read the next page
+    - with_ids=true adds the ID of each line's first label, to set the focus
+      on a line (sap_set_focus) before F2 / double-click
+    - is_list=false means this screen has no list: use sap_read_table"""
+    c = _ctrl(ctx)
+    return await _com(
+        lambda: c.read_list(
+            window_id, max_lines=max_lines, scroll_to=scroll_to, with_ids=with_ids,
+        )
+    )
+
+
 # ===========================================================================
 # Tree tools
 # ===========================================================================
@@ -1525,6 +1577,7 @@ async def sap_get_screen_elements(
     max_depth: int = 2,
     type_filter: str = "",
     changeable_only: bool = False,
+    expand_tables: bool = False,
 ) -> dict:
     """Discover all elements on the current SAP screen.
 
@@ -1540,6 +1593,10 @@ async def sap_get_screen_elements(
 
     Pass container_id='wnd[0]/mbar' to discover the menu bar structure.
 
+    A table control (SM30-style) is ONE element here, not one per cell: use
+    sap_read_table(columns_only=true) for its columns and cell_id templates.
+    expand_tables=true lists every visible cell (large).
+
     Docking containers sit BESIDE the user area, not inside it: the
     dialog-structure tree of a view cluster (SM34, most IMG activities) and
     the SE80 tree are under 'wnd[0]/shellcont'. When the window has any, the
@@ -1553,6 +1610,7 @@ async def sap_get_screen_elements(
             container_id, max_depth=max_depth,
             type_filter=type_filter,
             changeable_only=changeable_only,
+            expand_tables=expand_tables,
         )
         docking = c.get_docking_containers(usr_window.group(1)) if usr_window else []
         return found, docking

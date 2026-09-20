@@ -2372,7 +2372,8 @@ class TestSetBatchFields:
 
         assert result["succeeded"] == 1
         assert result["failed"] == 1
-        assert result["results"]["wnd[0]/usr/txtF1"] == "success"
+        # Compact by default: only fields that did not succeed are listed.
+        assert "wnd[0]/usr/txtF1" not in result["results"]
         assert "error" in result["results"]["wnd[0]/usr/txtBAD"]
 
     def test_skip_readonly_skips_non_changeable(self):
@@ -2397,7 +2398,7 @@ class TestSetBatchFields:
         assert result["succeeded"] == 1
         assert result["skipped"] == 1
         assert result["failed"] == 0
-        assert result["results"]["wnd[0]/usr/txtF1"] == "success"
+        assert "wnd[0]/usr/txtF1" not in result["results"]
         assert result["results"]["wnd[0]/usr/txtF2"] == "skipped: read-only"
         # The changeable field was written; the read-only one was not
         changeable_field.assert_has_calls([])  # .text was set via attribute
@@ -4035,7 +4036,8 @@ class TestHandlePopup:
         assert result["auto_decision"] == "confirm"
         assert result["action"] == "confirmed"
         assert result["popup_closed"] is True
-        assert result["popup_after"]["popup_exists"] is False
+        # popup_closed already says it; the empty popup_after is not repeated.
+        assert "popup_after" not in result
 
     def test_auto_reads_confirmation_popup_without_pressing(self):
         """Auto refuses to confirm risky confirmation popups on its own."""
