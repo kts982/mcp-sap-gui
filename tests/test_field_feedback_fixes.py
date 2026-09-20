@@ -737,6 +737,139 @@ class TestCompactPopupResult:
 
 
 # ===========================================================================
+# Popup notice
+# ===========================================================================
+
+class TestPrefilledPopupNotice:
+    """Generic on purpose: no popup is recognised by name. Any dialog whose
+    changeable inputs already hold a value gets the same notice."""
+
+    def _popup_controller(self, inputs):
+        controller = _make_controller_with_session()
+        children = []
+        for element_id, type_, text, changeable in inputs:
+            child = _child(element_id, type_, text=text, changeable=changeable)
+            children.append(child)
+        usr = _child("/app/con[0]/ses[0]/wnd[1]/usr", "GuiUserArea", children=children)
+
+        def find_by_id(element_id):
+            if element_id == "wnd[1]":
+                return MagicMock(Text="Prompt for Request")
+            if element_id == "wnd[1]/usr":
+                return usr
+            raise Exception("not found")
+        controller._session.findById.side_effect = find_by_id
+        return controller
+
+    def test_prefilled_changeable_input_gets_a_notice(self):
+        controller = self._popup_controller([
+            ("/app/con[0]/ses[0]/wnd[1]/usr/ctxtKO008-TRKORR", "GuiCTextField",
+             "DEVK900123", True),
+        ])
+
+        popup = controller.get_popup_window()
+
+        assert popup["prefilled_inputs"] == [{
+            "id": "wnd[1]/usr/ctxtKO008-TRKORR",
+            "name": "ctxtKO008-TRKORR",
+            "value": "DEVK900123",
+        }]
+        assert "pre-filled" in popup["notice"]
+
+    def test_no_notice_without_a_prefilled_changeable_input(self):
+        controller = self._popup_controller([
+            ("/app/con[0]/ses[0]/wnd[1]/usr/ctxtEMPTY", "GuiCTextField", "", True),
+            ("/app/con[0]/ses[0]/wnd[1]/usr/txtSHOWN", "GuiTextField", "fixed", False),
+            ("/app/con[0]/ses[0]/wnd[1]/usr/chkFLAG", "GuiCheckBox", "A label", True),
+        ])
+
+        popup = controller.get_popup_window()
+
+        assert "prefilled_inputs" not in popup
+        assert "notice" not in popup
+
+    def test_secret_values_are_masked(self):
+        controller = self._popup_controller([
+            ("/app/con[0]/ses[0]/wnd[1]/usr/txtRSYST-BCODE", "GuiTextField", "s3cret", True),
+        ])
+
+        popup = controller.get_popup_window()
+
+        assert popup["prefilled_inputs"][0]["value"] == "***"
+
+    def _screen_info_controller(self, active_window):
+        controller = _make_controller_with_session()
+        controller._session.ActiveWindow = MagicMock(Id=active_window)
+        controller._session.findById.return_value = MagicMock(Text="Title")
+        controller.get_popup_window = MagicMock(return_value={
+            "popup_exists": True, "title": "Prompt for Request",
+            "classification": "input_required", "texts": ["Request"],
+            "buttons": [{"id": "wnd[1]/tbar[0]/btn[0]", "text": "", "tooltip": "Continue"}],
+            "prefilled_inputs": [{"id": "wnd[1]/usr/ctxtX", "name": "X", "value": "V"}],
+            "notice": "This popup has pre-filled input values.",
+        })
+        return controller
+
+    def test_action_responses_carry_the_digest_when_a_popup_opened(self):
+        controller = self._screen_info_controller("/app/con[0]/ses[0]/wnd[1]")
+
+        screen = controller.get_screen_info()
+
+        assert screen["active_window"] == "wnd[1]"
+        assert screen["popup"] == {
+            "classification": "input_required",
+            "texts": ["Request"],
+            "buttons": ["Continue"],
+            "prefilled_inputs": [{"id": "wnd[1]/usr/ctxtX", "name": "X", "value": "V"}],
+            "notice": "This popup has pre-filled input values.",
+        }
+
+    def test_no_digest_on_the_main_window(self):
+        controller = self._screen_info_controller("/app/con[0]/ses[0]/wnd[0]")
+
+        screen = controller.get_screen_info()
+
+        assert "popup" not in screen
+        controller.get_popup_window.assert_not_called()
+
+    def test_digest_can_be_switched_off(self):
+        controller = self._screen_info_controller("/app/con[0]/ses[0]/wnd[1]")
+
+        assert "popup" not in controller.get_screen_info(include_popup=False)
+
+
+# ===========================================================================
+# SM30 / SM34 guide
+# ===========================================================================
+
+class TestSm30Guide:
+    @pytest.mark.parametrize("alias", [
+        "SM30", "sm34", "table maintenance", "View Cluster", " view maintenance ",
+    ])
+    async def test_aliases_resolve_to_the_one_guide(self, srv, alias):
+        result = await srv.sap_get_transaction_guide(alias)
+
+        assert result["transaction"] == "SM30"
+        assert result["mode"] == "read-first"
+
+    async def test_guide_carries_the_lessons_learned_live(self, srv):
+        guide = (await srv.sap_get_transaction_guide("SM34", task="add RF steps"))["guide"]
+
+        assert "add RF steps" in guide
+        for lesson in (
+            "wnd[0]/shellcont",              # the tree is a docking container
+            "sap_double_click_tree_item",    # ...and needs an item double-click
+            "does NOT switch the view",
+            "Select the parent row first",
+            "cell_id",                       # cell IDs come from the schema
+            "name_is_title",
+            "prefilled_inputs",              # the customizing request prompt
+            "Never confirm it blindly",
+        ):
+            assert lesson in guide, lesson
+
+
+# ===========================================================================
 # Classic lists
 # ===========================================================================
 

@@ -1,0 +1,5 @@
+{
+  "preset": "default",
+  "block": ["ZHR*", "SE16"],
+  "allow": ["ST22"]
+}

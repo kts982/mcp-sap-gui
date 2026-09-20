@@ -1,0 +1,4 @@
+{
+  "preset": "strict",
+  "allow": ["MM03", "VA03", "ME23N", "SM30", "SM34", "/SCWM/MON", "/SCWM/PRDI"]
+}

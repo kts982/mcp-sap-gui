@@ -353,7 +353,7 @@ The server uses stdio transport. Point any MCP client at:
 
 ```
 Command:   uvx mcp-sap-gui[screenshots]
-Arguments: [--read-only] [--profile exploration|operator|full] [--confirm POINT ...] [--audit-log FILE] [--debug] [--allowed-transactions T1 T2 ...]
+Arguments: [--read-only] [--profile exploration|operator|full] [--confirm POINT ...] [--audit-log FILE] [--debug] [--policy-preset default|abap-dev|strict] [--policy-file FILE] [--allowed-transactions T1 T2 ...]
 Transport: stdio
 ```
 
@@ -417,7 +417,7 @@ The most important patterns:
 - `sap_preview` before significant writes (batch field fills, `F11` / Save) so the user sees the screen and the pending values first
 - `sap_set_confirmation_points` to make categories of writes ask the user for approval before they run
 - `sap_get_workflow_guide` when you want the proven sequence for a known workflow
-- `sap_get_transaction_guide` when you want a generic guide for a supported transaction such as `/SCWM/MON`, `SCWM/MON`, or `warehouse monitor`
+- `sap_get_transaction_guide` when you want a generic guide for a supported transaction: `/SCWM/MON` (also `warehouse monitor`), or `SM30` for table/view maintenance and view clusters (also `SM34`, `view cluster`)
 - `sap_read_tree` plus search/expand helpers for SPRO-style navigation
 
 For the full tool catalog, grouped by category with short descriptions, see **[docs/TOOLS.md](docs/TOOLS.md)**.
@@ -450,12 +450,15 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 ### Built-in Safeguards
 
-1. **Transaction Blocklist** - Sensitive transactions blocked by default:
-   - `SU01`, `SU10`, `SU01D` (User administration)
-   - `PFCG` (Role administration)
-   - `SE16N`, `SE38`, `SA38`, `SE80` (Direct table/program access)
-   - `STMS`, `SCC4`, `RZ10`, `RZ11`, `SM36`, `SM49`, `SM59`, `SM69` (high-risk admin/system actions)
+1. **Transaction Policy** - Which transactions an agent may start. What is dangerous depends on who runs the server and against which system, so it is configurable:
+   - `--policy-preset default` (the default) blocks user and role administration (`SU01`, `SU10`, `SU01D`, `PFCG`, `SU53`), logs and dumps (`SM21`, `ST22`), development and program execution (`SE38`, `SA38`, `SE80`, `SE37`, `SE16N`), and system administration (`STMS`, `SCC4`, `RZ10`, `RZ11`, `SM36`, `SM49`, `SM69`, `SM59`, `STRUST`, `SICF`, `SM01`, `SM18`, `SM19`). Customizing and display work (`SM30`, `SM34`, `SPRO`, `SE16`, `SE11`) stays open
+   - `--policy-preset abap-dev` additionally allows `SA38`, `SE11` and `SE80`, for developers testing their own programs
+   - `--policy-preset strict` blocks everything the policy file does not allow
+   - `--policy-file policy.json` adds to the preset: `{"preset": "abap-dev", "block": ["ZHR*"], "allow": ["SM59"]}`. Entries are codes or glob patterns (`SU*`, `/SCWM/*`); `allow` always wins over `block`. Without the flag the server reads `$MCP_SAP_GUI_POLICY_FILE`, else `%APPDATA%\mcp-sap-gui\policy.json` if it exists. Keep the file outside the agent's workspace
+   - Two examples ship in `examples/`: `policy.example.json` starts from `default`, additionally blocks a customer namespace (`ZHR*`) and `SE16`, and allows `ST22` for dump analysis; `policy.strict.example.json` is an allowlist for a display-only agent. To make one your per-user policy on Windows: `New-Item -ItemType Directory -Force "$env:APPDATA\mcp-sap-gui"; Copy-Item examples\policy.example.json "$env:APPDATA\mcp-sap-gui\policy.json"`
+   - The policy is read once at startup and written to the audit log (with the file's SHA-256). No tool can change it, and a policy file that cannot be read stops the server instead of falling back to something more permissive
    - Case-insensitive matching; handles `/n`, `/o`, `/*` prefixes and whitespace
+   - It is a guardrail against agent mistakes, not a security boundary: a blocked transaction can often be reached another way (a menu path, a screen you left open). The SAP user's authorizations are the boundary
 
 2. **OK-Code Bypass Prevention** - Setting likely SAP command fields such as `tbar[0]/okcd`, `txtOK_CODE`, or similar command-code aliases to a blocked transaction is also blocked, preventing circumvention of the transaction policy
 

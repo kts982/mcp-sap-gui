@@ -45,6 +45,16 @@ from .confirmation import (
     log_confirmation_event,
     points_with_provenance,
 )
+from .policy import (
+    DEFAULT_PRESET,
+    POLICY_FILE_ENV,
+    PRESETS,
+    PolicyError,
+    TransactionPolicy,
+    load_policy,
+    normalize_pattern,
+    resolve_policy_file,
+)
 from .preview import (
     SCREENSHOT_INCLUDED,
     SCREENSHOT_OMITTED,
@@ -68,19 +78,8 @@ from .session_manager import SessionManager
 logger = logging.getLogger(__name__)
 
 
-_DEFAULT_BLOCKED_TRANSACTIONS = [
-    "SU01", "SU10", "SU01D",  # User administration
-    "PFCG", "SU53",           # Role administration
-    "SM21", "ST22",           # System logs / dumps
-    "SE16N",                  # Direct table maintenance
-    "SE38", "SA38", "SE80",   # ABAP editor / program execution
-    "STMS",                   # Transport management
-    "SCC4",                   # Client administration
-    "RZ10", "RZ11",           # Profile parameters
-    "SM36",                   # Background jobs
-    "SM49", "SM69",           # OS command execution
-    "SM59",                   # RFC destination config
-]
+# Kept under this name for callers and tests; the presets live in policy.py.
+_DEFAULT_BLOCKED_TRANSACTIONS = list(PRESETS[DEFAULT_PRESET]["block"])
 
 _TRANSACTION_PREFIX_RE = re.compile(r"^(?:/(?:N|O|\*)\s*)+", re.IGNORECASE)
 _TRANSACTION_CODE_RE = re.compile(r"^/?[A-Z0-9_]+(?:/[A-Z0-9_]+)*$")
@@ -176,6 +175,13 @@ class ServerConfig:
     blocked_transactions: List[str] = field(
         default_factory=lambda: list(_DEFAULT_BLOCKED_TRANSACTIONS)
     )
+    # Allow exceptions: codes/patterns that win over blocked_transactions.
+    allowed_exceptions: List[str] = field(default_factory=list)
+    # Where the two lists came from (--policy-preset / --policy-file); only
+    # used to describe the effective policy in logs and error texts.
+    policy_preset: str = DEFAULT_PRESET
+    policy_source: str = "preset"
+    policy_file_sha256: Optional[str] = None
     # Server-level policy floor (--profile). A session may restrict below this
     # but never above it. Modelled on --read-only: no runtime mutator exists.
     profile: str = "full"
@@ -189,7 +195,23 @@ class ServerConfig:
     max_table_rows: int = 500
 
     def __post_init__(self):
-        self.blocked_transactions = _normalize_transaction_list(self.blocked_transactions) or []
+        # Entries may be glob patterns ("SU*", "*"), so they go through the
+        # pattern normalizer; plain codes still get the /n-stripping one.
+        self.blocked_transactions = list(dict.fromkeys(
+            normalize_pattern(entry, _normalize_transaction_code)
+            for entry in self.blocked_transactions
+        ))
+        self.allowed_exceptions = list(dict.fromkeys(
+            normalize_pattern(entry, _normalize_transaction_code)
+            for entry in self.allowed_exceptions
+        ))
+        self.policy = TransactionPolicy(
+            block=self.blocked_transactions,
+            allow=self.allowed_exceptions,
+            preset=self.policy_preset,
+            source=self.policy_source,
+            file_sha256=self.policy_file_sha256,
+        )
         self.allowed_transactions = _normalize_transaction_list(self.allowed_transactions)
         unknown = sorted(set(self.confirmation_floor) - set(SETTABLE_POINTS))
         if unknown:
@@ -654,7 +676,7 @@ mcp.add_middleware(ConfirmationMiddleware(
 def _is_transaction_allowed(tcode: str) -> tuple[bool, str]:
     """Return allow/deny decision plus the canonical transaction code."""
     canonical = _normalize_transaction_code(tcode)
-    if canonical in config.blocked_transactions:
+    if not config.policy.permits(canonical):
         return False, canonical
     if config.allowed_transactions is not None and canonical not in config.allowed_transactions:
         return False, canonical
@@ -677,10 +699,11 @@ def _enforce_transaction_policy(tcode: str, *, source: str = "transaction") -> s
     if allowed:
         return canonical
 
-    if canonical in config.blocked_transactions:
+    if not config.policy.permits(canonical):
         raise ValueError(
             f"Transaction {canonical} is blocked by security policy"
             f"{f' (attempted via {source})' if source != 'transaction' else ''}"
+            f"{config.policy.how_to_allow(canonical)}"
         )
     raise ValueError(
         f"Transaction {canonical} is not in the allowed transaction list"
@@ -1992,8 +2015,12 @@ async def sap_get_transaction_guide(
 
     Available transactions:
     - **/SCWM/MON**: EWM Warehouse Monitor with tree navigation and ALV results.
+    - **SM30**: table/view maintenance and view clusters (SM34) - also what
+      most IMG activities open: reading the table, the docked dialog-structure
+      tree, new entries, saving and the customizing request prompt.
 
-    Aliases accepted: `SCWM/MON`, `warehouse monitor`, `ewm warehouse monitor`.
+    Aliases accepted: `SCWM/MON`, `warehouse monitor`, `ewm warehouse monitor`,
+    `SM34`, `table maintenance`, `view maintenance`, `view cluster`.
     """
     canonical = normalize_transaction(transaction)
     guide_text = render_transaction_guide(canonical, task)
@@ -2096,6 +2123,19 @@ def main():
                         help="Run in read-only mode (no write operations)")
     parser.add_argument("--allowed-transactions", nargs="*",
                         help="Whitelist of allowed transaction codes")
+    parser.add_argument("--policy-preset", choices=sorted(PRESETS),
+                        help="Transaction policy preset: 'default' blocks "
+                             "basis, security and development transactions; "
+                             "'abap-dev' additionally allows SA38, SE11 and "
+                             "SE80; 'strict' blocks everything that the "
+                             "policy file does not allow (default: the "
+                             "preset named in the policy file, else 'default')")
+    parser.add_argument("--policy-file", metavar="FILE",
+                        help="JSON transaction policy (keys: preset, block, "
+                             "allow; glob patterns such as SU*). Also read "
+                             f"from ${POLICY_FILE_ENV}, else from "
+                             "the per-user policy.json if it exists. Keep it "
+                             "outside the agent's workspace")
     parser.add_argument("--transport", choices=["stdio", "http"],
                         default="stdio",
                         help="Transport mode (default: stdio)")
@@ -2137,11 +2177,35 @@ def main():
         audit_logger.setLevel(logging.INFO)
         logger.info("Audit log: %s", args.audit_log)
 
+    # Fail closed: a policy that cannot be read stops the server instead of
+    # silently falling back to a more permissive default.
+    try:
+        policy = load_policy(
+            _normalize_transaction_code,
+            preset=args.policy_preset,
+            policy_file=resolve_policy_file(args.policy_file),
+        )
+    except PolicyError as exc:
+        parser.error(f"transaction policy: {exc}")
+
     config = ServerConfig(
         read_only=args.read_only,
         allowed_transactions=args.allowed_transactions,
+        blocked_transactions=policy.block,
+        allowed_exceptions=policy.allow,
+        policy_preset=policy.preset,
+        policy_source=policy.source,
+        policy_file_sha256=policy.file_sha256,
         profile=args.profile,
         confirmation_floor=list(args.confirm or []),
+    )
+
+    # The effective policy goes to the log and, as its own event, to the audit
+    # log: a changed policy file is then visible after the fact.
+    logger.info("Transaction policy: preset '%s' from %s (%d block, %d allow)",
+                policy.preset, policy.source, len(policy.block), len(policy.allow))
+    logging.getLogger("mcp_sap_gui.audit").info(
+        json.dumps({"event": "policy", **config.policy.describe()})
     )
 
     if config.confirmation_floor:

@@ -603,8 +603,12 @@ class SAPGUIControllerBase:
         """Press Execute (F8)."""
         return self.send_vkey(VKey.F8)
 
-    def get_screen_info(self) -> Dict[str, Any]:
+    def get_screen_info(self, include_popup: bool = True) -> Dict[str, Any]:
         """Get information about the current screen.
+
+        When a popup is open the result carries a compact ``popup`` digest
+        (classification, texts, button labels and any pre-filled inputs with a
+        notice), unless *include_popup* is False.
 
         Reads from ``session.ActiveWindow`` so the title always reflects
         what the user actually sees.  When ActiveWindow is a popup
@@ -650,6 +654,13 @@ class SAPGUIControllerBase:
                 "message_id": status.get("message_id", ""),
                 "message_number": status.get("message_number", ""),
             }
+
+            # A popup opened: say what it is in THIS response, so the caller
+            # sees pre-filled values before deciding to confirm it.
+            if include_popup and active_wnd_id != "wnd[0]":
+                digest = getattr(self, "_popup_digest", lambda: {})()
+                if digest:
+                    result["popup"] = digest
 
             return result
         except Exception as e:

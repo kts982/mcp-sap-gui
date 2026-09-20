@@ -23,8 +23,8 @@ WORKFLOW_TARGET_PARAMETERS = {
     "table_export": "table_id",
     "spro_navigate": "activity_name",
 }
-TRANSACTION_GUIDE_NAMES = ("/SCWM/MON",)
-TransactionGuideName = Literal["/SCWM/MON"]
+TRANSACTION_GUIDE_NAMES = ("/SCWM/MON", "SM30")
+TransactionGuideName = Literal["/SCWM/MON", "SM30"]
 
 # Alias → canonical transaction mapping (all keys lowercase)
 _TRANSACTION_ALIASES: dict[str, str] = {
@@ -32,6 +32,13 @@ _TRANSACTION_ALIASES: dict[str, str] = {
     "scwm/mon": "/SCWM/MON",
     "warehouse monitor": "/SCWM/MON",
     "ewm warehouse monitor": "/SCWM/MON",
+    # One guide covers both: a view cluster opens SM30-style views.
+    "sm30": "SM30",
+    "sm34": "SM30",
+    "table maintenance": "SM30",
+    "view maintenance": "SM30",
+    "view cluster": "SM30",
+    "customizing view": "SM30",
 }
 
 
@@ -366,8 +373,115 @@ sap_read_table("<table_id>", max_rows=50)
 """
 
 
+def render_sm30_transaction_guide(task: str = "") -> str:
+    """Return a read-first guide for view maintenance (SM30) and view clusters (SM34)."""
+    task_note = (
+        f"Keep the user goal in mind while navigating: {task}.\n\n"
+        if task.strip()
+        else ""
+    )
+    return f"""\
+Use this guide for **table/view maintenance** (`SM30`) and **view clusters** (`SM34`). \
+Most IMG (SPRO) activities open one of these two screens, so it applies there too.
+
+{task_note}## Usage mode
+- **Read first.** Open in display mode, understand the view, and only then switch to \
+maintenance if the user asked for a change.
+- Customizing changes are recorded in a transport request. Which request is the \
+USER's decision, never yours.
+
+## Step 1 — Open the view
+```
+sap_execute_transaction("SM30")     # single view
+sap_execute_transaction("SM34")     # view cluster
+```
+- Discover the initial screen instead of guessing IDs:
+```
+sap_get_screen_elements(changeable_only=true)
+sap_get_screen_elements(type_filter="GuiButton")
+```
+- Enter the view / view cluster name, then press **Display** (not Maintain) for a first look.
+- A "Determine Work Area" popup may ask for a subset (e.g. a warehouse or company \
+code). The response of the button press carries a `popup` digest; fill the fields it \
+lists and confirm.
+
+## Step 2 — Read the table
+- The entries are a `GuiTableControl`. Discovery lists it as ONE element:
+```
+sap_get_screen_elements(type_filter="GuiTableControl")
+sap_read_table("<table_id>", columns_only=true)
+sap_read_table("<table_id>", max_rows=50)
+```
+- `total_rows` includes empty padding rows. The real count is in the position text \
+under the table ("Entry 1 of 210").
+- To jump to an entry use the **Position...** button (a popup asks for the key), \
+not manual scrolling. For everything else page with `start_row`.
+- An EMPTY view in display mode has no cells, so technical column names do not exist \
+yet: columns are flagged `name_is_title`. Read the schema again once a row exists.
+
+## Step 3 — View clusters: the dialog structure
+- The tree on the left is a docking container BESIDE the user area. \
+`sap_get_screen_elements` reports it as `docking_containers` (typically \
+`wnd[0]/shellcont`), the tree itself is usually `wnd[0]/shellcont/shell`:
+```
+sap_read_tree("wnd[0]/shellcont/shell")
+```
+- Switch to a node's view with an ITEM double-click, using the tree's column name \
+(from `column_names`, usually `Column1`):
+```
+sap_double_click_tree_item("wnd[0]/shellcont/shell", "<node_key>", "Column1")
+```
+- `sap_double_click_tree_node` reports success there but does NOT switch the view. \
+Always verify: the window title changes to the node's name.
+- A dependent node (a child in the tree) shows the entries OF the selected parent \
+entry. Select the parent row first, then open the child:
+```
+sap_select_table_row("<parent_table_id>", 0)
+sap_double_click_tree_item("wnd[0]/shellcont/shell", "<child_key>", "Column1")
+```
+- "No entries found that match the selection criteria" on a child view means that \
+parent entry simply has none.
+
+## Step 4 — Maintain entries (only when asked)
+- Switch to change mode (Display <-> Change button), then **New Entries** is `F5` \
+(in table maintenance F5 is NOT refresh).
+- Take the cell IDs from the schema instead of building them by hand — it gives the \
+right txt/ctxt/cmb prefix per column:
+```
+sap_read_table("<table_id>", columns_only=true)   # column_info[*].cell_id, {{row}} = visible row
+sap_set_batch_fields({{"<cell_id row 0>": "...", "<cell_id row 1>": "..."}}, validate=true)
+```
+- Only VISIBLE rows can be filled. When the visible rows are used up, scroll with \
+`sap_scroll_table_control` and read the schema again (row 0 is then the first visible row).
+- `validate=true` presses Enter: check `message_type` (E = the row was rejected) before \
+filling more rows. Offer `sap_preview` before saving a larger batch.
+
+## Step 5 — Save
+- `F11` / Save asks the user for confirmation first.
+- A **"Prompt for Customizing request"** popup usually follows. SAP pre-fills the \
+user's last request, which may belong to a different project. The save response shows \
+it as `popup.prefilled_inputs` with a notice. Tell the user which request is pre-filled \
+and ask; change the field first if it is wrong. Never confirm it blindly.
+- Success is the status message "Data was saved" (`message_type` S).
+
+## Leaving
+- `F3` from a changed view asks whether to save. Read that popup; do not auto-confirm.
+- `sap_execute_transaction("/n")` leaves without saving: unsaved entries are lost.
+
+## Common pitfalls
+- Looking for the dialog-structure tree under `wnd[0]/usr` (it is under `wnd[0]/shellcont`)
+- Using `sap_double_click_tree_node` in a view cluster and assuming the view switched
+- Opening a child node without a selected parent entry
+- Treating `total_rows` as the number of entries
+- Pressing F5 to "refresh" (it creates new entries)
+- Accepting the pre-filled customizing request
+- Drag-and-drop screens cannot be scripted at all — stop and tell the user
+"""
+
+
 _TRANSACTION_RENDERERS = {
     "/SCWM/MON": render_scwm_mon_transaction_guide,
+    "SM30": render_sm30_transaction_guide,
 }
 
 

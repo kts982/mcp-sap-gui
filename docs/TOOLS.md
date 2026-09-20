@@ -182,7 +182,7 @@ deployments). Values whose field name looks sensitive (`PWD`, `BCODE`,
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_transaction_guide` | Return a generic, read-first guide for a supported transaction such as `/SCWM/MON`; aliases like `SCWM/MON` and `warehouse monitor` also work |
+| `sap_get_transaction_guide` | Return a generic, read-first guide for a supported transaction: `/SCWM/MON` (aliases `SCWM/MON`, `warehouse monitor`) or `SM30` for table/view maintenance and view clusters (aliases `SM34`, `table maintenance`, `view cluster`) |
 
 ## Recommended Usage Patterns
 

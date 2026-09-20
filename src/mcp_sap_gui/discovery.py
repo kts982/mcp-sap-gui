@@ -159,7 +159,67 @@ class DiscoveryMixin:
         else:
             result["has_inputs"] = False
 
+        prefilled = self._prefilled_inputs(interactive_elements)
+        if prefilled:
+            result["prefilled_inputs"] = prefilled
+            result["notice"] = self._PREFILL_NOTICE
+
         return self._classify_popup(result)
+
+    # Deliberately generic: no popup is recognised by name. Any dialog whose
+    # changeable inputs already hold values gets the same notice, because a
+    # confirm accepts defaults the agent never chose (a transport request
+    # prompt pre-filled with another project's request is one such case).
+    _PREFILL_TYPES = ("GuiTextField", "GuiCTextField", "GuiComboBox")
+    _PREFILL_NOTICE = (
+        "This popup has pre-filled input values. Confirming accepts them as "
+        "they are: verify each one is what the user intends, and change it "
+        "first if it is not."
+    )
+
+    def _prefilled_inputs(self, interactive_elements: list) -> list:
+        """Changeable inputs of a popup that already hold a value."""
+        return [
+            {
+                "id": el["id"],
+                "name": el.get("name", ""),
+                "value": self._mask_field_value(el["id"], el["text"]),
+            }
+            for el in interactive_elements
+            if el.get("type") in self._PREFILL_TYPES
+            and el.get("changeable")
+            and el.get("text")
+        ]
+
+    def _popup_digest(self) -> Dict[str, Any]:
+        """Compact summary of the open popup, attached to action responses.
+
+        The title is left out: screen info already reads it from the active
+        window. Full details (element IDs) stay with get_popup_window.
+        """
+        try:
+            popup = self.get_popup_window()
+        except Exception:
+            return {}
+        if not popup.get("popup_exists"):
+            return {}
+
+        digest: Dict[str, Any] = {
+            "classification": popup.get("classification", "unknown"),
+        }
+        texts = popup.get("texts") or []
+        if texts:
+            digest["texts"] = [str(t)[:200] for t in texts[:6]]
+        buttons = [
+            b.get("text") or b.get("tooltip") for b in popup.get("buttons", [])
+        ]
+        buttons = [b for b in buttons if b]
+        if buttons:
+            digest["buttons"] = buttons
+        for key in ("prefilled_inputs", "notice"):
+            if key in popup:
+                digest[key] = popup[key]
+        return digest
 
     def _collect_popup_contents(
         self,
@@ -388,12 +448,14 @@ class DiscoveryMixin:
         }
         if inputs:
             popup["inputs"] = inputs
-        for key in ("buttons", "has_inputs", "recommended_action", "safe_auto_action"):
+        for key in ("buttons", "has_inputs", "recommended_action",
+                    "safe_auto_action", "prefilled_inputs", "notice"):
             popup.pop(key, None)
 
-        # Return updated screen state after the action
+        # Return updated screen state after the action. A follow-up popup is
+        # reported in full as popup_after, so the digest would only repeat it.
         try:
-            popup["screen"] = self.get_screen_info()
+            popup["screen"] = self.get_screen_info(include_popup=False)
         except Exception:
             pass
 
