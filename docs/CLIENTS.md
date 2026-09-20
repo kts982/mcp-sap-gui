@@ -29,8 +29,16 @@ Optional flags:
 ```text
 --read-only
 --debug
+--profile exploration|operator|full
+--confirm transactions batch_fields
+--audit-log sap_audit.jsonl
+--policy-preset default|abap-dev|strict
+--policy-file C:\Users\<you>\AppData\Roaming\mcp-sap-gui\policy.json
 --allowed-transactions MM03 VA03 ME23N
 ```
+
+The transaction policy (presets, policy file, examples) is described under
+[Security Considerations](../README.md#security-considerations) in the README.
 
 ## Claude Code
 

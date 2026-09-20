@@ -17,7 +17,7 @@ This project is intentionally focused on **real SAP GUI automation**, not browse
 
 ## Current Release Shape
 
-The current public release is **`0.3.0`**.
+The current public release is **`0.4.0`**.
 
 That means:
 
@@ -46,15 +46,16 @@ This project reduces that work by giving an assistant a structured interface to 
 
 The current strengths are:
 
-- strong SAP GUI coverage across fields, tables, ALV grids, trees, menus, and popups
+- strong SAP GUI coverage across fields, tables, ALV grids, classic report lists, trees (including the docked dialog structure of view clusters), menus, and popups
+- responses sized for an agent's context: one element per table control, short element IDs, lists as lines of text
 - discovery-first workflows that reduce brittle hardcoded IDs
-- safety controls: read-only mode, transaction blocklists/allowlists, tag-based policy profiles, save confirmation via elicitation-capable clients, and user-defined confirmation points that make whole categories of writes ask before they run
+- safety controls: read-only mode, a configurable transaction policy (presets plus a policy file with allow and block patterns), tag-based policy profiles, save confirmation via elicitation-capable clients, and user-defined confirmation points that make whole categories of writes ask before they run
 - built-in MCP guidance so clients start with better navigation patterns
 - unit-tested server and controller behavior
 
 ## What It Is Not Trying To Be Yet
 
-`0.3.0` is not yet:
+`0.4.0` is not yet:
 
 - a remote multi-user SAP automation service
 - a Fiori or browser automation product

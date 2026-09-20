@@ -64,7 +64,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active transaction policy |
+| `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active transaction policy (presets and policy file: see the README's Security Considerations). A bare `/n` leaves the current transaction |
 | `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, or `Save`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients |
 | `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window |
 
@@ -129,8 +129,10 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information or input-required dialogs |
-| `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification |
+| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information or input-required dialogs. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are |
+| `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification. After an action the result keeps the popup's title, texts and entered values and drops its now-dead element IDs |
+
+Every action tool also reports a popup that it opened: `screen.popup` carries the classification, texts, button labels and any `prefilled_inputs`, so the values are visible before the agent decides how to respond.
 | `sap_get_toolbar_buttons` | List standard SAP toolbar buttons |
 | `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers |
 | `sap_read_list` | Read a classic ABAP list (`WRITE` output, F4 hit lists) as lines of text, with list colours and paging. One page is ~500 label elements to discovery; this returns the lines |

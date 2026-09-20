@@ -6,7 +6,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
 
-Current release: `0.3.0` for local Windows use over MCP `stdio`.
+Current release: `0.4.0` for local Windows use over MCP `stdio`.
 
 [![CI](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml)
 [![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
@@ -18,6 +18,15 @@ Current release: `0.3.0` for local Windows use over MCP `stdio`.
 - Primary repository: GitHub (`kts982/mcp-sap-gui`).
 
 ## What's New
+
+**0.4.0 — shaped by two days of real agent work on a live system.** The lesson was that token cost per call hurts more than missing tools, and that a few screens could not be reached at all:
+
+- **Lighter responses.** A table control is one discovery element instead of one per cell (an SM30 screen went from 231 elements to 3), element IDs come back in the short `wnd[0]/...` form, and batch fills and popup actions report what matters instead of echoing everything.
+- **`sap_read_list`** reads a classic report list (`WRITE` output, F4 hit lists) as lines of text with list colours and paging — 43 lines instead of 492 label elements, and no screenshot needed.
+- **View clusters work.** Docking containers (`wnd[0]/shellcont`) are valid IDs and discovery points to them, so the dialog structure of SM34 and most IMG activities can be navigated. A new `SM30` transaction guide covers table maintenance and view clusters end to end.
+- **Your transaction policy.** Presets (`default`, `abap-dev`, `strict`) plus a policy file with glob patterns replace the hard-coded blocklist. Details: [Security Considerations](#security-considerations).
+- **Popups announce pre-filled values.** When an action opens a popup, its response already says what the popup is and which inputs hold values you never chose — such as a customizing request pre-filled with another project's request.
+- **Screenshots to a file.** `sap_screenshot(save_path=...)` writes a full-resolution PNG for documents and never overwrites a file.
 
 **`sap_preview` — see it before it happens.** The agent can now show you an approval card at any checkpoint: before a batch write, before saving, or whenever you ask (*"before adding country GR, show me the values"*). It carries the current screenshot, session context, and the exact values about to be written — password-shaped values masked. On MCP Apps hosts (VS Code Copilot Chat) it renders as a rich inline card; everywhere else you get the same summary as text plus the screenshot. Saving still goes through the confirmation gate. Details: [Rendered Preview Cards](#rendered-preview-cards).
 
@@ -34,9 +43,10 @@ This server allows AI assistants to:
 - Select menu items from the menu bar (Table View, Edit, Selection, etc.)
 - Navigate through SAP screens using keyboard keys and buttons
 - Extract data from ALV grids (GuiGridView) and classic table controls (GuiTableControl)
+- Read classic report lists (`WRITE` output) as text, including the colour of a line
 - Interact with ALV toolbar buttons and context menus
-- Read and interact with tree controls (TableTree, ColumnTree, SimpleTree)
-- Take screenshots of SAP windows
+- Read and interact with tree controls (TableTree, ColumnTree, SimpleTree), including the docked dialog structure of view clusters
+- Take screenshots of SAP windows, inline or saved as a full-resolution file
 - Discover screen elements for automation
 - Show you previews before writing, and pause for your approval at confirmation points you choose
 
@@ -138,7 +148,7 @@ Useful facts when proposing this to a Basis/security team:
 
 - Per-user and read-only modes are **combinable** since SAP GUI 7.40 PL17 / 7.50 PL4: full API for `S_SCR` holders, read-only for everyone else (SAP Note 2565390).
 - A dynamic `RZ11` change to `sapgui/user_scripting` is **not persistent** — it reverts at the next application server restart, which suits a time-boxed evaluation on a development system.
-- Server-side, scripted actions run under the SAP user's normal authorizations and appear in logs as ordinary user activity. The user's authorization profile is the effective security boundary — pair a dedicated minimal-authorization account with this server's `--allowed-transactions`, `--profile`, and `--audit-log` options for defense in depth.
+- Server-side, scripted actions run under the SAP user's normal authorizations and appear in logs as ordinary user activity. The user's authorization profile is the effective security boundary — pair a dedicated minimal-authorization account with this server's transaction policy (`--policy-preset`, `--policy-file`), `--profile`, and `--audit-log` options for defense in depth.
 - Authoritative reference: [SAP GUI Scripting Security Guide](https://help.sap.com/doc/97d2d0bc2ed248a4a85a0bec608704f8/800.13/en-US/sap_gui_scripting_sec_guide.pdf) (help.sap.com).
 
 **Why the Scripting API is required at all:** SAP GUI for Windows draws dynpro screens on a custom canvas that exposes no usable structure to Windows UI Automation or other accessibility APIs — the Scripting API is the only structured way to read and drive SAP GUI screens. Commercial RPA products have the same dependency and fall back to screenshot/OCR-based automation when scripting is disabled; this project deliberately avoids that approach because it is imprecise and brittle.
@@ -390,7 +400,7 @@ The server includes built-in navigation knowledge that helps any MCP client (Cla
 - **MCP Instructions** — Injected into every client's system prompt during initialization. Covers screen discovery workflow, popup handling, table pagination, SPRO tree navigation, key reference, and common mistakes to avoid.
 - **`docs://sap-gui-guide` Resource** — Detailed reference guide available on-demand via `resources/read`. Covers element types, ID naming conventions, transaction code formats, table type comparison, status bar messages, and step-by-step patterns for SPRO and table maintenance views.
 
-These prevent common agent mistakes like guessing element IDs, ignoring popups, pressing F5 (="New Entries") when meaning to refresh, or using `double_click_tree_node` in SPRO (which opens docs instead of executing the activity).
+These prevent common agent mistakes like guessing element IDs, ignoring popups, pressing F5 (="New Entries") when meaning to refresh, using `double_click_tree_node` in SPRO (which opens docs instead of executing the activity) or in a view cluster (where it does nothing), or reading a classic report list from a screenshot instead of with `sap_read_list`.
 
 ## Available Tools
 
@@ -402,7 +412,7 @@ The server currently exposes **60 MCP tools**.
 | Navigation | 3 | Execute transactions, send keys, inspect current screen |
 | Fields & UI | 13 | Read/write fields, buttons, tabs, comboboxes, textedit, focus |
 | Tables & Grids | 17 | ALV grids, TableControls, row selection, column info, cell ops |
-| Popup / Toolbar / Shell | 4 | Popup inspection and handling, toolbar discovery, shell content |
+| Popup / Toolbar / Shell / Lists | 5 | Popup inspection and handling, toolbar discovery, shell content, classic report lists |
 | Trees | 10 | Read/search/expand/select/click SAP tree controls |
 | Discovery | 2 | Screen element discovery and screenshots |
 | Preview | 1 | Show the user the current screen plus the values the agent is about to write |
@@ -412,7 +422,8 @@ The server currently exposes **60 MCP tools**.
 The most important patterns:
 - `sap_get_screen_elements` to discover IDs instead of guessing
 - `sap_read_table` to start with any SAP table/grid
-- `sap_get_popup_window` when `active_window` reports a popup; it now classifies the dialog and suggests a safe next step
+- `sap_read_list` when a report prints a plain list instead of an ALV grid
+- Every action response carries a short `popup` digest when a popup opened (classification, texts, button labels, and `prefilled_inputs` with a notice when inputs already hold values); `sap_get_popup_window` gives the full details and suggests a safe next step
 - `sap_handle_popup(action="auto")` when you want the server to dismiss only clearly safe informational popups and otherwise leave the dialog untouched
 - `sap_preview` before significant writes (batch field fills, `F11` / Save) so the user sees the screen and the pending values first
 - `sap_set_confirmation_points` to make categories of writes ask the user for approval before they run
@@ -464,7 +475,7 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 3. **Read-Only Mode** - `--read-only` flag disables all mutating operations (field writes, button presses, transaction execution, key sends, tree/table interactions)
 
-4. **Transaction Whitelist** - `--allowed-transactions` limits execution to specific approved t-codes. This is the recommended production mode.
+4. **Transaction Whitelist** - For production use an allowlist: the `strict` policy preset with an `allow` list in the policy file (supports patterns such as `/SCWM/*`). The older `--allowed-transactions T1 T2 ...` flag still works and restricts on top of the policy.
 
 5. **Policy Profiles** - `--profile` controls which tools are visible: `exploration` (read-only), `operator` (read + write), `full` (all, default). Profiles can also be switched per-session via `sap_set_policy_profile` — but the server `--profile` is a floor: a session can restrict itself further, never grant itself more than the server allows
 
@@ -653,7 +664,7 @@ mcp-sap-gui/
 
 ### "The tool is available, but the action is blocked"
 - Check whether the server is running with `--read-only`
-- Check whether the transaction is blocked by the default blocklist
+- Check whether the transaction policy blocks it: the error names the active preset. Allow the transaction in a policy file (`--policy-file`, see [Security Considerations](#security-considerations)) or pick another `--policy-preset`, then restart the server. The policy cannot be changed from inside a session
 - Check whether you started the server with `--allowed-transactions`
 
 ## Development
