@@ -48,9 +48,9 @@ SCREEN = {
 }
 
 SESSION = {
-    "system_name": "HA9",
+    "system_name": "DEV",
     "system_number": "00",
-    "client": "200",
+    "client": "100",
     "user": "DEVELOPER",
     "language": "EN",
     "transaction": "SM30",
@@ -139,7 +139,7 @@ class TestBuildPreviewText:
         assert "About to add country GR to V_T005" in text
         assert "Data was saved" in text
         assert "[S]" in text
-        assert "HA9/200" in text
+        assert "DEV/100" in text
         assert "DEVELOPER" in text
         for name, value in PENDING.items():
             assert name in text
