@@ -440,11 +440,16 @@ class DiscoveryMixin:
             )
 
         # The popup that was acted on is gone, so its element IDs are dead
-        # weight. Keep the trail of what it said and which values it held.
+        # weight. Keep the trail of what it said and which values were
+        # accepted: changeable inputs only, not read-only description fields.
         inputs = {
-            (el.get("name") or el.get("id", "")): el["text"]
+            (el.get("name") or el.get("id", "")): self._mask_field_value(
+                el.get("id", ""), el["text"],
+            )
             for el in popup.pop("interactive_elements", [])
-            if el.get("text")
+            if el.get("type") in self._PREFILL_TYPES
+            and el.get("changeable")
+            and el.get("text")
         }
         if inputs:
             popup["inputs"] = inputs

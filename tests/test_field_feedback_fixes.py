@@ -699,6 +699,11 @@ class TestCompactPopupResult:
                  "name": "KO008-TRKORR", "text": "DEVK900123", "changeable": True},
                 {"id": "wnd[1]/usr/txtEMPTY", "type": "GuiTextField",
                  "name": "EMPTY", "text": "", "changeable": True},
+                # Seen live: selection popups carry read-only description
+                # fields with text. They are labels, not accepted values.
+                {"id": "wnd[1]/usr/txt%_P_LGNUM_%_APP_%-TEXT", "type": "GuiTextField",
+                 "name": "%_P_LGNUM_%_APP_%-TEXT", "text": "Warehouse Number",
+                 "changeable": False},
             ],
         }
         controller.get_popup_window = MagicMock(side_effect=[popup, popup_after])
@@ -732,7 +737,7 @@ class TestCompactPopupResult:
 
         result = controller.handle_popup("read")
 
-        assert len(result["interactive_elements"]) == 2
+        assert len(result["interactive_elements"]) == 3
         assert result["buttons"]
 
 
