@@ -7,7 +7,7 @@ transaction execution, and screen information retrieval.
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from .models import (
     SAPGUIError,
@@ -23,6 +23,26 @@ logger = logging.getLogger(__name__)
 
 _WINDOW_ID_RE = re.compile(r"^wnd\[(\d+)\]$")
 _NORMALIZED_WND_PATH_RE = re.compile(r"(?:^|/)(wnd\[\d+\].*)$")
+# SAP GUI 8.x runs sessions in sapguiserver.exe processes. Each registers a
+# process-specific ROT entry "SAPGUISERVER-<hexPID>" (SAP Business Client,
+# ABAP in Eclipse, direct sapgui.exe) plus an unsuffixed "SAPGUISERVER" that
+# only ever resolves to the first process. SAP Logon registers "SAPGUI".
+_SAPGUISERVER_ROT_RE = re.compile(r"^SAPGUISERVER-[0-9A-F]+$", re.IGNORECASE)
+
+_NOT_AVAILABLE_MESSAGE = (
+    "Cannot connect to SAP GUI. Ensure SAP Logon Pad, SAP Business Client "
+    "or another SAP GUI session is running"
+)
+_SCRIPTING_DISABLED_NOTE = (
+    "SAP GUI Scripting is disabled on this server (profile parameter "
+    "sapgui/user_scripting); no session can be read."
+)
+# RPC_E_DISCONNECTED: the session window/tab was closed under us.
+_HRESULT_DISCONNECTED = -2147417848
+# RPC_S_SERVER_UNAVAILABLE: the whole GUI server process is gone.
+_HRESULT_SERVER_UNAVAILABLE = -2147023174
+_DEAD_SESSION_HRESULTS = frozenset({_HRESULT_DISCONNECTED, _HRESULT_SERVER_UNAVAILABLE})
+
 # Top-level window children: user area, menu/status/title bars, toolbars and
 # docking containers. The latter (wnd[0]/shellcont, wnd[0]/shellcont[1]) sit
 # BESIDE usr and hold the dialog-structure tree of view clusters (SM34, most
@@ -47,6 +67,9 @@ class SAPGUIControllerBase:
         """Initialize the SAP GUI controller."""
         self._win32com = None
         self._sap_gui_auto = None
+        self._saplogon_engine = None
+        # Scripting engine the bound connection came from (SAP Logon or a
+        # SAP GUI server process); session-lookup helpers walk this one.
         self._application = None
         self._connection = None
         self._session = None
@@ -78,7 +101,7 @@ class SAPGUIControllerBase:
             pass  # Already initialized or not needed
 
     def _get_sap_gui(self):
-        """Get the SAP GUI automation object."""
+        """Get the SAP Logon (``SAPGUI``) automation object."""
         if self._sap_gui_auto is None:
             self._ensure_com_initialized()
             try:
@@ -89,23 +112,131 @@ class SAPGUIControllerBase:
                     e,
                     exc_info=logger.isEnabledFor(logging.DEBUG),
                 )
-                raise SAPGUINotAvailableError(
-                    "Cannot connect to SAP GUI. Ensure SAP Logon Pad is running."
-                )
+                raise SAPGUINotAvailableError(_NOT_AVAILABLE_MESSAGE + ".")
         return self._sap_gui_auto
 
-    def _get_application(self):
-        """Get the SAP GUI scripting engine."""
-        if self._application is None:
+    def _get_saplogon_engine(self):
+        """Get the SAP Logon scripting engine (needed for OpenConnection)."""
+        if self._saplogon_engine is None:
             sap_gui = self._get_sap_gui()
             # Use property access (no parentheses) - works more reliably
-            self._application = sap_gui.GetScriptingEngine
-            if self._application is None:
+            engine = sap_gui.GetScriptingEngine
+            if engine is None:
                 raise SAPGUINotAvailableError(
                     "Could not get SAP GUI Scripting Engine. "
                     "Is SAP GUI Scripting enabled?"
                 )
+            self._saplogon_engine = engine
+        return self._saplogon_engine
+
+    def _get_application(self):
+        """Get the scripting engine of the bound session.
+
+        Falls back to the SAP Logon engine when nothing is bound yet.
+        """
+        if self._application is None:
+            self._application = self._get_saplogon_engine()
         return self._application
+
+    def _list_rot_names(self) -> List[str]:
+        """Return the display names of all COM Running Object Table entries."""
+        import pythoncom
+
+        rot = pythoncom.GetRunningObjectTable()
+        bind_ctx = pythoncom.CreateBindCtx(0)
+        return [
+            str(moniker.GetDisplayName(bind_ctx, None))
+            for moniker in rot.EnumRunning()
+        ]
+
+    def _get_engine_from_rot(self, rot_name: str):
+        """Resolve a ROT entry to its scripting engine, or None on failure."""
+        try:
+            gui = self._win32com.GetObject(rot_name)
+            # Property, not a method: calling it raises "Member not found".
+            engine = gui.GetScriptingEngine
+        except Exception as e:
+            logger.debug(
+                "Skipping scripting engine %s: %s",
+                rot_name,
+                e,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            return None
+        if engine is None:
+            logger.debug("ROT entry %s returned no scripting engine", rot_name)
+        return engine
+
+    def _iter_scripting_engines(self) -> Iterator[Tuple[str, str, Any]]:
+        """Yield ``(host, rot_name, engine)`` for every reachable SAP GUI.
+
+        Order: SAP Logon (``SAPGUI``) first, then every process-specific
+        ``SAPGUISERVER-<hexPID>`` entry sorted by name. The unsuffixed
+        ``SAPGUISERVER`` is used only when no suffixed entry exists, since
+        it always points at the first GUI server process. Failures on single
+        entries are skipped; if the ROT cannot be enumerated, only SAP Logon
+        is tried.
+        """
+        self._ensure_com_initialized()
+
+        engine = self._get_engine_from_rot("SAPGUI")
+        if engine is not None:
+            yield "saplogon", "SAPGUI", engine
+
+        try:
+            names = self._list_rot_names()
+        except Exception as e:
+            logger.debug(
+                "ROT enumeration failed, using SAP Logon only: %s",
+                e,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            return
+
+        server_names = sorted({n for n in names if _SAPGUISERVER_ROT_RE.fullmatch(n)})
+        if not server_names and "SAPGUISERVER" in names:
+            server_names = ["SAPGUISERVER"]
+
+        for rot_name in server_names:
+            engine = self._get_engine_from_rot(rot_name)
+            if engine is not None:
+                yield "sapguiserver", rot_name, engine
+
+    def _discover_connections(self) -> List[Tuple[str, str, Any, Any]]:
+        """Return ``(host, rot_name, engine, connection)`` across all engines.
+
+        The list position is the global connection index used by
+        list_connections() and connect_to_existing_session().
+
+        Raises:
+            SAPGUINotAvailableError: If no scripting engine is reachable.
+        """
+        engines = list(self._iter_scripting_engines())
+        if not engines:
+            raise SAPGUINotAvailableError(_NOT_AVAILABLE_MESSAGE + ".")
+
+        found: List[Tuple[str, str, Any, Any]] = []
+        for host, rot_name, engine in engines:
+            try:
+                for i in range(engine.Children.Count):
+                    found.append((host, rot_name, engine, engine.Children(i)))
+            except Exception as e:
+                logger.warning(
+                    "Could not list connections of %s: %s",
+                    rot_name,
+                    e,
+                    exc_info=logger.isEnabledFor(logging.DEBUG),
+                )
+        return found
+
+    @staticmethod
+    def _is_scripting_disabled(conn) -> bool:
+        """Return True when the server disabled scripting for this connection."""
+        try:
+            value = conn.DisabledByServer
+        except Exception:
+            return False
+        return isinstance(value, (bool, int)) and bool(value)
 
     def _normalize_window_id(self, window_id: Any) -> str:
         """Normalize SAP window IDs to the short form used by findById()."""
@@ -185,10 +316,7 @@ class SAPGUIControllerBase:
         """Return a client-safe error message without raw COM details."""
         message = str(exc).strip()
         if isinstance(exc, SAPGUINotAvailableError):
-            return (
-                "Cannot connect to SAP GUI. Ensure SAP Logon Pad is running "
-                "and SAP GUI Scripting is enabled."
-            )
+            return _NOT_AVAILABLE_MESSAGE + " and SAP GUI Scripting is enabled."
         if isinstance(exc, (SAPGUINotConnectedError, SAPGUIError, ValueError)):
             return message or fallback
         if message:
@@ -241,7 +369,31 @@ class SAPGUIControllerBase:
                     "Wait for it to complete before sending another command."
                 )
         except AttributeError:
-            pass  # Busy property not available on this version
+            # Busy unavailable: either an older GUI version, or the session
+            # window/tab was closed (dynamic dispatch then loses type info
+            # and Busy raises AttributeError). Probe liveness via Id.
+            self._check_session_alive()
+
+    def _check_session_alive(self) -> None:
+        """Raise SAPGUINotConnectedError if the bound session was closed.
+
+        Only the "disconnected" and "server unavailable" HRESULTs count as a
+        dead session (pywintypes.com_error carries them as ``hresult``); any
+        other failure keeps the binding so a transient error never forces a
+        reconnect.
+        """
+        try:
+            self._session.Id
+        except Exception as e:
+            if getattr(e, "hresult", None) not in _DEAD_SESSION_HRESULTS:
+                return  # Id also unavailable, but not a dead session
+            logger.info("Bound SAP session was closed: %s", e)
+            self._session = None
+            self._connection = None
+            raise SAPGUINotConnectedError(
+                "SAP session was closed (window or tab closed). "
+                "Reconnect with sap_connect_existing."
+            )
 
     # =========================================================================
     # Connection Management
@@ -272,10 +424,12 @@ class SAPGUIControllerBase:
             SAPGUIError: If connection fails
         """
         try:
-            app = self._get_application()
+            # OpenConnection only exists on the SAP Logon engine.
+            app = self._get_saplogon_engine()
 
             logger.info("Opening connection to: %s", system_description)
             self._connection = app.OpenConnection(system_description, True)
+            self._application = app
             self._owns_session = True
 
             if self._connection is None:
@@ -331,29 +485,50 @@ class SAPGUIControllerBase:
             SessionInfo with session details
         """
         try:
-            app = self._get_application()
+            found = self._discover_connections()
 
-            if app.Children.Count == 0:
+            if not found:
                 raise SAPGUIError("No SAP connections found")
 
-            if connection_index >= app.Children.Count:
+            if connection_index < 0 or connection_index >= len(found):
+                summary = "; ".join(
+                    f"{i}: {self._connection_label(conn, host)}"
+                    for i, (host, _rot, _engine, conn) in enumerate(found)
+                )
                 raise SAPGUIError(
                     f"Connection index {connection_index} out of range. "
-                    f"Available: 0-{app.Children.Count - 1}"
+                    f"Found {len(found)} connection(s): {summary}"
                 )
 
-            self._connection = app.Children(connection_index)
+            _host, rot_name, engine, connection = found[connection_index]
 
-            if session_index >= self._connection.Children.Count:
+            if self._is_scripting_disabled(connection):
+                raise SAPGUIError(
+                    f"Connection {connection_index}: SAP GUI Scripting is disabled "
+                    "on this server (profile parameter sapgui/user_scripting). "
+                    "No session can be attached."
+                )
+
+            session_count = connection.Children.Count
+            if session_count == 0:
+                raise SAPGUIError(
+                    f"Connection {connection_index} has no open sessions."
+                )
+            if session_index < 0 or session_index >= session_count:
                 raise SAPGUIError(
                     f"Session index {session_index} out of range. "
-                    f"Available: 0-{self._connection.Children.Count - 1}"
+                    f"Available: 0-{session_count - 1}"
                 )
 
-            self._session = self._connection.Children(session_index)
+            self._connection = connection
+            self._application = engine
+            self._session = connection.Children(session_index)
             self._owns_session = False
 
-            logger.info(f"Connected to existing session {connection_index}/{session_index}")
+            logger.info(
+                "Connected to existing session %s/%s via %s",
+                connection_index, session_index, rot_name,
+            )
             return self.get_session_info()
 
         except SAPGUIError:
@@ -381,6 +556,7 @@ class SAPGUIControllerBase:
                 pass
         self._session = None
         self._connection = None
+        self._application = None
         self._owns_session = False
         logger.info("Disconnected")
 
@@ -438,26 +614,47 @@ class SAPGUIControllerBase:
             session_number=info.SessionNumber,
         )
 
-    def list_connections(self) -> List[Dict[str, Any]]:
-        """List all open SAP connections and sessions."""
-        app = self._get_application()
+    def _connection_label(self, conn, host: str) -> str:
+        """Short human label for a connection, used in error messages."""
+        description = ""
+        try:
+            description = str(conn.Description or "")
+        except Exception:
+            pass
+        if not description:
+            try:
+                description = str(conn.Children(0).Info.SystemName or "")
+            except Exception:
+                description = ""
+        return f"{description or '(no description)'} [{host}]"
 
+    def list_connections(self) -> List[Dict[str, Any]]:
+        """List open SAP connections and sessions across all SAP GUI engines.
+
+        Covers SAP Logon as well as SAP GUI server processes (SAP Business
+        Client, embedded SAP GUI). ``index`` is the global connection index
+        accepted by connect_to_existing_session().
+        """
         connections = []
-        for i in range(app.Children.Count):
-            conn = app.Children(i)
+        for i, (host, rot_name, _engine, conn) in enumerate(
+            self._discover_connections()
+        ):
             sessions = []
 
-            # Get connection description (try multiple properties)
             conn_desc = ""
             try:
-                conn_desc = conn.Description
+                conn_desc = str(conn.Description or "")
             except Exception:
-                try:
-                    conn_desc = conn.ConnectionString
-                except Exception:
-                    conn_desc = f"Connection {i}"
+                conn_desc = ""
 
-            for j in range(conn.Children.Count):
+            scripting_disabled = self._is_scripting_disabled(conn)
+
+            try:
+                session_count = conn.Children.Count
+            except Exception:
+                session_count = 0
+
+            for j in range(session_count):
                 try:
                     sess = conn.Children(j)
                     info = sess.Info
@@ -478,13 +675,27 @@ class SAPGUIControllerBase:
                         )
                     )
 
-            connections.append({
+            if not conn_desc:
+                # Business Client connections have an empty Description.
+                first = next((x for x in sessions if x.get("system")), None)
+                if first:
+                    conn_desc = str(first["system"])
+                    if first.get("client"):
+                        conn_desc += f" ({first['client']})"
+
+            entry: Dict[str, Any] = {
                 "index": i,
                 "id": getattr(conn, 'Id', f"conn_{i}"),
                 "description": conn_desc,
-                "session_count": conn.Children.Count,
+                "session_count": session_count,
                 "sessions": sessions,
-            })
+                "host": host,
+                "rot_entry": rot_name,
+                "scripting_disabled": scripting_disabled,
+            }
+            if scripting_disabled:
+                entry["note"] = _SCRIPTING_DISABLED_NOTE
+            connections.append(entry)
 
         return connections
 

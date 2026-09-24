@@ -100,10 +100,19 @@ Read the first 20 rows of the visible table
 - **Windows** (SAP GUI only runs on Windows)
 - **SAP GUI for Windows** installed
   - Live compatibility verified with SAP GUI for Windows 8.10 64-bit Patch 0
-- **SAP Logon Pad** running (for COM connections)
+- **SAP Logon Pad** running, or a SAP GUI session hosted by **SAP Business Client** (experimental, see [below](#sap-business-client-experimental)) or another embedded SAP GUI (for COM connections)
 - **SAP GUI Scripting enabled** on your SAP systems
 - **Python 3.10+**
 - **[uv](https://docs.astral.sh/uv/)** (recommended Python package manager)
+
+### SAP Business Client (experimental)
+
+- Classic transactions in SAP Business Client run in embedded SAP GUI for Windows, so the server-side scripting parameter is still required. `sapgui/nwbc_scripting` gives read-only scripting (same effect as `sapgui/user_scripting` + `sapgui/user_scripting_set_readonly`).
+- Sessions are discovered through the SAP GUI server process's COM Running Object Table entries (`SAPGUISERVER-<pid>`), next to the usual SAP Logon entry. `sap_list_connections` reports `host: "sapguiserver"` for them.
+- Tabs of one Business Client window are sessions of one connection; a second system is a second connection.
+- Business Client connections have no SAP Logon description; the list shows the system and client instead (e.g. `DEV (100)`).
+- Pressing Back repeatedly closes the tab instead of landing on the SAP Easy Access menu (SAP Business Client FAQ).
+- Fiori Launchpad connections may render a transaction as SAP GUI for HTML; such a transaction is invisible to scripting.
 
 ## Supported Scope
 
@@ -641,10 +650,11 @@ mcp-sap-gui/
 ## Troubleshooting
 
 ### "Cannot connect to SAP GUI"
-- Ensure SAP Logon Pad is running
+- Ensure SAP Logon Pad, SAP Business Client or another SAP GUI session is running
 - Check that SAP GUI Scripting is enabled in SAP GUI options
 
 ### "Scripting disabled" error
+- `sap_list_connections` reports such systems with `scripting_disabled: true` and no sessions
 - Enable scripting server-side: `RZ11` → `sapgui/user_scripting` = `TRUE`
 - Requires SAP Basis administrator
 - Organization won't enable scripting globally? See [Deploying Where Scripting Is Restricted](#deploying-where-scripting-is-restricted) for per-user and read-only enablement options

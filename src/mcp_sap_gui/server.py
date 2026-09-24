@@ -275,7 +275,8 @@ SAP GUI automation server. Controls SAP GUI for Windows via COM scripting.
 
 ## Getting Started
 
-1. If SAP is already open and logged in, use `sap_connect_existing` (most common).
+1. If SAP is already open and logged in, use `sap_connect_existing` (most common). \
+SAP Business Client sessions are supported too (experimental).
 2. If SAP is not open, use `sap_connect` with the system name from SAP Logon Pad.
 3. After connecting, use `sap_get_session_info` to see the current transaction/screen.
 
@@ -868,7 +869,9 @@ async def sap_connect_existing(
     """Connect to an already open SAP session. Use this when SAP is already logged in.
 
     This is the most common starting point. connection_index=0 and session_index=0
-    connect to the first open session. Use sap_list_connections to see all sessions."""
+    connect to the first open session. Also attaches to SAP Business Client /
+    embedded SAP GUI sessions. Indexes come from sap_list_connections; a
+    connection with scripting_disabled=true cannot be attached."""
     c = _ctrl(ctx)
     return _to_dict(await _com(
         lambda: c.connect_to_existing_session(connection_index, session_index)
@@ -877,7 +880,12 @@ async def sap_connect_existing(
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_list_connections(ctx: Context) -> dict:
-    """List all open SAP connections and sessions"""
+    """List all open SAP connections and sessions.
+
+    Covers SAP Logon plus SAP Business Client / embedded SAP GUI sessions
+    (`host`: saplogon | sapguiserver). A connection with no sessions and
+    `scripting_disabled: true` means the server parameter sapgui/user_scripting
+    is off, so no session can be read."""
     c = _ctrl(ctx)
     connections = await _com(c.list_connections)
     return {"connections": connections}

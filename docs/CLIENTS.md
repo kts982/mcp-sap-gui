@@ -193,7 +193,7 @@ List all editable fields on this screen
 
 - `cwd` does not point to the project root where `pyproject.toml` lives
 - dependencies were not installed with `uv sync`
-- SAP Logon Pad is not running
+- neither SAP Logon Pad nor SAP Business Client (or another SAP GUI session) is running
 - SAP GUI scripting is disabled in SAP GUI options or on the SAP server
 - the client needs a restart after MCP config changes
 - the server was started with `--read-only` or an allowlist that blocks your flow

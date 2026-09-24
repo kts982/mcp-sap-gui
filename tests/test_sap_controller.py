@@ -50,6 +50,7 @@ class TestSAPGUIController:
 
         assert "srv042.internal" not in str(exc_info.value)
         assert "C:\\secret" not in str(exc_info.value)
+        assert "SAP Business Client" in str(exc_info.value)
 
 
 class TestVKey:
@@ -1156,6 +1157,51 @@ class TestSessionBusyCheck:
 
         controller._require_session()  # Should not raise
 
+    def test_busy_attribute_error_with_healthy_id_passes(self):
+        """AttributeError on Busy with a readable Id means Busy is just unavailable."""
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+
+        class _Session:
+            Id = "/app/con[0]/ses[0]"
+
+            @property
+            def Busy(self):
+                raise AttributeError("<unknown>.Busy")
+
+        controller._session = _Session()
+        controller._connection = MagicMock()
+
+        controller._require_session()  # Should not raise
+        assert controller.is_connected is True
+
+    def test_closed_session_raises_not_connected(self):
+        """A closed window/tab (Id raises RPC_E_DISCONNECTED) unbinds the session."""
+        from mcp_sap_gui.sap_controller import SAPGUIController, SAPGUINotConnectedError
+        controller = SAPGUIController()
+
+        class _DisconnectedError(Exception):
+            hresult = -2147417848
+
+        class _DeadSession:
+            @property
+            def Busy(self):
+                raise AttributeError("<unknown>.Busy")
+
+            @property
+            def Id(self):
+                raise _DisconnectedError(
+                    "The object invoked has disconnected from its clients."
+                )
+
+        controller._session = _DeadSession()
+        controller._connection = MagicMock()
+
+        with pytest.raises(SAPGUINotConnectedError, match="sap_connect_existing"):
+            controller._require_session()
+        assert controller.is_connected is False
+        assert controller._connection is None
+
 
 class TestExecuteTransactionImproved:
     """Tests for improved execute_transaction with StartTransaction."""
@@ -1519,16 +1565,268 @@ class TestDisconnectOwnership:
         mock_connection.Children.Count = 1
         mock_connection.Children.side_effect = lambda i: [mock_session][i]
 
+        mock_connection.DisabledByServer = False
+
         mock_app = MagicMock()
         mock_app.Children.Count = 1
         mock_app.Children.side_effect = lambda i: [mock_connection][i]
 
-        controller._application = mock_app
+        controller._win32com.GetObject.return_value = MagicMock(
+            GetScriptingEngine=mock_app,
+        )
         controller.get_session_info = MagicMock(return_value={"system_name": "DEV"})
 
         controller.connect_to_existing_session()
 
         assert controller._owns_session is False
+        assert controller._application is mock_app
+
+
+def _fake_session(sid, system="DEV", client="100", user="USER1", tcode="SESSION_MANAGER"):
+    session = MagicMock(Busy=False)
+    session.Id = sid
+    session.Info.SystemName = system
+    session.Info.Client = client
+    session.Info.User = user
+    session.Info.Transaction = tcode
+    return session
+
+
+def _fake_connection(cid, sessions, description="", disabled=False):
+    conn = MagicMock()
+    conn.Id = cid
+    conn.Description = description
+    conn.DisabledByServer = disabled
+    conn.Children.Count = len(sessions)
+    conn.Children.side_effect = lambda i: sessions[i]
+    return conn
+
+
+def _fake_engine(connections):
+    engine = MagicMock()
+    engine.Children.Count = len(connections)
+    engine.Children.side_effect = lambda i: connections[i]
+    return engine
+
+
+def _fake_pythoncom(rot_names=(), enum_error=None):
+    """Fake pythoncom whose ROT lists the given display names."""
+    pythoncom = MagicMock()
+    monikers = []
+    for name in rot_names:
+        moniker = MagicMock()
+        moniker.GetDisplayName.side_effect = lambda ctx, left, _n=name: _n
+        monikers.append(moniker)
+    if enum_error is not None:
+        pythoncom.GetRunningObjectTable.side_effect = enum_error
+    else:
+        pythoncom.GetRunningObjectTable.return_value.EnumRunning.side_effect = (
+            lambda: iter(monikers)
+        )
+    return pythoncom
+
+
+class TestEngineDiscovery:
+    """Discovery of SAP Logon plus SAP GUI server (Business Client) engines."""
+
+    def _make_controller(self, engines, rot_names=(), enum_error=None):
+        """engines: ROT name -> engine, or an Exception to raise from GetObject."""
+        from mcp_sap_gui.sap_controller import SAPGUIController
+
+        controller = SAPGUIController()
+
+        def get_object(name):
+            target = engines.get(name)
+            if target is None:
+                raise Exception(f"Operation unavailable: {name}")
+            if isinstance(target, Exception):
+                raise target
+            return MagicMock(GetScriptingEngine=target)
+
+        controller._win32com.GetObject.side_effect = get_object
+        self._pythoncom = _fake_pythoncom(rot_names, enum_error)
+        return controller
+
+    def _run(self, controller, fn, *args):
+        with patch.dict("sys.modules", {"pythoncom": self._pythoncom}):
+            return fn(*args)
+
+    def test_saplogon_only_keeps_existing_shape(self):
+        conn = _fake_connection(
+            "/app/con[0]",
+            [_fake_session("/app/con[0]/ses[0]")],
+            description="DEV - Development",
+        )
+        controller = self._make_controller(
+            {"SAPGUI": _fake_engine([conn])}, rot_names=["SAPGUI"],
+        )
+
+        result = self._run(controller, controller.list_connections)
+
+        assert result == [{
+            "index": 0,
+            "id": "/app/con[0]",
+            "description": "DEV - Development",
+            "session_count": 1,
+            "sessions": [{
+                "index": 0,
+                "id": "/app/con[0]/ses[0]",
+                "user": "USER1",
+                "transaction": "SESSION_MANAGER",
+                "system": "DEV",
+                "client": "100",
+            }],
+            "host": "saplogon",
+            "rot_entry": "SAPGUI",
+            "scripting_disabled": False,
+        }]
+
+    def test_business_client_server_connection_is_listed_and_attachable(self):
+        sessions = [
+            _fake_session("/app/con[0]/ses[0]"),
+            _fake_session("/app/con[0]/ses[1]", tcode="SU01"),
+        ]
+        server_conn = _fake_connection("/app/con[0]", sessions, description="")
+        controller = self._make_controller(
+            {
+                "SAPGUI": _fake_engine([]),
+                "SAPGUISERVER-9B54": _fake_engine([server_conn]),
+            },
+            rot_names=["SAPGUI", "SAPFRONTEND", "SAPGUISERVER-9B54"],
+        )
+
+        result = self._run(controller, controller.list_connections)
+
+        assert len(result) == 1
+        assert result[0]["index"] == 0
+        assert result[0]["host"] == "sapguiserver"
+        assert result[0]["rot_entry"] == "SAPGUISERVER-9B54"
+        assert result[0]["description"] == "DEV (100)"
+        assert result[0]["session_count"] == 2
+
+        controller.get_session_info = MagicMock(return_value={"system_name": "DEV"})
+        self._run(controller, controller.connect_to_existing_session, 0, 1)
+
+        assert controller._session is sessions[1]
+        assert controller._connection is server_conn
+        assert controller._owns_session is False
+
+    def test_suffixed_entries_skip_unsuffixed_alias(self):
+        conn_a = _fake_connection("/app/con[0]", [_fake_session("s-a")], description="A")
+        conn_b = _fake_connection("/app/con[0]", [_fake_session("s-b")], description="B")
+        controller = self._make_controller(
+            {
+                "SAPGUISERVER": _fake_engine([conn_a]),
+                "SAPGUISERVER-9B54": _fake_engine([conn_a]),
+                "SAPGUISERVER-EA98": _fake_engine([conn_b]),
+            },
+            rot_names=["SAPGUISERVER-EA98", "SAPGUISERVER", "SAPGUISERVER-9B54"],
+        )
+
+        result = self._run(controller, controller.list_connections)
+
+        assert [c["rot_entry"] for c in result] == [
+            "SAPGUISERVER-9B54", "SAPGUISERVER-EA98",
+        ]
+        assert [c["description"] for c in result] == ["A", "B"]
+        assert [c["index"] for c in result] == [0, 1]
+
+    def test_unsuffixed_entry_used_when_no_suffixed_entry(self):
+        conn = _fake_connection("/app/con[0]", [_fake_session("s")], description="A")
+        controller = self._make_controller(
+            {"SAPGUISERVER": _fake_engine([conn])}, rot_names=["SAPGUISERVER"],
+        )
+
+        result = self._run(controller, controller.list_connections)
+
+        assert len(result) == 1
+        assert result[0]["rot_entry"] == "SAPGUISERVER"
+        assert result[0]["host"] == "sapguiserver"
+
+    def test_disabled_connection_reported_and_not_attachable(self):
+        from mcp_sap_gui.sap_controller import SAPGUIError
+
+        conn = _fake_connection("/app/con[0]", [], description="DEV", disabled=True)
+        controller = self._make_controller(
+            {"SAPGUI": _fake_engine([conn])}, rot_names=["SAPGUI"],
+        )
+
+        result = self._run(controller, controller.list_connections)
+
+        assert result[0]["scripting_disabled"] is True
+        assert "sapgui/user_scripting" in result[0]["note"]
+        assert result[0]["sessions"] == []
+
+        with pytest.raises(SAPGUIError, match="sapgui/user_scripting"):
+            self._run(controller, controller.connect_to_existing_session, 0, 0)
+        assert controller.is_connected is False
+
+    def test_rot_enumeration_failure_falls_back_to_saplogon(self):
+        conn = _fake_connection("/app/con[0]", [_fake_session("s")], description="DEV")
+        controller = self._make_controller(
+            {"SAPGUI": _fake_engine([conn])},
+            enum_error=Exception("ROT unavailable"),
+        )
+
+        result = self._run(controller, controller.list_connections)
+
+        assert [c["rot_entry"] for c in result] == ["SAPGUI"]
+
+    def test_failing_server_entry_is_skipped(self):
+        conn = _fake_connection("/app/con[0]", [_fake_session("s")], description="B")
+        controller = self._make_controller(
+            {
+                "SAPGUISERVER-9B54": Exception("Server execution failed"),
+                "SAPGUISERVER-EA98": _fake_engine([conn]),
+            },
+            rot_names=["SAPGUISERVER-9B54", "SAPGUISERVER-EA98"],
+        )
+
+        result = self._run(controller, controller.list_connections)
+
+        assert [c["rot_entry"] for c in result] == ["SAPGUISERVER-EA98"]
+
+    def test_no_engine_raises_not_available_with_new_wording(self):
+        from mcp_sap_gui.sap_controller import SAPGUINotAvailableError
+
+        controller = self._make_controller({}, rot_names=[])
+
+        with pytest.raises(SAPGUINotAvailableError, match="SAP Business Client"):
+            self._run(controller, controller.connect_to_existing_session, 0, 0)
+
+    def test_out_of_range_lists_found_connections(self):
+        from mcp_sap_gui.sap_controller import SAPGUIError
+
+        conn = _fake_connection("/app/con[0]", [_fake_session("s")], description="")
+        controller = self._make_controller(
+            {"SAPGUISERVER-9B54": _fake_engine([conn])},
+            rot_names=["SAPGUISERVER-9B54"],
+        )
+
+        with pytest.raises(SAPGUIError) as exc_info:
+            self._run(controller, controller.connect_to_existing_session, 3, 0)
+
+        message = str(exc_info.value)
+        assert "Found 1 connection(s)" in message
+        assert "DEV [sapguiserver]" in message
+
+    def test_connect_uses_saplogon_engine_even_after_server_attach(self):
+        server_conn = _fake_connection("/app/con[0]", [_fake_session("s")])
+        saplogon_engine = _fake_engine([])
+        controller = self._make_controller(
+            {
+                "SAPGUI": saplogon_engine,
+                "SAPGUISERVER-9B54": _fake_engine([server_conn]),
+            },
+            rot_names=["SAPGUISERVER-9B54"],
+        )
+        controller.get_session_info = MagicMock(return_value={"system_name": "DEV"})
+        self._run(controller, controller.connect_to_existing_session, 0, 0)
+
+        controller.connect("DEV")
+
+        saplogon_engine.OpenConnection.assert_called_once_with("DEV", True)
+        assert controller._application is saplogon_engine
 
 
 class TestSensitiveLogging:
