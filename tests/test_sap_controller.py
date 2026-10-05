@@ -3430,6 +3430,7 @@ class TestGetPopupWindow:
         mock_usr.Children.Count = 1
         mock_label = MagicMock()
         mock_label.Type = "GuiLabel"
+        mock_label.Id = "/app/con[0]/ses[0]/wnd[1]/usr/lblTEXT"
         mock_label.Text = "Do you want to continue?"
         mock_label.Children = MagicMock()
         mock_label.Children.Count = 0
@@ -3481,6 +3482,7 @@ class TestGetPopupWindow:
         mock_usr = MagicMock()
         label = MagicMock()
         label.Type = "GuiLabel"
+        label.Id = "/app/con[0]/ses[0]/wnd[1]/usr/lblTEXT"
         label.Text = "Select warehouse"
         label.Children = MagicMock()
         label.Children.Count = 0
@@ -4265,6 +4267,7 @@ class TestHandlePopup:
         for t in (texts or []):
             lbl = MagicMock()
             lbl.Type = "GuiLabel"
+            lbl.Id = "/app/con[0]/ses[0]/wnd[1]/usr/lblTEXT"
             lbl.Text = t
             children.append(lbl)
         for b in (buttons or []):

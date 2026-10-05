@@ -114,12 +114,29 @@ class DiscoveryMixin:
         texts = []
         buttons = []
         interactive_elements = []
+        list_rows: Dict[str, List[int]] = {}
         tree = self._object_tree(popup_id, self._POPUP_PROPS)
         if tree is not None:
-            self._read_popup_tree(tree, result, texts, buttons, interactive_elements)
+            self._read_popup_tree(tree, result, texts, buttons,
+                                  interactive_elements, list_rows)
         else:
-            self._read_popup_com(popup_id, popup_wnd, result,
-                                 texts, buttons, interactive_elements)
+            self._read_popup_com(popup_id, popup_wnd, result, texts, buttons,
+                                 interactive_elements, list_rows)
+
+        # An F4 hit list is a classic list: one cell per word, hundreds for a
+        # long one. Summarise it; sap_read_list shows it line by line.
+        rows = [row for cells in list_rows.values() for row in cells]
+        if rows:
+            result["list"] = {
+                "cells": len(rows),
+                "rows": len(set(rows)),
+                "hint": (
+                    f"Classic list (e.g. an F4 hit list): read it with "
+                    f"sap_read_list(window_id='{popup_id}'). To pick a line, "
+                    f"read with with_ids=true, sap_set_focus that line's ID, "
+                    f"then Enter."
+                ),
+            }
 
         if texts:
             result["texts"] = texts
@@ -188,7 +205,7 @@ class DiscoveryMixin:
         buttons = [b for b in buttons if b]
         if buttons:
             digest["buttons"] = buttons
-        for key in ("prefilled_inputs", "notice"):
+        for key in ("list", "prefilled_inputs", "notice"):
             if key in popup:
                 digest[key] = popup[key]
         return digest
@@ -198,12 +215,18 @@ class DiscoveryMixin:
 
     def _file_popup_element(self, ctype: str, text: str, read,
                             texts: list, buttons: list,
-                            interactive_elements: list) -> None:
-        """File one popup element under buttons, inputs or texts.
+                            interactive_elements: list,
+                            list_rows: Dict[str, List[int]]) -> None:
+        """File one popup element under buttons, inputs or texts, or count it
+        as a classic-list cell.
 
         read(name, default) returns a further property, so the COM path only
         reads Id / Tooltip / Name / Changeable where they are used.
         """
+        if ctype in ('GuiLabel', 'GuiCheckBox', 'GuiTextField'):
+            element_id = self._normalize_element_id(read('Id', ''))
+            if self._tally_list_cell(element_id, list_rows):
+                return
         if ctype == 'GuiButton':
             buttons.append({
                 "id": self._normalize_element_id(read('Id', '')),
@@ -225,8 +248,8 @@ class DiscoveryMixin:
             texts.append(text)
 
     def _read_popup_tree(self, window: Dict[str, Any], result: Dict[str, Any],
-                         texts: list, buttons: list,
-                         interactive_elements: list) -> None:
+                         texts: list, buttons: list, interactive_elements: list,
+                         list_rows: Dict[str, List[int]]) -> None:
         """Title, status message, contents and toolbar buttons of a popup
         from its GetObjectTree node: the same fields _read_popup_com reads."""
         result["title"] = (window.get("properties") or {}).get("Text", "")
@@ -254,7 +277,7 @@ class DiscoveryMixin:
 
                 self._file_popup_element(
                     props.get("Type", ""), props.get("Text", "").strip(), read,
-                    texts, buttons, interactive_elements,
+                    texts, buttons, interactive_elements, list_rows,
                 )
                 collect(child, depth + 1)
 
@@ -272,8 +295,8 @@ class DiscoveryMixin:
                     })
 
     def _read_popup_com(self, popup_id: str, popup_wnd, result: Dict[str, Any],
-                        texts: list, buttons: list,
-                        interactive_elements: list) -> None:
+                        texts: list, buttons: list, interactive_elements: list,
+                        list_rows: Dict[str, List[int]]) -> None:
         """_read_popup_tree over COM, for SAP GUI before 7.70 PL3."""
         result["title"] = getattr(popup_wnd, 'Text', '')
 
@@ -288,7 +311,8 @@ class DiscoveryMixin:
         # Collect text elements and buttons from the user area
         try:
             usr = self._session.findById(f"{popup_id}/usr")
-            self._collect_popup_contents(usr, texts, buttons, interactive_elements)
+            self._collect_popup_contents(usr, texts, buttons, interactive_elements,
+                                         list_rows=list_rows)
         except Exception:
             pass
 
@@ -314,8 +338,11 @@ class DiscoveryMixin:
         buttons: list,
         interactive_elements: list,
         depth: int = 0,
+        list_rows: Dict[str, List[int]] | None = None,
     ) -> None:
         """Recursively collect text and buttons from a popup's user area."""
+        if list_rows is None:
+            list_rows = {}
         if depth > 3:
             return
         try:
@@ -328,7 +355,7 @@ class DiscoveryMixin:
 
                 self._file_popup_element(
                     getattr(child, 'Type', ''), getattr(child, 'Text', '').strip(), read,
-                    texts, buttons, interactive_elements,
+                    texts, buttons, interactive_elements, list_rows,
                 )
 
                 # Not hasattr(): see _enumerate_elements.
@@ -343,6 +370,7 @@ class DiscoveryMixin:
                         buttons,
                         interactive_elements,
                         depth + 1,
+                        list_rows,
                     )
         except Exception:
             pass
@@ -367,6 +395,10 @@ class DiscoveryMixin:
 
         if message_type == "E" or any(p in text_blob for p in self._POPUP_ERROR_PATTERNS):
             classification = "error"
+        elif popup.get("list"):
+            # A hit list offers "Apply", not "OK": the old rules called it
+            # information and auto-cancelled the value help.
+            classification = "list"
         elif has_inputs or any(p in text_blob for p in self._POPUP_INPUT_PATTERNS):
             classification = "input_required"
         elif (

@@ -926,6 +926,55 @@ class TestPopupAndListFromObjectTree:
         }]
         assert popup["prefilled_inputs"][0]["value"] == "DEVK900001"
 
+    def _hit_list(self):
+        """F4 hit list as seen live: "Airline Code 18 Entries", Apply/Cancel."""
+        cells = []
+        for row, (code, name) in ((1, ("ID", "Airline")), (3, ("AA", "American Airlines")),
+                                  (4, ("AB", "Air Berlin"))):
+            cells.append(_child(f"{self._WND1}/usr/lbl[1,{row}]", "GuiLabel", text=code))
+            cells.append(_child(f"{self._WND1}/usr/lbl[4,{row}]", "GuiLabel", text=name))
+        usr = _child(f"{self._WND1}/usr", "GuiUserArea", children=cells)
+        apply_ = _child(f"{self._WND1}/tbar[0]/btn[0]", "GuiButton")
+        apply_.Tooltip = "Apply   (Enter)"
+        cancel = _child(f"{self._WND1}/tbar[0]/btn[12]", "GuiButton")
+        cancel.Tooltip = "Cancel   (F12)"
+        tbar = _child(f"{self._WND1}/tbar[0]", "GuiToolbar", children=[apply_, cancel])
+        return _child(self._WND1, "GuiModalWindow", text="Airline Code 18 Entries",
+                      children=[usr, tbar])
+
+    def test_hit_list_popup_is_a_list(self, discovery_path):
+        """Its cells were 38 'texts', it was classified information, and
+        auto-handling cancelled the value help (no button matched OK)."""
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._hit_list(), discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert popup["classification"] == "list"
+        assert popup["recommended_action"] == "read"
+        assert "safe_auto_action" not in popup
+        assert "texts" not in popup
+        assert (popup["list"]["cells"], popup["list"]["rows"]) == (6, 3)
+        assert "sap_read_list(window_id='wnd[1]')" in popup["list"]["hint"]
+
+    def test_auto_only_reads_a_hit_list(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._hit_list(), discovery_path)
+
+        result = controller.handle_popup("auto")
+
+        assert result["action"] == "read"
+        assert result["list"]["rows"] == 3
+
+    def test_action_digest_carries_the_list(self):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._hit_list(), "tree")
+
+        digest = controller._popup_digest()
+
+        assert digest["classification"] == "list" and digest["list"]["cells"] == 6
+        assert "texts" not in digest
+
     def test_popup_tree_is_one_call(self):
         controller = _make_controller_with_session()
         _serve_window(controller, self._popup(), "tree")
