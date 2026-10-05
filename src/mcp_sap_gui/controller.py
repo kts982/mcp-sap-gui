@@ -840,8 +840,22 @@ class SAPGUIControllerBase:
 
         try:
             window = self._validate_window_id(window)
+            target = self._find_window(window)
+            if not self._vkey_allowed(target, vkey):
+                # Sending it would raise COM error 617 "The virtual key is
+                # not enabled": say so, and which keys the screen does take.
+                return {
+                    "vkey": vkey,
+                    "window": window,
+                    "error": f"{self._vkey_name(vkey)} is not active on this screen",
+                    "available_keys": [
+                        self._vkey_name(key) for key in self._SENDABLE_VKEYS
+                        if self._vkey_allowed(target, key)
+                    ],
+                    "screen": self.get_screen_info(),
+                }
             logger.debug("Sending VKey %s to %s", vkey, window)
-            self._find_window(window).sendVKey(vkey)
+            target.sendVKey(vkey)
             return {"vkey": vkey, "screen": self.get_screen_info()}
         except Exception as e:
             return self._error_result(
@@ -849,6 +863,28 @@ class SAPGUIControllerBase:
                 e,
                 "Could not send SAP key",
             )
+
+    # The keys sap_send_key offers: Enter, F1-F12, Shift+F1-F9, Ctrl+F/G/P.
+    _SENDABLE_VKEYS = (*range(0, 22), 32, 33, 34)
+
+    @staticmethod
+    def _vkey_allowed(window, vkey: int) -> bool:
+        """GuiFrameWindow.IsVKeyAllowed; True when it cannot be asked."""
+        try:
+            return bool(window.IsVKeyAllowed(vkey))
+        except Exception:
+            return True
+
+    @staticmethod
+    def _vkey_name(vkey: int) -> str:
+        """The sap_send_key name of a virtual key code."""
+        if vkey == 0:
+            return "Enter"
+        if 1 <= vkey <= 12:
+            return f"F{vkey}"
+        if 13 <= vkey <= 24:
+            return f"Shift+F{vkey - 12}"
+        return {32: "Ctrl+F", 33: "Ctrl+G", 34: "Ctrl+P"}.get(vkey, str(vkey))
 
     def press_enter(self) -> Dict[str, Any]:
         """Press Enter key."""

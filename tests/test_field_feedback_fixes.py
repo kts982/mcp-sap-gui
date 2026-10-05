@@ -598,6 +598,16 @@ class TestSessionTraits:
         assert (info.sap_gui_version, info.scripting_read_only) == ("7.70 PL3", True)
 
 
+@pytest.mark.parametrize("vkey, name", [
+    (0, "Enter"), (8, "F8"), (12, "F12"), (13, "Shift+F1"), (21, "Shift+F9"),
+    (32, "Ctrl+F"), (34, "Ctrl+P"),
+])
+def test_refused_key_names_are_sap_send_key_names(vkey, name):
+    """available_keys must be names the agent can pass straight back."""
+    assert srv_mod._KEY_MAP[name] == vkey
+    assert _make_controller_with_session()._vkey_name(vkey) == name
+
+
 class TestShortIdsInResponses:
     """The session prefix is stripped on input anyway, so returning it only
     costs tokens and suggests a session addressing that does not exist."""

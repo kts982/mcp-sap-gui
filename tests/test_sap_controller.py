@@ -1560,6 +1560,34 @@ class TestElementIdValidation:
         assert "Invalid SAP window ID" in result["error"]
         controller._session.findById.assert_not_called()
 
+    def test_send_vkey_refuses_an_inactive_key(self):
+        """Live on SAP Easy Access only Enter is active; sending F8 raised
+        COM error 617 "The virtual key is not enabled"."""
+        controller = self._make_controller_with_session()
+        window = MagicMock()
+        window.IsVKeyAllowed.side_effect = lambda key: key in (0, 3)
+        controller._session.findById.return_value = window
+        controller.get_screen_info = MagicMock(return_value={"title": "SAP Easy Access"})
+
+        result = controller.send_vkey(8)
+
+        window.sendVKey.assert_not_called()
+        assert result["error"] == "F8 is not active on this screen"
+        assert result["available_keys"] == ["Enter", "F3"]
+        assert result["screen"]["title"] == "SAP Easy Access"
+
+    def test_send_vkey_sends_when_the_check_is_unavailable(self):
+        controller = self._make_controller_with_session()
+        window = MagicMock()
+        window.IsVKeyAllowed.side_effect = Exception("not supported")
+        controller._session.findById.return_value = window
+        controller.get_screen_info = MagicMock(return_value={})
+
+        result = controller.send_vkey(8)
+
+        window.sendVKey.assert_called_once_with(8)
+        assert "error" not in result
+
     def test_read_field_accepts_full_session_path(self):
         """Full SAP GUI field paths should be normalized before lookup."""
         controller = self._make_controller_with_session()

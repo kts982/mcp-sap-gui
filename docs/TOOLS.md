@@ -65,7 +65,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | Tool | Description |
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active transaction policy (presets and policy file: see the README's Security Considerations). A bare `/n` leaves the current transaction |
-| `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, or `Save`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients |
+| `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, or `Save`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients. A key the screen does not accept is not sent: the response lists `available_keys` |
 | `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window. `message_has_long_text` / `message_as_popup` appear when set |
 
 ## Fields And UI Elements

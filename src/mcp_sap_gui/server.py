@@ -952,6 +952,9 @@ async def sap_send_key(
     value help), F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel/Escape).
     Also supports Shift+F1..F9 and Ctrl+F, Ctrl+G, Ctrl+P.
 
+    A key that is not active on the screen is not sent: the response has an
+    error and available_keys, the keys this screen accepts.
+
     F11 / Save requires user confirmation via elicitation before proceeding."""
     _check_write(ctx)
     vkey = _parse_key(key)
