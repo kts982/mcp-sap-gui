@@ -526,13 +526,20 @@ class TablesMixin:
                 grid.PressToolbarButton(button_id)
 
             if menu_opened:
-                return {
+                result = {
                     "grid_id": grid_id,
                     "button_id": button_id,
                     "status": "menu_opened",
-                    "hint": "Use select_alv_context_menu_item to pick an item",
-                    "screen": self.get_screen_info(),
+                    "hint": (
+                        "Use select_alv_context_menu_item with an item's "
+                        "function_code (select_by='id') to pick it"
+                    ),
                 }
+                items = self._open_context_menu_items(grid)
+                if items:
+                    result["menu_items"] = items
+                result["screen"] = self.get_screen_info()
+                return result
             else:
                 return {
                     "grid_id": grid_id,
@@ -546,6 +553,38 @@ class TablesMixin:
                 e,
                 "Could not press ALV toolbar button",
             )
+
+    def _open_context_menu_items(self, shell, depth: int = 0) -> list:
+        """Items of the context menu open on *shell*: text and function code.
+
+        GuiShell.CurrentContextMenu (documented in the 7.60 guide, live on
+        8.10) holds the open menu; each item is a GuiContextMenu whose Name
+        is the function code. Separators (no text) are left out, submenus
+        are nested one level. [] when no menu is open.
+        """
+        try:
+            menu = shell.CurrentContextMenu if depth == 0 else shell
+            children = menu.Children
+            count = children.Count
+        except Exception:
+            return []
+        items = []
+        for i in range(count):
+            try:
+                child = children(i)
+                text = str(child.Text)
+                if not text:
+                    continue
+                item: Dict[str, Any] = {"text": text,
+                                        "function_code": str(child.Name)}
+                if depth == 0:
+                    sub = self._open_context_menu_items(child, depth + 1)
+                    if sub:
+                        item["items"] = sub
+                items.append(item)
+            except Exception:
+                continue
+        return items
 
     def select_alv_context_menu_item(
         self,

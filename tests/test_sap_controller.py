@@ -932,6 +932,49 @@ class TestGridEnhancements:
         mock_grid.PressToolbarContextButton.assert_called_once_with("&MB_ACTIONS")
         mock_grid.SelectToolbarMenuItem.assert_called_once_with("@M00006")
 
+    @staticmethod
+    def _menu_item(text, code, children=()):
+        item = MagicMock(Text=text)
+        item.Name = code
+        kids = list(children)
+        item.Children.Count = len(kids)
+        item.Children.side_effect = lambda i: kids[i]
+        return item
+
+    def test_menu_button_lists_the_menu_items(self):
+        """CurrentContextMenu lists the open menu (live on SAP GUI 8.10:
+        items carry Text and the function code as Name; separators are empty)."""
+        controller = self._make_controller_with_session()
+        controller.get_screen_info = MagicMock(return_value={})
+        item = self._menu_item
+        menu = item("", "", [
+            item("Spreadsheet...", "&XXL"),
+            item("", ""),  # separator
+            item("Export", "&MB_EXPORT", [item("Local File...", "&PC")]),
+        ])
+        mock_grid = MagicMock(CurrentContextMenu=menu)
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&MB_EXPORT")
+
+        assert result["status"] == "menu_opened"
+        assert result["menu_items"] == [
+            {"text": "Spreadsheet...", "function_code": "&XXL"},
+            {"text": "Export", "function_code": "&MB_EXPORT",
+             "items": [{"text": "Local File...", "function_code": "&PC"}]},
+        ]
+
+    def test_menu_items_left_out_when_unreadable(self):
+        controller = self._make_controller_with_session()
+        controller.get_screen_info = MagicMock(return_value={})
+        mock_grid = MagicMock()
+        type(mock_grid).CurrentContextMenu = PropertyMock(side_effect=Exception("none"))
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&MB_EXPORT")
+
+        assert result["status"] == "menu_opened" and "menu_items" not in result
+
     def test_select_alv_context_menu_item_select_by_auto_space_heuristic(self):
         """select_by='auto' keeps space/text and function-code fallback behavior."""
         controller = self._make_controller_with_session()

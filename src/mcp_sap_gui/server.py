@@ -1211,7 +1211,9 @@ async def sap_get_alv_toolbar(grid_id: str, ctx: Context) -> dict:
 async def sap_press_alv_toolbar_button(grid_id: str, button_id: str, ctx: Context) -> dict:
     """Press a toolbar button on an ALV grid (e.g., sort, filter, export).
 
-    Use sap_get_alv_toolbar to find button IDs."""
+    Use sap_get_alv_toolbar to find button IDs. A menu button (Menu /
+    ButtonAndMenu) opens its menu and the response lists menu_items (text and
+    function_code); pick one with sap_select_alv_context_menu_item."""
     _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.press_alv_toolbar_button(grid_id, button_id))
@@ -1233,8 +1235,8 @@ async def sap_select_alv_context_menu_item(
 
     `menu_item_id` can be a technical function code (for example `@M00006`),
     visible menu text (for example `Confirm WT in Foreground`), or a position
-    descriptor. You can pass human-readable menu text directly.
-    SAP GUI does not expose a way to enumerate GuiGridView context menu items.
+    descriptor. You can pass human-readable menu text directly. The
+    menu_items of sap_press_alv_toolbar_button list what a menu offers.
 
     `select_by` controls how selection is performed:
     - `auto` (default): heuristic based on whether `menu_item_id` has spaces

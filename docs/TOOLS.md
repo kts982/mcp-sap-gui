@@ -111,8 +111,8 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | Tool | Description |
 |------|-------------|
 | `sap_get_alv_toolbar` | List ALV toolbar buttons |
-| `sap_press_alv_toolbar_button` | Press an ALV toolbar button |
-| `sap_select_alv_context_menu_item` | Select an ALV context menu item |
+| `sap_press_alv_toolbar_button` | Press an ALV toolbar button. A menu button opens its menu and the response lists `menu_items` (text and function code) |
+| `sap_select_alv_context_menu_item` | Select an ALV context menu item by function code, text or position |
 | `sap_get_cell_info` | Read detailed ALV cell metadata: editable, cell type (checkbox, dropdown, button), error/warning state, F4 help, hotspot |
 | `sap_press_column_header` | Click a column header, typically to sort |
 | `sap_select_all_rows` | Select all ALV rows |
