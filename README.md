@@ -100,6 +100,7 @@ Read the first 20 rows of the visible table
 - **Windows** (SAP GUI only runs on Windows)
 - **SAP GUI for Windows** installed
   - Live compatibility verified with SAP GUI for Windows 8.10 64-bit Patch 0
+  - 7.70 Patch Level 3 or later reads a whole screen, popup, list page or table control in one call (`GetObjectTree`); older releases fall back to reading element by element, which is much slower on large screens (seconds instead of a fraction of a second for a full list page)
 - **SAP Logon Pad** running, or a SAP GUI session hosted by **SAP Business Client** (experimental, see [below](#sap-business-client-experimental)) or another embedded SAP GUI (for COM connections)
 - **SAP GUI Scripting enabled** on your SAP systems
 - **Python 3.10+**
