@@ -110,44 +110,16 @@ class DiscoveryMixin:
         if popup_wnd is None:
             return {"popup_exists": False}
 
-        result: Dict[str, Any] = {
-            "popup_exists": True,
-            "window_id": popup_id,
-            "title": getattr(popup_wnd, 'Text', ''),
-        }
-
-        # Read the status bar message in the popup if any
-        try:
-            sbar = self._session.findById(f"{popup_id}/sbar")
-            result["message"] = sbar.Text
-            result["message_type"] = getattr(sbar, 'MessageType', '')
-        except Exception:
-            pass
-
-        # Collect text elements and buttons from the user area
+        result: Dict[str, Any] = {"popup_exists": True, "window_id": popup_id}
         texts = []
         buttons = []
         interactive_elements = []
-        try:
-            usr = self._session.findById(f"{popup_id}/usr")
-            self._collect_popup_contents(usr, texts, buttons, interactive_elements)
-        except Exception:
-            pass
-
-        # Also check toolbar buttons (tbar[0] for OK/Cancel)
-        for tbar_idx in range(2):
-            try:
-                tbar = self._session.findById(f"{popup_id}/tbar[{tbar_idx}]")
-                for i in range(tbar.Children.Count):
-                    btn = tbar.Children(i)
-                    if getattr(btn, 'Type', '') in ('GuiButton',):
-                        buttons.append({
-                            "id": self._normalize_element_id(btn.Id),
-                            "text": getattr(btn, 'Text', '').strip(),
-                            "tooltip": getattr(btn, 'Tooltip', '').strip(),
-                        })
-            except Exception:
-                pass
+        tree = self._object_tree(popup_id, self._POPUP_PROPS)
+        if tree is not None:
+            self._read_popup_tree(tree, result, texts, buttons, interactive_elements)
+        else:
+            self._read_popup_com(popup_id, popup_wnd, result,
+                                 texts, buttons, interactive_elements)
 
         if texts:
             result["texts"] = texts
@@ -221,6 +193,120 @@ class DiscoveryMixin:
                 digest[key] = popup[key]
         return digest
 
+    _POPUP_PROPS = ["Id", "Type", "Name", "Text", "Tooltip", "Changeable",
+                    "MessageType"]
+
+    def _file_popup_element(self, ctype: str, text: str, read,
+                            texts: list, buttons: list,
+                            interactive_elements: list) -> None:
+        """File one popup element under buttons, inputs or texts.
+
+        read(name, default) returns a further property, so the COM path only
+        reads Id / Tooltip / Name / Changeable where they are used.
+        """
+        if ctype == 'GuiButton':
+            buttons.append({
+                "id": self._normalize_element_id(read('Id', '')),
+                "text": text,
+                "tooltip": read('Tooltip', '').strip(),
+            })
+        elif ctype in self._POPUP_INTERACTIVE_TYPES:
+            interactive_elements.append({
+                "id": self._normalize_element_id(read('Id', '')),
+                "type": ctype,
+                "name": read('Name', ''),
+                "text": text,
+                "changeable": read('Changeable', None),
+            })
+        elif text and ctype in (
+            'GuiTextField', 'GuiCTextField', 'GuiLabel',
+            'GuiTitlebar', 'GuiStatusbar',
+        ):
+            texts.append(text)
+
+    def _read_popup_tree(self, window: Dict[str, Any], result: Dict[str, Any],
+                         texts: list, buttons: list,
+                         interactive_elements: list) -> None:
+        """Title, status message, contents and toolbar buttons of a popup
+        from its GetObjectTree node: the same fields _read_popup_com reads."""
+        result["title"] = (window.get("properties") or {}).get("Text", "")
+        areas = {}
+        for node in window.get("children") or []:
+            node_id = (node.get("properties") or {}).get("Id", "")
+            areas[node_id.rsplit("/", 1)[-1]] = node
+
+        if "sbar" in areas:
+            sbar = areas["sbar"].get("properties") or {}
+            result["message"] = sbar.get("Text", "")
+            result["message_type"] = sbar.get("MessageType", "")
+
+        def collect(node, depth):
+            if depth > 3:
+                return
+            for child in node.get("children") or []:
+                props = child.get("properties") or {}
+
+                def read(name, default, props=props):
+                    value = props.get(name, "")
+                    if name == "Changeable":
+                        return {"true": True, "false": False}.get(value, default)
+                    return value or default
+
+                self._file_popup_element(
+                    props.get("Type", ""), props.get("Text", "").strip(), read,
+                    texts, buttons, interactive_elements,
+                )
+                collect(child, depth + 1)
+
+        if "usr" in areas:
+            collect(areas["usr"], 0)
+        # Toolbar buttons (tbar[0] for OK/Cancel) after the user area's.
+        for tbar in ("tbar[0]", "tbar[1]"):
+            for btn in (areas.get(tbar) or {}).get("children") or []:
+                props = btn.get("properties") or {}
+                if props.get("Type") == "GuiButton":
+                    buttons.append({
+                        "id": self._normalize_element_id(props.get("Id", "")),
+                        "text": props.get("Text", "").strip(),
+                        "tooltip": props.get("Tooltip", "").strip(),
+                    })
+
+    def _read_popup_com(self, popup_id: str, popup_wnd, result: Dict[str, Any],
+                        texts: list, buttons: list,
+                        interactive_elements: list) -> None:
+        """_read_popup_tree over COM, for SAP GUI before 7.70 PL3."""
+        result["title"] = getattr(popup_wnd, 'Text', '')
+
+        # Read the status bar message in the popup if any
+        try:
+            sbar = self._session.findById(f"{popup_id}/sbar")
+            result["message"] = sbar.Text
+            result["message_type"] = getattr(sbar, 'MessageType', '')
+        except Exception:
+            pass
+
+        # Collect text elements and buttons from the user area
+        try:
+            usr = self._session.findById(f"{popup_id}/usr")
+            self._collect_popup_contents(usr, texts, buttons, interactive_elements)
+        except Exception:
+            pass
+
+        # Also check toolbar buttons (tbar[0] for OK/Cancel)
+        for tbar_idx in range(2):
+            try:
+                tbar = self._session.findById(f"{popup_id}/tbar[{tbar_idx}]")
+                for i in range(tbar.Children.Count):
+                    btn = tbar.Children(i)
+                    if getattr(btn, 'Type', '') in ('GuiButton',):
+                        buttons.append({
+                            "id": self._normalize_element_id(btn.Id),
+                            "text": getattr(btn, 'Text', '').strip(),
+                            "tooltip": getattr(btn, 'Tooltip', '').strip(),
+                        })
+            except Exception:
+                pass
+
     def _collect_popup_contents(
         self,
         container,
@@ -236,41 +322,28 @@ class DiscoveryMixin:
             children = container.Children  # once: see _enumerate_elements
             for i in range(children.Count):
                 child = children(i)
-                ctype = getattr(child, 'Type', '')
-                text = getattr(child, 'Text', '').strip()
 
-                if ctype == 'GuiButton':
-                    buttons.append({
-                        "id": self._normalize_element_id(child.Id),
-                        "text": text,
-                        "tooltip": getattr(child, 'Tooltip', '').strip(),
-                    })
-                elif ctype in self._POPUP_INTERACTIVE_TYPES:
-                    interactive_elements.append({
-                        "id": self._normalize_element_id(child.Id),
-                        "type": ctype,
-                        "name": getattr(child, 'Name', ''),
-                        "text": text,
-                        "changeable": getattr(child, 'Changeable', None),
-                    })
-                elif text and ctype in (
-                    'GuiTextField', 'GuiCTextField', 'GuiLabel',
-                    'GuiTitlebar', 'GuiStatusbar',
-                ):
-                    texts.append(text)
+                def read(name, default, child=child):
+                    return getattr(child, name, default)
 
-                if hasattr(child, 'Children'):
-                    try:
-                        if child.Children.Count > 0:
-                            self._collect_popup_contents(
-                                child,
-                                texts,
-                                buttons,
-                                interactive_elements,
-                                depth + 1,
-                            )
-                    except Exception:
-                        pass
+                self._file_popup_element(
+                    getattr(child, 'Type', ''), getattr(child, 'Text', '').strip(), read,
+                    texts, buttons, interactive_elements,
+                )
+
+                # Not hasattr(): see _enumerate_elements.
+                try:
+                    has_children = child.Children.Count > 0
+                except Exception:
+                    has_children = False
+                if has_children:
+                    self._collect_popup_contents(
+                        child,
+                        texts,
+                        buttons,
+                        interactive_elements,
+                        depth + 1,
+                    )
         except Exception:
             pass
 
@@ -626,22 +699,20 @@ class DiscoveryMixin:
                 usr = self._session.findById(usr_id)
 
             rows: Dict[int, list] = {}
-            children = usr.Children  # once: see _enumerate_elements
-            for i in range(children.Count):
-                child = children(i)
-                match = self._LIST_CELL_RE.search(child.Id)
+            for child_id, read in self._list_children(usr_id, usr):
+                match = self._LIST_CELL_RE.search(child_id)
                 if not match:
                     continue
                 kind, col, row = match.group(1), int(match.group(2)), int(match.group(3))
                 if kind == "chk":
-                    text = "[x]" if self._list_prop(child, "Selected", False) else "[ ]"
+                    text = "[x]" if read("Selected") else "[ ]"
                     color = None
                 else:
-                    text = str(self._list_prop(child, "Text", ""))
+                    text = read("Text")
                     color = self._LIST_COLORS.get(
-                        self._list_prop(child, "ColorIndex", 0)
+                        read("ColorIndex")
                     ) if kind == "lbl" else None
-                rows.setdefault(row, []).append((col, text, color, child.Id))
+                rows.setdefault(row, []).append((col, text, color, child_id))
 
             if not rows:
                 return {
@@ -692,6 +763,37 @@ class DiscoveryMixin:
 
         except Exception as e:
             return self._error_result({"window": window_id}, e, "Could not read list")
+
+    def _list_children(self, usr_id: str, usr):
+        """(id, read) for each child of a list's user area.
+
+        read(name) gives Text (str), ColorIndex (int) or Selected (bool): from
+        one GetObjectTree call, or over COM on SAP GUI before 7.70 PL3.
+        """
+        tree = self._object_tree(usr_id, ["Id", "Text", "ColorIndex", "Selected"])
+        if tree is not None:
+            for node in tree.get("children") or []:
+                props = node.get("properties") or {}
+
+                def read(name, props=props):
+                    value = props.get(name, "")
+                    if name == "Selected":
+                        return value == "true"
+                    if name == "ColorIndex":
+                        return int(value) if value.lstrip("-").isdigit() else 0
+                    return value
+                yield props.get("Id", ""), read
+            return
+
+        children = usr.Children  # once: see _enumerate_elements
+        for i in range(children.Count):
+            child = children(i)
+
+            def read(name, child=child):
+                default = {"Selected": False, "ColorIndex": 0}.get(name, "")
+                value = self._list_prop(child, name, default)
+                return str(value) if name == "Text" else value
+            yield child.Id, read
 
     @staticmethod
     def _list_prop(obj, name: str, default):

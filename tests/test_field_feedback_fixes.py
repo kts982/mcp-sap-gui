@@ -496,13 +496,19 @@ def _child(element_id, type_, *, text="", changeable=False, children=()):
     return child
 
 
-def _object_tree_json(element):
-    """What GetObjectTree returns for a _child() screen: every value a string."""
+def _tree_value(value):
+    """GetObjectTree's rendering: strings, "true"/"false", "" when unset."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int)):
+        return str(value)
+    return ""
+
+
+def _object_tree_json(element, props=("Id", "Type", "Name", "Text", "Changeable")):
+    """What GetObjectTree returns for a _child() screen."""
     def node(el):
-        result = {"properties": {
-            "Id": el.Id, "Type": el.Type, "Name": el.Name, "Text": el.Text,
-            "Changeable": "true" if el.Changeable else "false",
-        }}
+        result = {"properties": {name: _tree_value(getattr(el, name)) for name in props}}
         try:
             kids = [el.Children(i) for i in range(el.Children.Count)]
         except Exception:
@@ -790,6 +796,112 @@ class TestObjectTreeDiscovery:
         elements = controller.get_screen_elements("wnd[0]/usr")
 
         assert "visible" not in elements[0].__dict__
+
+
+def _serve_window(controller, window, path):
+    """Serve a _child() window to findById, and on the tree path also to
+    GetObjectTree for any root inside it."""
+    by_id = {}
+
+    def index(el):
+        by_id[el.Id.split("ses[0]/")[-1]] = el
+        for i in range(el.Children.Count):
+            index(el.Children(i))
+    index(window)
+
+    def find(element_id):
+        if element_id in by_id:
+            return by_id[element_id]
+        raise Exception(f"not found: {element_id}")
+    controller._session.findById.side_effect = find
+    if path == "tree":
+        controller._session.GetObjectTree.side_effect = (
+            lambda root, props: _object_tree_json(by_id[root], props)
+        )
+    else:
+        controller._session.GetObjectTree.side_effect = AttributeError("GetObjectTree")
+
+
+class TestPopupAndListFromObjectTree:
+    """The popup check (after every action that leaves a popup open) and
+    read_list read through GetObjectTree too, with the COM walk as fallback."""
+
+    _WND1 = "/app/con[0]/ses[0]/wnd[1]"
+
+    def _popup(self):
+        label = _child(f"{self._WND1}/usr/txtMSG", "GuiLabel", text=" Data will be lost ")
+        field = _child(f"{self._WND1}/usr/subSUB/ctxtTRKORR", "GuiCTextField",
+                       text="DEVK900001", changeable=True)
+        yes = _child(f"{self._WND1}/usr/btnSPOP-OPTION1", "GuiButton", text="Yes")
+        yes.Tooltip = "Save"
+        sub = _child(f"{self._WND1}/usr/subSUB", "GuiSimpleContainer", children=[field])
+        usr = _child(f"{self._WND1}/usr", "GuiUserArea", children=[label, sub, yes])
+        enter = _child(f"{self._WND1}/tbar[0]/btn[0]", "GuiButton")
+        enter.Tooltip = "Continue (Enter)"
+        tbar = _child(f"{self._WND1}/tbar[0]", "GuiToolbar", children=[enter])
+        sbar = _child(f"{self._WND1}/sbar", "GuiStatusbar", text="Check entry")
+        sbar.MessageType = "W"
+        return _child(self._WND1, "GuiModalWindow", text="Save changes?",
+                      children=[usr, tbar, sbar])
+
+    def test_popup_reads_the_same_on_both_paths(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._popup(), discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert popup["title"] == "Save changes?"
+        assert (popup["message"], popup["message_type"]) == ("Check entry", "W")
+        assert popup["texts"] == ["Data will be lost"]
+        assert popup["buttons"] == [
+            {"id": "wnd[1]/usr/btnSPOP-OPTION1", "text": "Yes", "tooltip": "Save"},
+            {"id": "wnd[1]/tbar[0]/btn[0]", "text": "", "tooltip": "Continue (Enter)"},
+        ]
+        assert popup["interactive_elements"] == [{
+            "id": "wnd[1]/usr/subSUB/ctxtTRKORR", "type": "GuiCTextField",
+            "name": "ctxtTRKORR", "text": "DEVK900001", "changeable": True,
+        }]
+        assert popup["prefilled_inputs"][0]["value"] == "DEVK900001"
+
+    def test_popup_tree_is_one_call(self):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._popup(), "tree")
+
+        controller.get_popup_window()
+
+        assert controller._session.GetObjectTree.call_count == 1
+
+    def test_list_reads_the_same_on_both_paths(self, discovery_path):
+        prefix = "/app/con[0]/ses[0]/wnd[0]/usr"
+        heading = _child(f"{prefix}/lbl[0,0]", "GuiLabel", text="Table:")
+        heading.ColorIndex = 1
+        box = _child(f"{prefix}/chk[1,2]", "GuiCheckBox")
+        box.Selected = True
+        key = _child(f"{prefix}/lbl[4,2]", "GuiLabel", text="001")
+        key.ColorIndex = 4
+        usr = _child(prefix, "GuiUserArea", children=[heading, box, key])
+        controller = _make_controller_with_session()
+        _serve_window(controller, usr, discovery_path)
+
+        page = controller.read_list(with_ids=True)
+
+        assert page["lines"] == ["Table:", "", " [x]001"]
+        assert page["colors"] == {"0": ["heading"], "2": ["key"]}
+        assert page["line_ids"] == {"0": "wnd[0]/usr/lbl[0,0]",
+                                    "2": "wnd[0]/usr/chk[1,2]"}
+
+    def test_list_tree_is_one_call(self):
+        prefix = "/app/con[0]/ses[0]/wnd[0]/usr"
+        cells = [_child(f"{prefix}/lbl[{c},0]", "GuiLabel", text="x") for c in range(3)]
+        controller = _make_controller_with_session()
+        _serve_window(controller, _child(prefix, "GuiUserArea", children=cells), "tree")
+
+        page = controller.read_list()
+
+        assert page["lines"] == ["xxx"]
+        controller._session.GetObjectTree.assert_called_once_with(
+            "wnd[0]/usr", ["Id", "Text", "ColorIndex", "Selected"],
+        )
 
 
 class TestTableControlColumnTemplates:
