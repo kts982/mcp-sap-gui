@@ -2,7 +2,7 @@
 
 import base64
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -3643,22 +3643,51 @@ class TestReadShellContent:
         controller._session = MagicMock(Busy=False)
         return controller
 
-    def test_html_viewer(self):
-        """Reads InnerHTML and URL from HTMLViewer shell."""
+    def _html_viewer(self, control_type):
+        mock_shell = MagicMock(Type="GuiShell", SubType="HTMLViewer",
+                               Text="SAP.HTMLControl.1")
+        mock_shell.GetBrowserControlType.return_value = control_type
+        return mock_shell
+
+    def test_html_viewer_with_ie_control_reads_the_page(self):
+        """The documented route: BrowserHandle exists for the IE control."""
         controller = self._make_controller_with_session()
-        mock_shell = MagicMock()
-        mock_shell.Type = "GuiShell"
-        mock_shell.SubType = "HTMLViewer"
-        mock_shell.InnerHTML = "<h1>Report</h1>"
-        mock_shell.CurrentUrl = "about:blank"
-        mock_shell.Text = "Report"
+        mock_shell = self._html_viewer(0)
+        mock_shell.BrowserHandle.Document.URL = "about:blank"
+        mock_shell.BrowserHandle.Document.body.innerText = "Report"
         controller._session.findById.return_value = mock_shell
 
         result = controller.read_shell_content("wnd[0]/usr/shell")
 
-        assert result["sub_type"] == "HTMLViewer"
-        assert result["inner_html"] == "<h1>Report</h1>"
-        assert result["url"] == "about:blank"
+        assert result["browser_control"] == "Internet Explorer"
+        assert (result["text"], result["url"]) == ("Report", "about:blank")
+        assert "note" not in result
+
+    def test_html_viewer_with_edge_control_says_why_nothing_is_read(self):
+        """Live on SAP GUI 8.10 (F1 Performance Assistant): Edge control,
+        BrowserHandle None, Text only the ProgID."""
+        controller = self._make_controller_with_session()
+        mock_shell = self._html_viewer(1)
+        mock_shell.BrowserHandle = None
+        controller._session.findById.return_value = mock_shell
+
+        result = controller.read_shell_content("wnd[0]/shellcont/shell")
+
+        assert result["browser_control"] == "Edge"
+        assert "WebView2" in result["note"] and "TECH" in result["note"]
+        assert "text" not in result  # not "SAP.HTMLControl.1"
+
+    def test_html_viewer_before_770_is_treated_as_ie(self):
+        controller = self._make_controller_with_session()
+        mock_shell = self._html_viewer(0)
+        mock_shell.GetBrowserControlType.side_effect = AttributeError("7.70+")
+        type(mock_shell).BrowserHandle = PropertyMock(side_effect=Exception("no handle"))
+        controller._session.findById.return_value = mock_shell
+
+        result = controller.read_shell_content("wnd[0]/usr/shell")
+
+        assert result["browser_control"] == "Internet Explorer"
+        assert result["note"].startswith("The page content of this HTML viewer could not")
 
     def test_generic_shell(self):
         """Falls back to Text property for unknown shell types."""
@@ -3667,9 +3696,6 @@ class TestReadShellContent:
         mock_shell.Type = "GuiShell"
         mock_shell.SubType = "Unknown"
         mock_shell.Text = "Some content"
-        # No InnerHTML / CurrentUrl
-        del mock_shell.InnerHTML
-        del mock_shell.CurrentUrl
         controller._session.findById.return_value = mock_shell
 
         result = controller.read_shell_content("wnd[0]/usr/shell")

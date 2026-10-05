@@ -1446,7 +1446,9 @@ async def sap_get_toolbar_buttons(ctx: Context, window_id: str = "wnd[0]") -> di
 async def sap_read_shell_content(shell_id: str, ctx: Context) -> dict:
     """Read content from a GuiShell subtype (e.g., HTMLViewer).
 
-    Extracts HTML, URL, or text depending on the shell type.
+    An HTML viewer's page text and URL are readable only with the Internet
+    Explorer browser control; with the Edge control (SAP GUI 7.70+ default,
+    e.g. the F1 Performance Assistant) the response says so in `note`.
     Use sap_get_screen_elements first to find shell element IDs."""
     c = _ctrl(ctx)
     return await _com(lambda: c.read_shell_content(shell_id))

@@ -134,7 +134,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 Every action tool also reports a popup that it opened: `screen.popup` carries the classification, texts, button labels and any `prefilled_inputs`, so the values are visible before the agent decides how to respond.
 | `sap_get_toolbar_buttons` | List standard SAP toolbar buttons |
-| `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers |
+| `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers (page text only with the Internet Explorer browser control; the Edge control, e.g. the F1 Performance Assistant, is reported as not readable) |
 | `sap_read_list` | Read a classic ABAP list (`WRITE` output, F4 hit lists) as lines of text, with list colours and paging. One page is ~500 label elements to discovery; this returns the lines |
 
 ## Trees

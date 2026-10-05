@@ -635,8 +635,9 @@ class DiscoveryMixin:
         Read content from a GuiShell subtype (HTMLViewer, etc.).
 
         Attempts to extract useful content based on the shell's SubType.
-        Supports GuiHTMLViewer (BrowserHandle -> InnerHTML), and falls
-        back to generic Text property.
+        An HTMLViewer is read through BrowserHandle when it hosts the
+        Internet Explorer control; other shells fall back to the Text
+        property.
 
         Args:
             shell_id: SAP GUI shell element ID
@@ -657,16 +658,10 @@ class DiscoveryMixin:
                 "sub_type": sub_type,
             }
 
-            # Try SubType-specific extraction
             if sub_type == "HTMLViewer":
-                try:
-                    result["inner_html"] = shell.InnerHTML
-                except Exception:
-                    pass
-                try:
-                    result["url"] = shell.CurrentUrl
-                except Exception:
-                    pass
+                # Its Text is only the ProgID ("SAP.HTMLControl.1").
+                self._read_html_viewer(shell, result)
+                return result
 
             # Generic fallback: Text property
             try:
@@ -683,6 +678,48 @@ class DiscoveryMixin:
                 e,
                 "Could not read shell content",
             )
+
+    _HTML_NOT_READABLE = {
+        "Edge": (
+            "The page content of this HTML viewer is not readable through SAP "
+            "GUI Scripting: it runs the Edge (WebView2) browser control, which "
+            "gives scripts no access to the page."
+        ),
+        "other": "The page content of this HTML viewer could not be read.",
+    }
+    _F1_TECH_HINT = (
+        " For F1 help in the Performance Assistant, its toolbar's Technical "
+        "Information button (TECH) opens a readable dialog with the table "
+        "and field names."
+    )
+
+    def _read_html_viewer(self, shell, result: Dict[str, Any]) -> None:
+        """Page text of a GuiHTMLViewer, or a note saying why there is none.
+
+        GetBrowserControlType (SAP GUI 7.70+; the guide misspells it
+        GetBrowerControlType): 0 = Internet Explorer, 1 = Edge. Only the IE
+        control has a BrowserHandle (documented); live on SAP GUI 8.10 with
+        Edge, BrowserHandle is None and the page is out of reach.
+        """
+        try:
+            control = int(shell.GetBrowserControlType())
+        except Exception:
+            control = 0  # before 7.70 the IE control was the only one
+        result["browser_control"] = {0: "Internet Explorer", 1: "Edge"}.get(
+            control, str(control)
+        )
+        if control == 0:
+            try:
+                document = shell.BrowserHandle.Document
+                result["url"] = str(document.URL)
+                result["text"] = str(document.body.innerText)[:5000]
+                return
+            except Exception as e:
+                logger.debug("HTML viewer document not readable: %s", e)
+        reason = self._HTML_NOT_READABLE.get(
+            result["browser_control"], self._HTML_NOT_READABLE["other"]
+        )
+        result["note"] = reason + self._F1_TECH_HINT
 
     # =========================================================================
     # Classic List Reading
