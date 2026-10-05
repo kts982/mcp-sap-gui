@@ -611,10 +611,21 @@ def _ctrl(ctx: Context):
     return _session_mgr.get_or_create(_session_key(ctx)).controller
 
 
-def _check_write():
-    """Raise if server is in read-only mode."""
+def _check_write(ctx: Context | None = None):
+    """Raise if writes are off: server read-only mode, or an SAP session whose
+    server only allows read-only scripting (every set would fail in COM)."""
     if config.read_only:
         raise ValueError("Write operations disabled in read-only mode")
+    if ctx is None or _session_mgr is None:
+        return
+    managed = _session_mgr.get_existing(_session_key(ctx))
+    if managed is not None and managed.controller.scripting_read_only:
+        raise ValueError(
+            "This SAP session only allows read-only scripting (server profile "
+            "parameter sapgui/user_scripting_set_readonly, or "
+            "sapgui/nwbc_scripting in SAP Business Client): nothing can be "
+            "entered, pressed or navigated through scripting. Reading works."
+        )
 
 
 def active_confirmation_points(ctx: Context) -> set[str]:
@@ -632,7 +643,8 @@ def active_confirmation_points(ctx: Context) -> set[str]:
     return effective_points(config.confirmation_floor, session_points)
 
 
-def precheck_before_confirmation(tool_name: str, args) -> None:
+def precheck_before_confirmation(tool_name: str, args,
+                                 ctx: Context | None = None) -> None:
     """Re-run the cheap in-body policy checks before eliciting.
 
     The confirmation middleware runs upstream of the tool body, so without
@@ -646,7 +658,7 @@ def precheck_before_confirmation(tool_name: str, args) -> None:
     """
     get = args.get if hasattr(args, "get") else (lambda _k, _d=None: None)
     try:
-        _check_write()
+        _check_write(ctx)
         if tool_name == "sap_execute_transaction":
             tcode = get("tcode")
             if isinstance(tcode, str):
@@ -893,7 +905,10 @@ async def sap_list_connections(ctx: Context) -> dict:
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_session_info(ctx: Context) -> dict:
-    """Get information about the current SAP session (system, client, user, transaction, screen)"""
+    """Get information about the current SAP session (system, client, user, transaction, screen).
+
+    Also the SAP GUI release (sap_gui_version) and scripting_read_only: when
+    true, the SAP server allows read-only scripting and write tools refuse."""
     c = _ctrl(ctx)
     return _to_dict(await _com(c.get_session_info))
 
@@ -913,7 +928,7 @@ async def sap_execute_transaction(tcode: str, ctx: Context) -> dict:
 
     Subject to transaction blocklist/allowlist. Use sap_get_session_info
     to see the current transaction before navigating away."""
-    _check_write()
+    _check_write(ctx)
     _enforce_transaction_policy(tcode)
     c = _ctrl(ctx)
     return await _com(lambda: c.execute_transaction(tcode))
@@ -938,7 +953,7 @@ async def sap_send_key(
     Also supports Shift+F1..F9 and Ctrl+F, Ctrl+G, Ctrl+P.
 
     F11 / Save requires user confirmation via elicitation before proceeding."""
-    _check_write()
+    _check_write(ctx)
     vkey = _parse_key(key)
     if key in _SAVE_KEYS:
         cancellation = await _confirm_save(ctx, key)
@@ -986,7 +1001,7 @@ async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
     Works on GuiTextField and GuiCTextField input fields. For filling in
     multiple fields of a form at once, use sap_set_batch_fields instead.
     After setting a field, you may need to press Enter to trigger validation."""
-    _check_write()
+    _check_write(ctx)
     _check_okcode_bypass(field_id, value)
     c = _ctrl(ctx)
     return await _com(lambda: c.set_field(field_id, value))
@@ -999,7 +1014,7 @@ async def sap_press_button(button_id: str, ctx: Context) -> dict:
     Returns screen info after the press so you can detect navigation or popups.
     Use sap_get_toolbar_buttons to discover toolbar button IDs.
     Use sap_get_screen_elements to find on-screen button IDs."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.press_button(button_id))
 
@@ -1011,7 +1026,7 @@ async def sap_select_menu(menu_id: str, ctx: Context) -> dict:
     Example: 'wnd[0]/mbar/menu[1]/menu[0]'.
     Use sap_get_screen_elements on 'wnd[0]/mbar' to discover menu structure.
     Returns screen info after selection so you can detect navigation."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_menu(menu_id))
 
@@ -1022,7 +1037,7 @@ async def sap_select_checkbox(checkbox_id: str, ctx: Context, selected: bool = T
 
     Set selected=false to uncheck. Use sap_get_screen_elements with
     type_filter='GuiCheckBox' to find checkbox IDs."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_checkbox(checkbox_id, selected))
 
@@ -1033,7 +1048,7 @@ async def sap_select_radio_button(radio_id: str, ctx: Context) -> dict:
 
     Use sap_get_screen_elements with type_filter='GuiRadioButton'
     to find radio button IDs on the current screen."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_radio_button(radio_id))
 
@@ -1044,7 +1059,7 @@ async def sap_select_combobox_entry(combobox_id: str, key_or_value: str, ctx: Co
 
     Accepts either the technical key or the visible display text.
     Use sap_get_combobox_entries first to see all valid options."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_combobox_entry(combobox_id, key_or_value))
 
@@ -1055,7 +1070,7 @@ async def sap_select_tab(tab_id: str, ctx: Context) -> dict:
 
     Returns screen info after selection (tab content changes).
     Tab IDs typically look like 'wnd[0]/usr/tabsTABSTRIP/tabpTAB01'."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_tab(tab_id))
 
@@ -1095,7 +1110,7 @@ async def sap_set_batch_fields(
             Changeable == False instead of counting them as failures.
         verbose: List every field in `results`, not only the failures.
     """
-    _check_write()
+    _check_write(ctx)
     for fid, val in fields.items():
         _check_okcode_bypass(fid, str(val))
     c = _ctrl(ctx)
@@ -1122,7 +1137,7 @@ async def sap_read_textedit(textedit_id: str, ctx: Context, max_lines: int = 0) 
 async def sap_set_textedit(textedit_id: str, text: str, ctx: Context) -> dict:
     """Write text into a multiline text editor (GuiTextedit) —
     long texts, notes, comments, document text."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.set_textedit(textedit_id, text))
 
@@ -1134,7 +1149,7 @@ async def sap_set_focus(element_id: str, ctx: Context) -> dict:
     Some SAP actions require focus on a specific element before they work
     (e.g., F4 search help on a field). Use this to set focus before
     sending keys with sap_send_key."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.set_focus(element_id))
 
@@ -1190,7 +1205,7 @@ async def sap_press_alv_toolbar_button(grid_id: str, button_id: str, ctx: Contex
     """Press a toolbar button on an ALV grid (e.g., sort, filter, export).
 
     Use sap_get_alv_toolbar to find button IDs."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.press_alv_toolbar_button(grid_id, button_id))
 
@@ -1220,7 +1235,7 @@ async def sap_select_alv_context_menu_item(
     - `text`: visible menu text
     - `position`: position descriptor
     """
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(
         lambda: c.select_alv_context_menu_item(
@@ -1236,7 +1251,7 @@ async def sap_select_table_row(table_id: str, row: int, ctx: Context) -> dict:
     Works on both ALV grids and table controls. Row index is zero-based.
     For ALV: uses absolute row index. For TableControl: scrolls to make
     the row visible first if needed."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_table_row(table_id, row))
 
@@ -1247,7 +1262,7 @@ async def sap_double_click_cell(table_id: str, row: int, column: str, ctx: Conte
 
     Row is zero-based. Column is the column name (from sap_read_table
     or sap_get_column_info). Works on both ALV and TableControl."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(
         lambda: c.double_click_table_cell(table_id, row, column)
@@ -1260,7 +1275,7 @@ async def sap_modify_cell(grid_id: str, row: int, column: str, value: str, ctx: 
 
     Only works on editable cells. Use sap_get_cell_info to check if
     a cell is changeable before attempting to modify it."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.modify_cell(grid_id, row, column, value))
 
@@ -1270,7 +1285,7 @@ async def sap_set_current_cell(grid_id: str, row: int, column: str, ctx: Context
     """Set the current (focused) cell in an ALV grid or table control.
 
     Useful before pressing toolbar buttons that act on the current cell."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.set_current_cell(grid_id, row, column))
 
@@ -1302,7 +1317,7 @@ async def sap_scroll_table_control(table_id: str, position: int, ctx: Context) -
     Does NOT work on ALV grids (they handle scrolling internally).
     For reading data at a specific offset, prefer sap_read_table with
     start_row parameter — it handles scrolling automatically."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.scroll_table_control(table_id, position))
 
@@ -1328,7 +1343,7 @@ async def sap_select_all_table_control_columns(
     select: bool = True,
 ) -> dict:
     """Select or deselect all columns in a GuiTableControl. Does NOT work on ALV grids."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_all_table_control_columns(table_id, select))
 
@@ -1348,7 +1363,7 @@ async def sap_get_cell_info(grid_id: str, row: int, column: str, ctx: Context) -
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_press_column_header(grid_id: str, column: str, ctx: Context) -> dict:
     """Click a column header in an ALV grid (triggers sort). Does NOT work on GuiTableControl."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.press_column_header(grid_id, column))
 
@@ -1356,7 +1371,7 @@ async def sap_press_column_header(grid_id: str, column: str, ctx: Context) -> di
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_select_all_rows(grid_id: str, ctx: Context) -> dict:
     """Select all rows in an ALV grid. Does NOT work on GuiTableControl."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_all_rows(grid_id))
 
@@ -1366,7 +1381,7 @@ async def sap_select_multiple_rows(table_id: str, rows: list[int], ctx: Context)
     """Select multiple rows at once in an ALV grid or table control.
 
     Pass a list of row indices (e.g., [0, 2, 5])."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_multiple_rows(table_id, rows))
 
@@ -1404,7 +1419,7 @@ async def sap_handle_popup(
 
     Returns the popup contents plus classification, requested action,
     and post-action screen/popup state when something was pressed."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.handle_popup(action, button_text))
 
@@ -1488,7 +1503,7 @@ async def sap_expand_tree_node(tree_id: str, node_key: str, ctx: Context) -> dic
 
     After expanding, use sap_get_tree_node_children or sap_read_tree
     to see the newly visible child nodes."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.expand_tree_node(tree_id, node_key))
 
@@ -1496,7 +1511,7 @@ async def sap_expand_tree_node(tree_id: str, node_key: str, ctx: Context) -> dic
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_collapse_tree_node(tree_id: str, node_key: str, ctx: Context) -> dict:
     """Collapse a folder node in a tree control (e.g. SPRO/customizing tree)."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.collapse_tree_node(tree_id, node_key))
 
@@ -1507,7 +1522,7 @@ async def sap_select_tree_node(tree_id: str, node_key: str, ctx: Context) -> dic
 
     Highlights the node without opening it. For SPRO-style trees,
     use sap_click_tree_link on the execute icon column instead."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_tree_node(tree_id, node_key))
 
@@ -1519,7 +1534,7 @@ async def sap_double_click_tree_node(tree_id: str, node_key: str, ctx: Context) 
     In SPRO/customizing trees, this may open documentation (hypertext)
     rather than executing the activity. Use sap_click_tree_link on the
     execute column (typically column '2') for SPRO activities."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.double_click_tree_node(tree_id, node_key))
 
@@ -1532,7 +1547,7 @@ async def sap_double_click_tree_item(
 
     item_name is the column name (e.g., 'Column1', 'Column2').
     Use sap_read_tree to discover column names for the tree."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(
         lambda: c.double_click_tree_item(tree_id, node_key, item_name)
@@ -1546,7 +1561,7 @@ async def sap_click_tree_link(tree_id: str, node_key: str, item_name: str, ctx: 
     For SPRO/customizing trees, click on the execute icon column
     (typically item_name='2') to run an activity. Use sap_read_tree
     to see which columns have link-type items."""
-    _check_write()
+    _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(
         lambda: c.click_tree_link(tree_id, node_key, item_name)
@@ -1591,7 +1606,7 @@ async def sap_get_tree_node_children(tree_id: str, ctx: Context, node_key: str =
     Omit node_key or pass empty string for root-level nodes.
     Set expand=true to expand the node first (requires write permission)."""
     if expand:
-        _check_write()
+        _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.get_tree_node_children(
         tree_id, node_key, expand

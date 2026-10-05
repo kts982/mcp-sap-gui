@@ -52,6 +52,11 @@ class SessionInfo:
     program: str
     screen_number: int
     session_number: int
+    # SAP GUI for Windows release of the bound engine, e.g. "8.10 PL0".
+    sap_gui_version: str = ""
+    # The server allows read-only scripting (sapgui/user_scripting_set_readonly,
+    # or sapgui/nwbc_scripting in SAP Business Client): nothing can be set.
+    scripting_read_only: bool = False
 
 
 @dataclass

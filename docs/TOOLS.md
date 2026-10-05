@@ -55,7 +55,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_connect` | Connect to an SAP system by SAP Logon entry name. Credentials resolved from `.env` file — passwords never appear in MCP |
 | `sap_connect_existing` | Attach to an already open SAP session (SAP Logon or SAP Business Client) |
 | `sap_list_connections` | List all currently open SAP connections and sessions, incl. SAP Business Client; reports `host` and `scripting_disabled` |
-| `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen |
+| `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen, plus the SAP GUI release (`sap_gui_version`, e.g. `8.10 PL0`) and whether the server allows only read-only scripting (`scripting_read_only`) |
 | `sap_disconnect` | Disconnect from the current SAP session (detaches attached sessions, closes owned sessions) |
 | `sap_set_policy_profile` | Switch the active policy profile for this session (exploration, operator, full); capped by the server `--profile` floor |
 | `sap_set_confirmation_points` | Choose which write categories need blocking user approval for this session (see [Confirmation Points](#confirmation-points)) |

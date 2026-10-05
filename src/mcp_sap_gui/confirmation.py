@@ -330,7 +330,7 @@ class ConfirmationMiddleware(Middleware):
         # Ordering fix: this middleware runs upstream of the tool body, so a
         # call that read-only mode or the transaction policy would reject must
         # be rejected here — never prompt for a call that cannot run.
-        self._precheck(tool_name, args)
+        self._precheck(tool_name, args, ctx)
 
         try:
             result = await ctx.elicit(

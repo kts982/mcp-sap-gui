@@ -955,3 +955,70 @@ class TestConfirmationCLIFloor:
         assert "Confirmation point 'transactions' is active" in elicitor.messages[0]
         controller.execute_transaction.assert_called_once()
 
+
+
+# ===========================================================================
+# Read-only scripting on the SAP server
+# ===========================================================================
+
+
+class TestReadOnlyScripting:
+    """A server with sapgui/user_scripting_set_readonly rejects every set in
+    COM; the write gate says so up front instead."""
+
+    @staticmethod
+    def _bound(srv, controller, read_only):
+        controller.scripting_read_only = read_only
+        # The client's lifespan builds its own SessionManager: patch the class.
+        return patch.object(SessionManager, "get_existing",
+                            return_value=MagicMock(controller=controller))
+
+    async def test_write_is_refused_with_the_reason(self, srv):
+        controller, patcher = _patched_controller(set_field={"status": "ok"})
+        with patcher, self._bound(srv, controller, True):
+            async with Client(srv.mcp) as client:
+                result = await client.call_tool(
+                    "sap_set_field", {"field_id": "wnd[0]/usr/txtX", "value": "1"},
+                    raise_on_error=False,
+                )
+
+        assert result.is_error
+        assert "read-only scripting" in _text(result)
+        controller.set_field.assert_not_called()
+
+    async def test_reading_still_works(self, srv):
+        controller, patcher = _patched_controller(read_field={"value": "A"})
+        with patcher, self._bound(srv, controller, True):
+            async with Client(srv.mcp) as client:
+                result = await client.call_tool(
+                    "sap_read_field", {"field_id": "wnd[0]/usr/txtX"},
+                )
+
+        assert not result.is_error
+        controller.read_field.assert_called_once()
+
+    async def test_gated_write_is_refused_before_prompting(self, srv):
+        controller, patcher = _patched_controller(set_field={"status": "ok"})
+        elicitor = _Elicitor("accept")
+        with patcher, self._bound(srv, controller, True):
+            async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
+                await client.call_tool(
+                    "sap_set_confirmation_points", {"points": ["field_writes"]}
+                )
+                result = await client.call_tool(
+                    "sap_set_field", {"field_id": "wnd[0]/usr/txtX", "value": "1"},
+                    raise_on_error=False,
+                )
+
+        assert result.is_error and "read-only scripting" in _text(result)
+        assert elicitor.messages == []
+
+    async def test_writable_session_is_unaffected(self, srv):
+        controller, patcher = _patched_controller(set_field={"status": "ok"})
+        with patcher, self._bound(srv, controller, False):
+            async with Client(srv.mcp) as client:
+                await client.call_tool(
+                    "sap_set_field", {"field_id": "wnd[0]/usr/txtX", "value": "1"},
+                )
+
+        controller.set_field.assert_called_once()

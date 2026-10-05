@@ -157,6 +157,7 @@ Many organizations disable SAP GUI Scripting globally as a hardening default. En
 Useful facts when proposing this to a Basis/security team:
 
 - Per-user and read-only modes are **combinable** since SAP GUI 7.40 PL17 / 7.50 PL4: full API for `S_SCR` holders, read-only for everyone else (SAP Note 2565390).
+- On a read-only session this server reports `scripting_read_only: true` in the session info and refuses every write tool up front with the reason, instead of letting each action fail inside SAP GUI. All read tools keep working.
 - A dynamic `RZ11` change to `sapgui/user_scripting` is **not persistent** — it reverts at the next application server restart, which suits a time-boxed evaluation on a development system.
 - Server-side, scripted actions run under the SAP user's normal authorizations and appear in logs as ordinary user activity. The user's authorization profile is the effective security boundary — pair a dedicated minimal-authorization account with this server's transaction policy (`--policy-preset`, `--policy-file`), `--profile`, and `--audit-log` options for defense in depth.
 - Authoritative reference: [SAP GUI Scripting Security Guide](https://help.sap.com/doc/97d2d0bc2ed248a4a85a0bec608704f8/800.13/en-US/sap_gui_scripting_sec_guide.pdf) (help.sap.com).

@@ -11,7 +11,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .sap_controller import SAPGUIController
 
@@ -73,6 +73,10 @@ class SessionManager:
         managed = self._sessions[session_key]
         managed.touch()
         return managed
+
+    def get_existing(self, session_key: int) -> Optional[ManagedSession]:
+        """The binding for *session_key*, or None: never creates one."""
+        return self._sessions.get(session_key)
 
     def get_confirmation_points(self, session_key: int) -> set:
         """Return the confirmation points this session added.

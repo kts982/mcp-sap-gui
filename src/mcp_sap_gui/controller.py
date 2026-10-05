@@ -75,6 +75,10 @@ class SAPGUIControllerBase:
         self._connection = None
         self._session = None
         self._owns_session = False
+        # Read once per bind (_read_session_traits): the server's write gate
+        # checks scripting_read_only on the event loop, where COM is off limits.
+        self.sap_gui_version = ""
+        self.scripting_read_only = False
         self._check_dependencies()
 
     def _check_dependencies(self):
@@ -479,6 +483,7 @@ class SAPGUIControllerBase:
 
             logger.info("Connected successfully to %s as %s",
                          system_description, user or "(existing credentials)")
+            self._read_session_traits()
             return self.get_session_info()
 
         except SAPGUIError:
@@ -551,6 +556,7 @@ class SAPGUIControllerBase:
                 "Connected to existing session %s/%s via %s",
                 connection_index, session_index, rot_name,
             )
+            self._read_session_traits()
             return self.get_session_info()
 
         except SAPGUIError:
@@ -580,7 +586,33 @@ class SAPGUIControllerBase:
         self._connection = None
         self._application = None
         self._owns_session = False
+        self.sap_gui_version = ""
+        self.scripting_read_only = False
         logger.info("Disconnected")
+
+    def _read_session_traits(self) -> None:
+        """Cache the SAP GUI release and the server's scripting mode.
+
+        Both are fixed for a bound session (a /o rebind stays on the same
+        server and engine). MajorVersion is a number: 8100 for 8.10, 7700
+        for 7.70.
+        """
+        try:
+            major = int(self._application.MajorVersion)
+            patch = int(self._application.Patchlevel)
+            release = (f"{major // 1000}.{major % 1000 // 10:02d}"
+                       if major >= 1000 else str(major))
+            self.sap_gui_version = f"{release} PL{patch}"
+        except Exception as e:
+            logger.debug("SAP GUI version not readable: %s", e)
+            self.sap_gui_version = ""
+        try:
+            self.scripting_read_only = bool(
+                self._session.Info.ScriptingModeReadOnly
+            )
+        except Exception as e:
+            logger.debug("Scripting mode not readable: %s", e)
+            self.scripting_read_only = False
 
     def _find_session_by_id(self, session_id: str):
         """Locate a session by ID and return its connection plus session object."""
@@ -634,6 +666,8 @@ class SAPGUIControllerBase:
             program=info.Program,
             screen_number=info.ScreenNumber,
             session_number=info.SessionNumber,
+            sap_gui_version=self.sap_gui_version,
+            scripting_read_only=self.scripting_read_only,
         )
 
     def _connection_label(self, conn, host: str) -> str:

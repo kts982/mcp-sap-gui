@@ -535,6 +535,69 @@ def _serve(controller, screen, path):
         controller._session.findById.return_value = screen
 
 
+class TestSessionTraits:
+    """SAP GUI release and the server's scripting mode, read once per bind."""
+
+    def _bound(self, major=8100, patch=0, read_only=False):
+        controller = _make_controller_with_session()
+        controller._application = MagicMock(MajorVersion=major, Patchlevel=patch)
+        controller._session.Info.ScriptingModeReadOnly = read_only
+        controller._read_session_traits()
+        return controller
+
+    @pytest.mark.parametrize("major, patch, expected", [
+        (8100, 0, "8.10 PL0"),   # live value on SAP GUI 8.10
+        (7700, 3, "7.70 PL3"),
+        (7600, 12, "7.60 PL12"),
+        (8000, 7, "8.00 PL7"),
+    ])
+    def test_version_string(self, major, patch, expected):
+        assert self._bound(major, patch).sap_gui_version == expected
+
+    def test_session_info_reports_both(self):
+        info = self._bound(read_only=1).get_session_info()  # COM gives a Byte
+
+        assert info.sap_gui_version == "8.10 PL0"
+        assert info.scripting_read_only is True
+
+    def test_unreadable_traits_fall_back(self):
+        controller = _make_controller_with_session()
+        controller._application = MagicMock()
+        type(controller._application).MajorVersion = PropertyMock(
+            side_effect=Exception("Member not found"))
+        type(controller._session.Info).ScriptingModeReadOnly = PropertyMock(
+            side_effect=Exception("Member not found"))
+
+        controller._read_session_traits()
+
+        assert controller.sap_gui_version == ""
+        assert controller.scripting_read_only is False
+
+    def test_disconnect_forgets_them(self):
+        controller = self._bound(read_only=True)
+
+        controller.disconnect()
+
+        assert (controller.sap_gui_version, controller.scripting_read_only) == ("", False)
+
+    def test_attaching_reads_them(self):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        session = MagicMock(Busy=False)
+        session.Info.ScriptingModeReadOnly = True
+        connection = MagicMock()
+        connection.Children.Count = 1
+        connection.Children.side_effect = lambda i: session
+        engine = MagicMock(MajorVersion=7700, Patchlevel=3)
+
+        with patch.object(controller, "_discover_connections",
+                          return_value=[("saplogon", "SAPGUI", engine, connection)]), \
+             patch.object(controller, "_is_scripting_disabled", return_value=False):
+            info = controller.connect_to_existing_session(0, 0)
+
+        assert (info.sap_gui_version, info.scripting_read_only) == ("7.70 PL3", True)
+
+
 class TestShortIdsInResponses:
     """The session prefix is stripped on input anyway, so returning it only
     costs tokens and suggests a session addressing that does not exist."""
