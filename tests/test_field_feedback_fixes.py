@@ -975,6 +975,38 @@ class TestPopupAndListFromObjectTree:
         assert digest["classification"] == "list" and digest["list"]["cells"] == 6
         assert "texts" not in digest
 
+    def _calendar(self):
+        """F4 on a date field, as seen live: SAPLSCAC 100, Continue / Cancel."""
+        cal = _child(f"{self._WND1}/usr/cntlCONTAINER/shellcont/shell", "GuiShell",
+                     text="SAP.CalendarControl.1", changeable=True)
+        cal.SubType = "Calendar"
+        cal.focusDate = "20261005"
+        shellcont = _child(f"{self._WND1}/usr/cntlCONTAINER/shellcont",
+                           "GuiContainerShell", children=[cal])
+        control = _child(f"{self._WND1}/usr/cntlCONTAINER", "GuiCustomControl",
+                         children=[shellcont])
+        usr = _child(f"{self._WND1}/usr", "GuiUserArea", children=[control])
+        go = _child(f"{self._WND1}/tbar[0]/btn[0]", "GuiButton")
+        go.Tooltip = "Continue   (Enter)"
+        cancel = _child(f"{self._WND1}/tbar[0]/btn[12]", "GuiButton")
+        cancel.Tooltip = "Cancel   (F12)"
+        tbar = _child(f"{self._WND1}/tbar[0]", "GuiToolbar", children=[go, cancel])
+        return _child(self._WND1, "GuiModalWindow", text="Calendar", children=[usr, tbar])
+
+    def test_calendar_popup_is_a_date_picker(self, discovery_path):
+        """It read as a confirmation; Continue writes the focused date."""
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._calendar(), discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert popup["classification"] == "date_picker"
+        assert "safe_auto_action" not in popup
+        assert popup["calendar"]["id"] == "wnd[1]/usr/cntlCONTAINER/shellcont/shell"
+        assert popup["calendar"]["focus_date"] == "20261005"
+        assert "sap_set_field" in popup["calendar"]["hint"]
+        assert controller.handle_popup("auto")["action"] == "read"
+
     def test_popup_tree_is_one_call(self):
         controller = _make_controller_with_session()
         _serve_window(controller, self._popup(), "tree")

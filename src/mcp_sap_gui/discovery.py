@@ -7,9 +7,18 @@ screenshot capabilities for the SAP GUI controller.
 
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from .models import SAPGUIError, ScreenElement
+
+
+@dataclass
+class _PopupFindings:
+    """Parts of a popup that are summarised rather than listed one by one."""
+
+    list_rows: Dict[str, List[int]] = field(default_factory=dict)
+    calendars: List[str] = field(default_factory=list)
 
 logger = logging.getLogger(__name__)
 
@@ -114,18 +123,18 @@ class DiscoveryMixin:
         texts = []
         buttons = []
         interactive_elements = []
-        list_rows: Dict[str, List[int]] = {}
+        found = _PopupFindings()
         tree = self._object_tree(popup_id, self._POPUP_PROPS)
         if tree is not None:
             self._read_popup_tree(tree, result, texts, buttons,
-                                  interactive_elements, list_rows)
+                                  interactive_elements, found)
         else:
             self._read_popup_com(popup_id, popup_wnd, result, texts, buttons,
-                                 interactive_elements, list_rows)
+                                 interactive_elements, found)
 
         # An F4 hit list is a classic list: one cell per word, hundreds for a
         # long one. Summarise it; sap_read_list shows it line by line.
-        rows = [row for cells in list_rows.values() for row in cells]
+        rows = [row for cells in found.list_rows.values() for row in cells]
         if rows:
             result["list"] = {
                 "cells": len(rows),
@@ -137,6 +146,8 @@ class DiscoveryMixin:
                     f"then Enter."
                 ),
             }
+        if found.calendars:
+            result["calendar"] = self._calendar_summary(found.calendars[0])
 
         if texts:
             result["texts"] = texts
@@ -205,28 +216,47 @@ class DiscoveryMixin:
         buttons = [b for b in buttons if b]
         if buttons:
             digest["buttons"] = buttons
-        for key in ("list", "prefilled_inputs", "notice"):
+        for key in ("list", "calendar", "prefilled_inputs", "notice"):
             if key in popup:
                 digest[key] = popup[key]
         return digest
 
-    _POPUP_PROPS = ["Id", "Type", "Name", "Text", "Tooltip", "Changeable",
-                    "MessageType"]
+    _POPUP_PROPS = ["Id", "Type", "SubType", "Name", "Text", "Tooltip",
+                    "Changeable", "MessageType"]
+
+    def _calendar_summary(self, calendar_id: str) -> Dict[str, Any]:
+        """What an agent needs about the F4 date picker (a Calendar shell)."""
+        summary: Dict[str, Any] = {"id": calendar_id}
+        try:
+            summary["focus_date"] = str(self._session.findById(calendar_id).focusDate)
+        except Exception:
+            pass
+        summary["hint"] = (
+            "Date picker (F4 on a date field). To enter a date, cancel it and "
+            "type the date into the field with sap_set_field, in the format "
+            "the field shows (e.g. 10.10.2026). Continue copies the focused "
+            "date (focus_date, YYYYMMDD) into the field."
+        )
+        return summary
 
     def _file_popup_element(self, ctype: str, text: str, read,
                             texts: list, buttons: list,
                             interactive_elements: list,
-                            list_rows: Dict[str, List[int]]) -> None:
-        """File one popup element under buttons, inputs or texts, or count it
-        as a classic-list cell.
+                            found: _PopupFindings) -> None:
+        """File one popup element under buttons, inputs or texts, or note it
+        in *found* (classic-list cells, calendars).
 
         read(name, default) returns a further property, so the COM path only
-        reads Id / Tooltip / Name / Changeable where they are used.
+        reads Id / SubType / Tooltip / Name / Changeable where they are used.
         """
         if ctype in ('GuiLabel', 'GuiCheckBox', 'GuiTextField'):
             element_id = self._normalize_element_id(read('Id', ''))
-            if self._tally_list_cell(element_id, list_rows):
+            if self._tally_list_cell(element_id, found.list_rows):
                 return
+        if ctype == 'GuiShell':
+            if read('SubType', '') == 'Calendar':
+                found.calendars.append(self._normalize_element_id(read('Id', '')))
+            return
         if ctype == 'GuiButton':
             buttons.append({
                 "id": self._normalize_element_id(read('Id', '')),
@@ -249,7 +279,7 @@ class DiscoveryMixin:
 
     def _read_popup_tree(self, window: Dict[str, Any], result: Dict[str, Any],
                          texts: list, buttons: list, interactive_elements: list,
-                         list_rows: Dict[str, List[int]]) -> None:
+                         found: _PopupFindings) -> None:
         """Title, status message, contents and toolbar buttons of a popup
         from its GetObjectTree node: the same fields _read_popup_com reads."""
         result["title"] = (window.get("properties") or {}).get("Text", "")
@@ -277,7 +307,7 @@ class DiscoveryMixin:
 
                 self._file_popup_element(
                     props.get("Type", ""), props.get("Text", "").strip(), read,
-                    texts, buttons, interactive_elements, list_rows,
+                    texts, buttons, interactive_elements, found,
                 )
                 collect(child, depth + 1)
 
@@ -296,7 +326,7 @@ class DiscoveryMixin:
 
     def _read_popup_com(self, popup_id: str, popup_wnd, result: Dict[str, Any],
                         texts: list, buttons: list, interactive_elements: list,
-                        list_rows: Dict[str, List[int]]) -> None:
+                        found: _PopupFindings) -> None:
         """_read_popup_tree over COM, for SAP GUI before 7.70 PL3."""
         result["title"] = getattr(popup_wnd, 'Text', '')
 
@@ -312,7 +342,7 @@ class DiscoveryMixin:
         try:
             usr = self._session.findById(f"{popup_id}/usr")
             self._collect_popup_contents(usr, texts, buttons, interactive_elements,
-                                         list_rows=list_rows)
+                                         found=found)
         except Exception:
             pass
 
@@ -338,11 +368,11 @@ class DiscoveryMixin:
         buttons: list,
         interactive_elements: list,
         depth: int = 0,
-        list_rows: Dict[str, List[int]] | None = None,
+        found: _PopupFindings | None = None,
     ) -> None:
         """Recursively collect text and buttons from a popup's user area."""
-        if list_rows is None:
-            list_rows = {}
+        if found is None:
+            found = _PopupFindings()
         if depth > 3:
             return
         try:
@@ -355,7 +385,7 @@ class DiscoveryMixin:
 
                 self._file_popup_element(
                     getattr(child, 'Type', ''), getattr(child, 'Text', '').strip(), read,
-                    texts, buttons, interactive_elements, list_rows,
+                    texts, buttons, interactive_elements, found,
                 )
 
                 # Not hasattr(): see _enumerate_elements.
@@ -370,7 +400,7 @@ class DiscoveryMixin:
                         buttons,
                         interactive_elements,
                         depth + 1,
-                        list_rows,
+                        found,
                     )
         except Exception:
             pass
@@ -399,6 +429,10 @@ class DiscoveryMixin:
             # A hit list offers "Apply", not "OK": the old rules called it
             # information and auto-cancelled the value help.
             classification = "list"
+        elif popup.get("calendar"):
+            # Continue/Cancel made it look like a confirmation; continuing
+            # writes the focused date (today) into the field.
+            classification = "date_picker"
         elif has_inputs or any(p in text_blob for p in self._POPUP_INPUT_PATTERNS):
             classification = "input_required"
         elif (
