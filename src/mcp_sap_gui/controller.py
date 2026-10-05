@@ -921,6 +921,11 @@ class SAPGUIControllerBase:
                 "message_id": status.get("message_id", ""),
                 "message_number": status.get("message_number", ""),
             }
+            # Only when set: screen info rides on every action response.
+            if status.get("has_long_text"):
+                result["message_has_long_text"] = True
+            if status.get("as_popup"):
+                result["message_as_popup"] = True
 
             # A popup opened: say what it is in THIS response, so the caller
             # sees pre-filled values before deciding to confirm it.
@@ -983,6 +988,19 @@ class SAPGUIControllerBase:
                     pass
             if params:
                 info["message_parameters"] = params
+            # MessageHasLongText (7.60 PL2+): -1 no message, 0 no, 1 yes.
+            # MessageAsPopup: the message also sits in a popup that must be
+            # closed before anything else works.
+            try:
+                if int(sbar.MessageHasLongText) == 1:
+                    info["has_long_text"] = True
+            except Exception:
+                pass
+            try:
+                if sbar.MessageAsPopup:
+                    info["as_popup"] = True
+            except Exception:
+                pass
             return info
         except Exception:
             return {"text": None}

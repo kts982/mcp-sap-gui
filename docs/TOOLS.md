@@ -66,7 +66,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active transaction policy (presets and policy file: see the README's Security Considerations). A bare `/n` leaves the current transaction |
 | `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, or `Save`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients |
-| `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window |
+| `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window. `message_has_long_text` / `message_as_popup` appear when set |
 
 ## Fields And UI Elements
 
@@ -74,7 +74,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 |------|-------------|
 | `sap_read_field` | Read a field value with metadata |
 | `sap_set_field` | Set a field value |
-| `sap_press_button` | Press a button |
+| `sap_press_button` | Press a button. On the status bar (`wnd[0]/sbar`) it opens the message's long text, which shows as a list popup (`sap_read_list(window_id="wnd[1]")`) |
 | `sap_select_menu` | Select a menu item or submenu |
 | `sap_select_checkbox` | Select or clear a checkbox |
 | `sap_select_radio_button` | Select a radio button |
@@ -129,7 +129,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information or input-required dialogs. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are |
+| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`; neither is ever auto-handled. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are |
 | `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification. After an action the result keeps the popup's title, texts and entered values and drops its now-dead element IDs |
 
 Every action tool also reports a popup that it opened: `screen.popup` carries the classification, texts, button labels and any `prefilled_inputs`, so the values are visible before the agent decides how to respond.

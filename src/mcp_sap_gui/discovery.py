@@ -264,12 +264,19 @@ class DiscoveryMixin:
                 "tooltip": read('Tooltip', '').strip(),
             })
         elif ctype in self._POPUP_INTERACTIVE_TYPES:
+            changeable = read('Changeable', None)
+            if changeable is False and ctype in ('GuiTextField', 'GuiCTextField'):
+                # SAP's message popup (SAPMSDYP) shows the message in
+                # display-only fields: it is text, not an input.
+                if text:
+                    texts.append(text)
+                return
             interactive_elements.append({
                 "id": self._normalize_element_id(read('Id', '')),
                 "type": ctype,
                 "name": read('Name', ''),
                 "text": text,
-                "changeable": read('Changeable', None),
+                "changeable": changeable,
             })
         elif text and ctype in (
             'GuiTextField', 'GuiCTextField', 'GuiLabel',
@@ -425,6 +432,10 @@ class DiscoveryMixin:
 
         if message_type == "E" or any(p in text_blob for p in self._POPUP_ERROR_PATTERNS):
             classification = "error"
+        elif message_type == "W" or "warning" in text_blob:
+            # Never auto-continued: a warning can stand between the user and
+            # a save that continuing would complete.
+            classification = "warning"
         elif popup.get("list"):
             # A hit list offers "Apply", not "OK": the old rules called it
             # information and auto-cancelled the value help.

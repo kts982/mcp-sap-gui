@@ -113,7 +113,9 @@ class FieldsMixin:
         Press a button on the screen.
 
         Args:
-            button_id: SAP GUI button ID (e.g., "wnd[0]/tbar[1]/btn[8]")
+            button_id: SAP GUI button ID (e.g., "wnd[0]/tbar[1]/btn[8]").
+                A status bar ("wnd[0]/sbar") is clicked like a user clicks
+                its message: that opens the message's long text.
 
         Returns:
             Dict with screen info after button press
@@ -121,7 +123,15 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            self._find_element(button_id).press()
+            element_id = self._validate_element_id(button_id)
+            element = self._session.findById(element_id)
+            if element_id.endswith("/sbar"):
+                # GuiStatusbar has no press(); DoubleClick opens the long text
+                # (a list popup with Diagnosis / Procedure, or the docked
+                # Performance Assistant when F1 is set to it).
+                element.DoubleClick()
+            else:
+                element.press()
 
             logger.debug(f"Pressed button: {button_id}")
             return {

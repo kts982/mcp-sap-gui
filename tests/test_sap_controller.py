@@ -2547,6 +2547,37 @@ class TestEnrichedStatusBar:
         assert "message_parameters" in result
         assert "MATNR" in result["message_parameters"]
 
+    def _screen_with_sbar(self, has_long_text, as_popup):
+        controller = self._make_controller_with_session()
+        controller._session.Info = MagicMock(Transaction="SE38", Program="SAPLWBABAP",
+                                             ScreenNumber=100)
+        sbar = MagicMock(Text="Program ZZ_X does not exist", MessageType="E",
+                         MessageId="DS", MessageNumber="017",
+                         MessageHasLongText=has_long_text, MessageAsPopup=as_popup)
+        controller._session.findById.side_effect = (
+            lambda element_id: sbar if element_id == "wnd[0]/sbar" else MagicMock(Text="T")
+        )
+        return controller
+
+    @pytest.mark.parametrize("has_long_text, as_popup", [(1, True), (0, False), (-1, 0)])
+    def test_long_text_and_popup_flags_only_when_set(self, has_long_text, as_popup):
+        """Values as SAP GUI 8.10 gave them live (DS 017 has a long text)."""
+        result = self._screen_with_sbar(has_long_text, as_popup).get_screen_info()
+
+        assert result.get("message_has_long_text") is (True if has_long_text == 1 else None)
+        assert result.get("message_as_popup") is (True if as_popup else None)
+
+    def test_pressing_the_status_bar_opens_the_long_text(self):
+        controller = self._make_controller_with_session()
+        sbar = MagicMock()
+        controller._session.findById.return_value = sbar
+
+        result = controller.press_button("wnd[0]/sbar")
+
+        sbar.DoubleClick.assert_called_once_with()
+        sbar.press.assert_not_called()
+        assert result["status"] == "pressed"
+
 
 class TestReadFieldMetadata:
     """Tests for enriched read_field metadata."""

@@ -975,7 +975,11 @@ async def sap_get_screen_info(ctx: Context) -> dict:
 
     Every action tool (press_button, send_key, select_menu, etc.) returns
     this same screen info, so you always know when a popup appears.
-    Use sap_get_popup_window for full popup content (texts, buttons)."""
+    Use sap_get_popup_window for full popup content (texts, buttons).
+
+    Present only when true: message_has_long_text (sap_press_button on
+    'wnd[0]/sbar' opens it) and message_as_popup (the message also sits in a
+    popup that must be closed first)."""
     c = _ctrl(ctx)
     return await _com(c.get_screen_info)
 
@@ -1013,7 +1017,10 @@ async def sap_press_button(button_id: str, ctx: Context) -> dict:
 
     Returns screen info after the press so you can detect navigation or popups.
     Use sap_get_toolbar_buttons to discover toolbar button IDs.
-    Use sap_get_screen_elements to find on-screen button IDs."""
+    Use sap_get_screen_elements to find on-screen button IDs.
+    When screen info has message_has_long_text, pressing 'wnd[0]/sbar' opens
+    that long text (Diagnosis / Procedure), usually as a list popup: read it
+    with sap_read_list(window_id='wnd[1]')."""
     _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.press_button(button_id))
