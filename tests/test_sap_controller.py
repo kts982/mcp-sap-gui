@@ -742,6 +742,22 @@ class TestGridEnhancements:
         assert result["columns"][1]["name"] == "MAKTX"
         assert result["columns"][1]["title"] == "Description"
 
+    def test_get_column_info_alv_types_and_keys(self):
+        """ALV columns also carry the data type and the key flag."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.ColumnCount = 2
+        mock_grid.ColumnOrder.side_effect = ["CARRID", "FLDATE"]
+        mock_grid.GetColumnDataType.side_effect = ["string", "date"]
+        mock_grid.IsColumnKey.side_effect = [True, Exception("not supported")]
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.get_column_info("wnd[0]/usr/grid")
+
+        first, second = result["columns"]
+        assert (first["data_type"], first["key"]) == ("string", True)
+        assert second["data_type"] == "date" and "key" not in second
+
     def test_read_table_includes_column_info(self):
         """read_table now includes column_info with tooltips."""
         controller = self._make_controller_with_session()
@@ -3204,7 +3220,10 @@ class TestGetCellInfo:
         mock_grid.GetCellChangeable.return_value = True
         mock_grid.GetCellColor.return_value = 0
         mock_grid.GetCellTooltip.return_value = "Material number"
-        mock_grid.GetCellStyle.return_value = 0
+        mock_grid.GetCellType.return_value = "Normal"
+        mock_grid.GetCellState.return_value = "Error"
+        mock_grid.HasCellF4Help.return_value = True
+        mock_grid.IsCellHotspot.return_value = False
         mock_grid.GetCellMaxLength.return_value = 18
         controller._session.findById.return_value = mock_grid
 
@@ -3214,6 +3233,66 @@ class TestGetCellInfo:
         assert result["changeable"] is True
         assert result["tooltip"] == "Material number"
         assert result["max_length"] == 18
+        assert result["cell_type"] == "Normal"
+        assert result["state"] == "Error"
+        assert result["f4_help"] is True
+        assert "style" not in result  # GetCellStyle exists in no SAP GUI release
+        assert "hotspot_type" not in result and "checked" not in result
+
+    def test_checkbox_cell_reports_checked(self):
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.GetCellValue.return_value = "X"
+        mock_grid.GetCellType.return_value = "CheckBox"  # live spelling
+        mock_grid.GetCellCheckBoxChecked.return_value = True
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.get_cell_info("wnd[0]/usr/grid", 0, "CHECKBOX")
+
+        assert result["checked"] is True
+        assert "list_box_count" not in result
+
+    def test_value_list_cell_reports_the_dropdown(self):
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.GetCellValue.return_value = "KG"
+        mock_grid.GetCellType.return_value = "ValueList"
+        mock_grid.GetCellListBoxCount.return_value = 2
+        mock_grid.GetCellListBoxCurIndex.return_value = 0
+        mock_grid.GetCellListBoxCurValue.side_effect = Exception("8.10+ only")
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.get_cell_info("wnd[0]/usr/grid", 0, "WUNIT")
+
+        assert (result["list_box_count"], result["list_box_index"]) == (2, 0)
+        assert "list_box_value" not in result
+
+    def test_closed_dropdown_reports_only_the_count(self):
+        """Closed, SAP GUI 8.10 returns index -1 and value "" (seen live)."""
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.GetCellType.return_value = "ValueList"
+        mock_grid.GetCellListBoxCount.return_value = 2
+        mock_grid.GetCellListBoxCurIndex.return_value = -1
+        mock_grid.GetCellListBoxCurValue.return_value = ""
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.get_cell_info("wnd[0]/usr/grid", 0, "WUNIT")
+
+        assert result["list_box_count"] == 2
+        assert "list_box_index" not in result and "list_box_value" not in result
+
+    def test_hotspot_cell_reports_its_type(self):
+        controller = self._make_controller_with_session()
+        mock_grid = MagicMock()
+        mock_grid.GetCellType.return_value = "Normal"
+        mock_grid.IsCellHotspot.return_value = True
+        mock_grid.GetCellHotspotType.return_value = "Link"
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.get_cell_info("wnd[0]/usr/grid", 0, "EBELN")
+
+        assert result["hotspot"] is True and result["hotspot_type"] == "Link"
 
     def test_handles_missing_methods(self):
         """get_cell_info handles grids where some methods fail."""
@@ -3223,14 +3302,15 @@ class TestGetCellInfo:
         mock_grid.GetCellChangeable.side_effect = Exception("Not supported")
         mock_grid.GetCellColor.side_effect = Exception("Not supported")
         mock_grid.GetCellTooltip.side_effect = Exception("Not supported")
-        mock_grid.GetCellStyle.side_effect = Exception("Not supported")
+        mock_grid.GetCellState.side_effect = Exception("Not supported")
+        mock_grid.GetCellType.side_effect = Exception("Not supported")
         mock_grid.GetCellMaxLength.side_effect = Exception("Not supported")
         controller._session.findById.return_value = mock_grid
 
         result = controller.get_cell_info("wnd[0]/usr/grid", 0, "COL")
 
         assert result["value"] == "val"
-        assert "changeable" not in result
+        assert "changeable" not in result and "cell_type" not in result
         assert "error" not in result
 
 

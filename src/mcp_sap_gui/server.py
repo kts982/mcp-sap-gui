@@ -1294,9 +1294,10 @@ async def sap_set_current_cell(grid_id: str, row: int, column: str, ctx: Context
 async def sap_get_column_info(grid_id: str, ctx: Context) -> dict:
     """Get detailed column info from an ALV grid or table control.
 
-    Returns column names, titles, widths, and visibility. Useful for
-    understanding table structure. For a lighter alternative, use
-    sap_read_table with columns_only=true."""
+    Returns column names, titles and tooltips; for an ALV grid also each
+    column's data_type (string, date, decimal, ...) and key flag, for a table
+    control each column's cell_type and cell_id template. For a lighter
+    alternative, use sap_read_table with columns_only=true."""
     c = _ctrl(ctx)
     return await _com(lambda: c.get_column_info(grid_id))
 
@@ -1354,7 +1355,10 @@ async def sap_select_all_table_control_columns(
 async def sap_get_cell_info(grid_id: str, row: int, column: str, ctx: Context) -> dict:
     """Get detailed cell metadata from an ALV grid.
 
-    Returns value, changeable, color, tooltip, style, max_length.
+    Returns value, changeable, cell_type (Normal, CheckBox, ValueList,
+    Button, ...), state (Normal, Error, Warning, Info: why a cell was
+    rejected), f4_help, hotspot, color, tooltip, max_length; plus checked
+    for a checkbox and list_box_count (entries) for a dropdown cell.
     Does NOT work on GuiTableControl."""
     c = _ctrl(ctx)
     return await _com(lambda: c.get_cell_info(grid_id, row, column))

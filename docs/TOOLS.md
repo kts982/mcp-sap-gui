@@ -102,7 +102,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_double_click_cell` | Double-click a cell |
 | `sap_modify_cell` | Modify an editable cell |
 | `sap_set_current_cell` | Set the focused cell |
-| `sap_get_column_info` | Get column names, titles, and metadata |
+| `sap_get_column_info` | Get column names, titles, and metadata (ALV: data type and key flag; table control: cell type and cell ID template) |
 | `sap_get_current_cell` | Get the current focused cell |
 | `sap_select_multiple_rows` | Select multiple rows |
 
@@ -113,7 +113,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_get_alv_toolbar` | List ALV toolbar buttons |
 | `sap_press_alv_toolbar_button` | Press an ALV toolbar button |
 | `sap_select_alv_context_menu_item` | Select an ALV context menu item |
-| `sap_get_cell_info` | Read detailed ALV cell metadata |
+| `sap_get_cell_info` | Read detailed ALV cell metadata: editable, cell type (checkbox, dropdown, button), error/warning state, F4 help, hotspot |
 | `sap_press_column_header` | Click a column header, typically to sort |
 | `sap_select_all_rows` | Select all ALV rows |
 

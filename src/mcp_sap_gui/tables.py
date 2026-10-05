@@ -828,6 +828,17 @@ class TablesMixin:
                 except Exception:
                     col_info["tooltip"] = ""
 
+                # XML-schema style type (string, date, decimal,
+                # nonNegativeInteger, ...) and the key-column flag.
+                try:
+                    col_info["data_type"] = table.GetColumnDataType(col_name)
+                except Exception:
+                    pass
+                try:
+                    col_info["key"] = bool(table.IsColumnKey(col_name))
+                except Exception:
+                    pass
+
                 columns.append(col_info)
 
             return {
@@ -1009,7 +1020,10 @@ class TablesMixin:
         """
         Get detailed cell metadata from an ALV grid (GuiGridView).
 
-        Returns whether the cell is editable, its color/style, and tooltip.
+        Returns whether the cell is editable, what kind of cell it is
+        (cell_type: Normal, CheckBox, ValueList, Button, ...), its state
+        (Normal, Error, Warning, Info), F4 help, hotspot, colour and tooltip;
+        plus the checkbox state or the dropdown position where they apply.
 
         Args:
             grid_id: SAP GUI grid ID (ALV)
@@ -1030,17 +1044,39 @@ class TablesMixin:
                 "value": grid.GetCellValue(row, column),
             }
 
-            for method, key in [
-                ("GetCellChangeable", "changeable"),
-                ("GetCellColor", "color"),
-                ("GetCellTooltip", "tooltip"),
-                ("GetCellStyle", "style"),
-                ("GetCellMaxLength", "max_length"),
-            ]:
+            def read(method, key):
+                # Members newer than the user's SAP GUI (or not meaningful
+                # for this cell) raise: leave the key out.
                 try:
                     info[key] = getattr(grid, method)(row, column)
                 except Exception:
                     pass
+
+            for method, key in [
+                ("GetCellType", "cell_type"),
+                ("GetCellChangeable", "changeable"),
+                ("GetCellState", "state"),
+                ("HasCellF4Help", "f4_help"),
+                ("IsCellHotspot", "hotspot"),
+                ("GetCellColor", "color"),
+                ("GetCellTooltip", "tooltip"),
+                ("GetCellMaxLength", "max_length"),
+            ]:
+                read(method, key)
+
+            if info.get("hotspot"):
+                read("GetCellHotspotType", "hotspot_type")  # SAP GUI 8.00+
+            if info.get("cell_type") == "CheckBox":
+                read("GetCellCheckBoxChecked", "checked")
+            elif info.get("cell_type") == "ValueList":
+                read("GetCellListBoxCount", "list_box_count")      # 8.00+
+                # Index and value of the focused entry exist only while the
+                # dropdown is open (closed: -1 and ""), so report them then.
+                read("GetCellListBoxCurIndex", "list_box_index")   # 8.00+
+                if info.get("list_box_index", -1) >= 0:
+                    read("GetCellListBoxCurValue", "list_box_value")   # 8.10+
+                else:
+                    info.pop("list_box_index", None)
 
             return info
         except Exception as e:
