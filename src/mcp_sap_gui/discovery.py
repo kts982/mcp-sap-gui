@@ -762,17 +762,20 @@ class DiscoveryMixin:
             type_filter_set = {t.strip() for t in type_filter.split(",") if t.strip()}
 
         try:
-            container = self._session.findById(
-                self._validate_container_id(container_id)
-            )
+            root_id = self._validate_container_id(container_id)
             list_rows: Dict[str, List[int]] = {}
-            elements = self._enumerate_elements(
-                container, max_depth,
+            options = dict(
                 type_filter_set=type_filter_set,
                 changeable_only=changeable_only,
                 expand_tables=expand_tables,
                 list_rows=list_rows,
             )
+            tree = self._object_tree(root_id, self._DISCOVERY_PROPS)
+            if tree is not None:
+                elements = self._elements_from_tree(tree, max_depth, **options)
+            else:
+                container = self._session.findById(root_id)
+                elements = self._enumerate_elements(container, max_depth, **options)
             if lists is not None:
                 for list_container, rows in list_rows.items():
                     lists.append({
@@ -814,6 +817,73 @@ class DiscoveryMixin:
             logger.debug("Could not list docking containers of %s: %s", window_id, e)
             return []
 
+    _DISCOVERY_PROPS = ["Id", "Type", "Name", "Text", "Changeable"]
+
+    def _elements_from_tree(self, node: Dict[str, Any], max_depth: int,
+                            current_depth: int = 0,
+                            type_filter_set: set = None,
+                            changeable_only: bool = False,
+                            expand_tables: bool = False,
+                            list_rows: Dict[str, List[int]] | None = None,
+                            ) -> List[ScreenElement]:
+        """_enumerate_elements over a GetObjectTree node: same rules, no COM."""
+        elements = []
+        if current_depth >= max_depth:
+            return elements
+
+        for child in node.get("children") or []:
+            props = child.get("properties") or {}
+            child_id = self._normalize_element_id(props.get("Id", ""))
+            if not expand_tables and self._tally_list_cell(child_id, list_rows):
+                continue
+
+            element = ScreenElement(
+                id=child_id,
+                type=props.get("Type", ""),
+                name=props.get("Name", ""),
+                text=props.get("Text", "")[:200],
+                changeable=props.get("Changeable") == "true",
+            )
+            if self._wanted(element, type_filter_set, changeable_only):
+                elements.append(element)
+            if element.type == "GuiTableControl" and not expand_tables:
+                continue
+            elements.extend(self._elements_from_tree(
+                child, max_depth, current_depth + 1,
+                type_filter_set=type_filter_set,
+                changeable_only=changeable_only,
+                expand_tables=expand_tables,
+                list_rows=list_rows,
+            ))
+        return elements
+
+    def _tally_list_cell(self, child_id: str,
+                         list_rows: Dict[str, List[int]] | None) -> bool:
+        """True for a classic-list cell (lbl[col,row]), counting its row.
+
+        A classic list has no table object: every word is its own cell, over
+        1,000 on one page. read_list shows them as lines, so discovery counts
+        them instead of listing them.
+        """
+        cell = self._LIST_CELL_RE.search(child_id)
+        if not cell:
+            return False
+        if list_rows is not None:
+            list_rows.setdefault(child_id[:cell.start()], []).append(
+                int(cell.group(3))
+            )
+        return True
+
+    @staticmethod
+    def _wanted(element: ScreenElement, type_filter_set: set | None,
+                changeable_only: bool) -> bool:
+        """Apply discovery's filters (containers are recursed regardless)."""
+        if type_filter_set and element.type not in type_filter_set:
+            return False
+        if changeable_only and not element.changeable:
+            return False
+        return True
+
     def _enumerate_elements(self, container, max_depth: int,
                             current_depth: int = 0,
                             type_filter_set: set = None,
@@ -821,10 +891,12 @@ class DiscoveryMixin:
                             expand_tables: bool = False,
                             list_rows: Dict[str, List[int]] | None = None,
                             ) -> List[ScreenElement]:
-        """Recursively enumerate screen elements.
+        """Recursively enumerate screen elements over COM.
 
-        Classic-list cells are left out unless expand_tables; list_rows, when
-        given, collects their row numbers per parent container.
+        The fallback when GetObjectTree is not available (SAP GUI before
+        7.70 PL3). Classic-list cells are left out unless expand_tables;
+        list_rows, when given, collects their row numbers per parent
+        container.
         """
         elements = []
 
@@ -848,18 +920,10 @@ class DiscoveryMixin:
                 child = children(i)
                 child_id = self._normalize_element_id(child.Id)
 
-                # A classic list has no table object: every word is its own
-                # cell (lbl[col,row]), over 1,000 on one page. read_list shows
-                # them as lines, so count them here and skip their properties.
-                if not expand_tables:
-                    cell = self._LIST_CELL_RE.search(child_id)
-                    if cell:
-                        if list_rows is not None:
-                            parent_id = child_id[:cell.start()]
-                            list_rows.setdefault(parent_id, []).append(
-                                int(cell.group(3))
-                            )
-                        continue
+                # A list cell's other properties are never read: skipping them
+                # is most of the cost of a list page.
+                if not expand_tables and self._tally_list_cell(child_id, list_rows):
+                    continue
 
                 element = ScreenElement(
                     id=child_id,
@@ -867,16 +931,10 @@ class DiscoveryMixin:
                     name=prop(child, 'Name', ''),
                     text=str(prop(child, 'Text', ''))[:200],
                     changeable=prop(child, 'Changeable', False),
-                    visible=prop(child, 'Visible', True),
                 )
 
                 # Apply filters — but always recurse into containers
-                include = True
-                if type_filter_set and element.type not in type_filter_set:
-                    include = False
-                if changeable_only and not element.changeable:
-                    include = False
-                if include:
+                if self._wanted(element, type_filter_set, changeable_only):
                     elements.append(element)
 
                 # A table control stays ONE element: its cells are read with
@@ -884,8 +942,11 @@ class DiscoveryMixin:
                 if element.type == "GuiTableControl" and not expand_tables:
                     continue
 
-                # Recurse into containers regardless of filters
-                if hasattr(child, 'Children') and child.Children.Count > 0:
+                # Recurse into containers regardless of filters. Not hasattr():
+                # on a status-bar pane, Children raises a COM error that is no
+                # AttributeError, which ended this loop and dropped panes 1-6.
+                grandchildren = prop(child, 'Children', None)
+                if grandchildren is not None and prop(grandchildren, 'Count', 0) > 0:
                     child_elements = self._enumerate_elements(
                         child, max_depth, current_depth + 1,
                         type_filter_set=type_filter_set,

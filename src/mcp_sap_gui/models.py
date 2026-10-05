@@ -56,13 +56,16 @@ class SessionInfo:
 
 @dataclass
 class ScreenElement:
-    """Information about a screen element."""
+    """Information about a screen element.
+
+    No ``visible`` flag: SAP GUI Scripting has no Visible property (the 8.10
+    guide says so), so it read as True for every element.
+    """
     id: str
     type: str
     name: str
     text: str
     changeable: bool
-    visible: bool
 
 
 class SAPGUIError(Exception):

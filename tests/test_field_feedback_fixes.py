@@ -488,13 +488,45 @@ class TestScreenshotTool:
 # ===========================================================================
 
 def _child(element_id, type_, *, text="", changeable=False, children=()):
-    child = MagicMock(Id=element_id, Type=type_, Text=text,
-                      Changeable=changeable, Visible=True)
+    child = MagicMock(Id=element_id, Type=type_, Text=text, Changeable=changeable)
     child.Name = element_id.rsplit("/", 1)[-1]
     kids = list(children)
     child.Children.Count = len(kids)
     child.Children.side_effect = lambda i: kids[i]
     return child
+
+
+def _object_tree_json(element):
+    """What GetObjectTree returns for a _child() screen: every value a string."""
+    def node(el):
+        result = {"properties": {
+            "Id": el.Id, "Type": el.Type, "Name": el.Name, "Text": el.Text,
+            "Changeable": "true" if el.Changeable else "false",
+        }}
+        try:
+            kids = [el.Children(i) for i in range(el.Children.Count)]
+        except Exception:
+            kids = []
+        if kids:
+            result["children"] = [node(kid) for kid in kids]
+        return result
+    return json.dumps({"children": [node(element)]})
+
+
+@pytest.fixture(params=["walk", "tree"])
+def discovery_path(request):
+    """Discovery reads the screen with GetObjectTree (SAP GUI 7.70 PL3+) or,
+    on an older SAP GUI, by walking the elements: both must agree."""
+    return request.param
+
+
+def _serve(controller, screen, path):
+    if path == "tree":
+        controller._session.GetObjectTree.return_value = _object_tree_json(screen)
+        controller._session.findById.side_effect = AssertionError("walked COM")
+    else:
+        controller._session.GetObjectTree.side_effect = AttributeError("GetObjectTree")
+        controller._session.findById.return_value = screen
 
 
 class TestShortIdsInResponses:
@@ -544,17 +576,17 @@ class TestTableControlsStayOneElement:
         return _child("/app/con[0]/ses[0]/wnd[0]/usr", "GuiUserArea",
                       children=[table, button])
 
-    def test_cells_are_not_listed_by_default(self):
+    def test_cells_are_not_listed_by_default(self, discovery_path):
         controller = _make_controller_with_session()
-        controller._session.findById.return_value = self._screen()
+        _serve(controller, self._screen(), discovery_path)
 
         elements = controller.get_screen_elements("wnd[0]/usr", max_depth=3)
 
         assert [e.type for e in elements] == ["GuiTableControl", "GuiButton"]
 
-    def test_expand_tables_lists_the_cells(self):
+    def test_expand_tables_lists_the_cells(self, discovery_path):
         controller = _make_controller_with_session()
-        controller._session.findById.return_value = self._screen()
+        _serve(controller, self._screen(), discovery_path)
 
         elements = controller.get_screen_elements(
             "wnd[0]/usr", max_depth=3, expand_tables=True,
@@ -562,10 +594,10 @@ class TestTableControlsStayOneElement:
 
         assert len(elements) == 2 + 6
 
-    def test_changeable_filter_no_longer_floods_with_cells(self):
+    def test_changeable_filter_no_longer_floods_with_cells(self, discovery_path):
         """changeable_only on an SM30 screen used to return every input cell."""
         controller = _make_controller_with_session()
-        controller._session.findById.return_value = self._screen()
+        _serve(controller, self._screen(), discovery_path)
 
         elements = controller.get_screen_elements(
             "wnd[0]/usr", max_depth=3, changeable_only=True,
@@ -598,9 +630,9 @@ class TestClassicListsStayOutOfDiscovery:
             cells.append(_child(f"{self._PREFIX}/lbl[4,{row}]", "GuiLabel", text="001"))
         return _child(self._PREFIX, "GuiUserArea", children=cells)
 
-    def test_cells_are_counted_not_listed(self):
+    def test_cells_are_counted_not_listed(self, discovery_path):
         controller = _make_controller_with_session()
-        controller._session.findById.return_value = self._screen()
+        _serve(controller, self._screen(), discovery_path)
         lists = []
 
         elements = controller.get_screen_elements("wnd[0]/usr", lists=lists)
@@ -609,7 +641,8 @@ class TestClassicListsStayOutOfDiscovery:
         assert lists == [{"container": "wnd[0]/usr", "cells": 5, "rows": 3}]
 
     def test_cell_properties_are_not_read(self):
-        """Skipping costs one COM call per cell (its Id) instead of five."""
+        """On the fallback walk a skipped cell costs one COM call (its Id),
+        not five."""
         controller = _make_controller_with_session()
         usr = self._screen()
         text = PropertyMock(return_value="")
@@ -621,22 +654,22 @@ class TestClassicListsStayOutOfDiscovery:
 
         assert text.call_count == 0
 
-    def test_other_elements_are_kept(self):
+    def test_other_elements_are_kept(self, discovery_path):
         controller = _make_controller_with_session()
         usr = self._screen()
         button = _child(f"{self._PREFIX}/btnB", "GuiButton")
         kids = [button] + [usr.Children(i) for i in range(usr.Children.Count)]
         usr.Children.Count = len(kids)
         usr.Children.side_effect = lambda i: kids[i]
-        controller._session.findById.return_value = usr
+        _serve(controller, usr, discovery_path)
 
         elements = controller.get_screen_elements("wnd[0]/usr")
 
         assert [e.id for e in elements] == ["wnd[0]/usr/btnB"]
 
-    def test_expand_tables_lists_the_cells(self):
+    def test_expand_tables_lists_the_cells(self, discovery_path):
         controller = _make_controller_with_session()
-        controller._session.findById.return_value = self._screen()
+        _serve(controller, self._screen(), discovery_path)
         lists = []
 
         elements = controller.get_screen_elements(
@@ -646,14 +679,13 @@ class TestClassicListsStayOutOfDiscovery:
         assert len(elements) == 5
         assert lists == []
 
-    def test_table_control_cells_are_not_list_cells(self):
+    def test_table_control_cells_are_not_list_cells(self, discovery_path):
         """tblT/txtV-F[0,1] also ends in [col,row], but carries a field name."""
         cell = _child(f"{self._PREFIX}/tblT/txtV-F[0,1]", "GuiTextField")
         table = _child(f"{self._PREFIX}/tblT", "GuiTableControl", children=[cell])
         controller = _make_controller_with_session()
-        controller._session.findById.return_value = _child(
-            self._PREFIX, "GuiUserArea", children=[table],
-        )
+        _serve(controller, _child(self._PREFIX, "GuiUserArea", children=[table]),
+               discovery_path)
         lists = []
 
         controller.get_screen_elements(
@@ -687,6 +719,77 @@ class TestClassicListsStayOutOfDiscovery:
             result = await srv.sap_get_screen_elements(ctx)
 
         assert "lists" not in result and "note" not in result
+
+
+class TestObjectTreeDiscovery:
+    """GetObjectTree reads a whole screen in one call: 0.2 s against 4.7 s
+    for walking a 1,139-cell list page element by element."""
+
+    _PREFIX = "/app/con[0]/ses[0]/wnd[0]"
+
+    def _nested(self):
+        field = _child(f"{self._PREFIX}/usr/sub/ctxtP_F", "GuiCTextField",
+                       changeable=True, text="X")
+        sub = _child(f"{self._PREFIX}/usr/sub", "GuiSimpleContainer", children=[field])
+        return _child(f"{self._PREFIX}/usr", "GuiUserArea", children=[sub])
+
+    def test_one_call_reads_the_screen(self):
+        controller = _make_controller_with_session()
+        _serve(controller, self._nested(), "tree")
+
+        elements = controller.get_screen_elements("wnd[0]/usr")
+
+        controller._session.GetObjectTree.assert_called_once_with(
+            "wnd[0]/usr", ["Id", "Type", "Name", "Text", "Changeable"],
+        )
+        assert [(e.id, e.text, e.changeable) for e in elements] == [
+            ("wnd[0]/usr/sub", "", False),
+            ("wnd[0]/usr/sub/ctxtP_F", "X", True),
+        ]
+
+    def test_max_depth_is_the_same_on_both_paths(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve(controller, self._nested(), discovery_path)
+
+        elements = controller.get_screen_elements("wnd[0]/usr", max_depth=1)
+
+        assert [e.id for e in elements] == ["wnd[0]/usr/sub"]
+
+    def test_a_leaf_raising_on_children_keeps_its_siblings(self, discovery_path):
+        """A status-bar pane raises a COM error (not AttributeError) on
+        Children: the walk listed pane[0] and silently dropped the rest."""
+        panes = [_child(f"{self._PREFIX}/sbar/pane[{i}]", "GuiStatusPane")
+                 for i in range(3)]
+        for pane in panes:
+            type(pane).Children = PropertyMock(side_effect=IndexError("Children"))
+        sbar = _child(f"{self._PREFIX}/sbar", "GuiStatusbar", children=panes)
+        window = _child(self._PREFIX, "GuiMainWindow", children=[sbar])
+        controller = _make_controller_with_session()
+        _serve(controller, window, discovery_path)
+
+        elements = controller.get_screen_elements("wnd[0]", max_depth=2)
+
+        assert [e.id for e in elements] == [
+            "wnd[0]/sbar", *(f"wnd[0]/sbar/pane[{i}]" for i in range(3)),
+        ]
+
+    def test_an_empty_tree_falls_back_to_walking(self):
+        controller = _make_controller_with_session()
+        controller._session.GetObjectTree.return_value = '{"children": []}'
+        controller._session.findById.return_value = self._nested()
+
+        elements = controller.get_screen_elements("wnd[0]/usr")
+
+        assert len(elements) == 2
+
+    def test_no_visible_flag(self, discovery_path):
+        """SAP GUI Scripting has no Visible property: it was always True."""
+        controller = _make_controller_with_session()
+        _serve(controller, self._nested(), discovery_path)
+
+        elements = controller.get_screen_elements("wnd[0]/usr")
+
+        assert "visible" not in elements[0].__dict__
 
 
 class TestTableControlColumnTemplates:

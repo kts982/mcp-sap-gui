@@ -5,6 +5,7 @@ This module provides the core controller class with connection management,
 transaction execution, and screen information retrieval.
 """
 
+import json
 import logging
 import re
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -300,6 +301,27 @@ class SAPGUIControllerBase:
         """Validate and resolve an SAP element by short ID."""
         normalized = self._validate_element_id(element_id)
         return self._session.findById(normalized)
+
+    def _object_tree(self, root_id: str,
+                     props: List[str]) -> Optional[Dict[str, Any]]:
+        """An element and all its descendants in ONE call, or None.
+
+        GuiSession.GetObjectTree (SAP GUI 7.70 PL3+) returns the subtree as
+        JSON nodes ``{"properties": {...}, "children": [...]}`` holding the
+        requested properties, every value a string ("" where the element
+        lacks the property). Reading each element over COM instead costs one
+        round trip per property: 4.7 s against 0.2 s for a 1,139-cell list.
+        None on an older SAP GUI or any failure, so callers walk instead.
+        """
+        try:
+            raw = self._session.GetObjectTree(root_id, props)
+            if not isinstance(raw, str):
+                return None
+            nodes = json.loads(raw).get("children") or []
+            return nodes[0] if nodes else None
+        except Exception as e:
+            logger.debug("GetObjectTree(%s) not available: %s", root_id, e)
+            return None
 
     def _is_sensitive_field_id(self, field_id: str) -> bool:
         """Return True when a field ID likely refers to a secret input."""
