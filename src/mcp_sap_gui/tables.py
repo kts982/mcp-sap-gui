@@ -91,6 +91,38 @@ class TablesMixin:
             columns.append(info)
         return columns
 
+    _TABLE_CELL_RE = re.compile(r"\[(\d+),(\d+)\]$")
+
+    def _table_control_values(self, table_id: str) -> Optional[Dict[tuple, Any]]:
+        """{(visible_row, column): value} of a table control's cells in ONE
+        GetObjectTree call, or None (SAP GUI before 7.70 PL3).
+
+        A cell's ID ends in [column,visible_row], the indexes GetCell takes;
+        values follow _read_cell_value. Reading cell by cell costs about
+        three COM calls each instead.
+        """
+        tree = self._object_tree(
+            self._validate_element_id(table_id),
+            ["Id", "Type", "Text", "Selected", "Key"],
+        )
+        if tree is None:
+            return None
+        values: Dict[tuple, Any] = {}
+        for node in tree.get("children") or []:
+            props = node.get("properties") or {}
+            match = self._TABLE_CELL_RE.search(props.get("Id", ""))
+            if not match:
+                continue
+            cell_type = props.get("Type", "")
+            if cell_type == "GuiCheckBox":
+                value = props.get("Selected") == "true"
+            elif cell_type == "GuiComboBox":
+                value = props.get("Key", "")
+            else:
+                value = props.get("Text", "")
+            values[(int(match.group(2)), int(match.group(1)))] = value
+        return values
+
     def _read_cell_value(self, cell):
         """Read a cell value, handling different element types."""
         try:
@@ -348,6 +380,16 @@ class TablesMixin:
                 start_position = scrollbar.Position
 
             if not columns_only:
+                values = self._table_control_values(table_id)
+
+                def cell_value(row, col):
+                    if values is not None:
+                        return values.get((row, col))
+                    try:
+                        return self._read_cell_value(table.GetCell(row, col))
+                    except Exception:
+                        return None
+
                 rows_to_read = min(visible_rows, max_rows)
                 for vis_idx in range(rows_to_read):
                     # Padding detection must check ALL columns, not just
@@ -356,21 +398,13 @@ class TablesMixin:
                     all_empty = True
                     if col_filter:
                         for ci in range(all_col_count):
-                            try:
-                                cell = table.GetCell(vis_idx, ci)
-                                val = self._read_cell_value(cell)
-                            except Exception:
-                                val = None
+                            val = cell_value(vis_idx, ci)
                             if val is not None and val != "":
                                 all_empty = False
                                 break
                     row_data = {}
                     for col_idx in filtered_col_indices:
-                        try:
-                            cell = table.GetCell(vis_idx, col_idx)
-                            value = self._read_cell_value(cell)
-                        except Exception:
-                            value = None
+                        value = cell_value(vis_idx, col_idx)
                         col_name = all_column_names[col_idx]
                         row_data[col_name] = value
                         if not col_filter:

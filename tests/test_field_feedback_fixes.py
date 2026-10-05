@@ -904,6 +904,80 @@ class TestPopupAndListFromObjectTree:
         )
 
 
+class TestTableControlFromObjectTree:
+    """read_table on a table control takes the visible cells from one
+    GetObjectTree call instead of ~3 COM calls per cell."""
+
+    _TID = "/app/con[0]/ses[0]/wnd[0]/usr/tblTEST"
+    _NAMES = ["V-NAME", "V-ACTIVE", "V-TYPE"]
+    _ROWS = [["A1", True, "01"], ["A2", False, "02"], ["A3", True, ""]]
+
+    def _cell(self, row, col):
+        """The cell in visible row *row* of the current scroll position."""
+        abs_row = self._scroll.Position + row
+        cell = MagicMock(Name=self._NAMES[col])
+        cell.Children.Count = 0
+        prefix, cell.Type = [("txt", "GuiTextField"), ("chk", "GuiCheckBox"),
+                             ("cmb", "GuiComboBox")][col]
+        cell.Id = f"{self._TID}/{prefix}{self._NAMES[col]}[{col},{row}]"
+        value = self._ROWS[abs_row][col] if abs_row < len(self._ROWS) else ""
+        cell.Text, cell.Selected, cell.Key = str(value), value is True, value
+        if col == 1 and abs_row >= len(self._ROWS):
+            cell.Selected = False
+        return cell
+
+    def _table(self, path):
+        self._scroll = MagicMock(Minimum=0, Maximum=1, Position=0, PageSize=2)
+        table = MagicMock(Id=self._TID, Type="GuiTableControl", TableFieldName="TEST",
+                          RowCount=len(self._ROWS), VisibleRowCount=2,
+                          VerticalScrollbar=self._scroll)
+        table.Columns.Count = len(self._NAMES)
+        table.Columns.side_effect = lambda i: MagicMock(Title=f"T{i}", Tooltip="")
+        table.GetCell.side_effect = self._cell
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = table
+        if path == "tree":
+            def object_tree(root, props):
+                cells = [self._cell(r, c) for r in range(2) for c in range(3)]
+                return _object_tree_json(_child(self._TID, "GuiTableControl",
+                                                children=cells), props)
+            controller._session.GetObjectTree.side_effect = object_tree
+        else:
+            controller._session.GetObjectTree.side_effect = AttributeError("GetObjectTree")
+        return controller, table
+
+    def test_rows_are_the_same_on_both_paths(self, discovery_path):
+        controller, _table = self._table(discovery_path)
+
+        result = controller.read_table("wnd[0]/usr/tblTEST")
+
+        assert result["data"] == [
+            {"V-NAME": "A1", "V-ACTIVE": True, "V-TYPE": "01", "_absolute_row_index": 0},
+            {"V-NAME": "A2", "V-ACTIVE": False, "V-TYPE": "02", "_absolute_row_index": 1},
+        ]
+
+    def test_scrolled_rows_are_the_same_on_both_paths(self, discovery_path):
+        controller, _table = self._table(discovery_path)
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", start_row=1,
+                                       columns="V-NAME")
+
+        assert result["data"] == [
+            {"V-NAME": "A2", "_absolute_row_index": 1},
+            {"V-NAME": "A3", "_absolute_row_index": 2},
+        ]
+
+    def test_tree_path_reads_no_cell_values_over_com(self):
+        controller, table = self._table("tree")
+
+        controller.read_table("wnd[0]/usr/tblTEST")
+
+        # Column names still come from row 0 (three cells); the six data
+        # cells came from the one GetObjectTree call.
+        assert controller._session.GetObjectTree.call_count == 1
+        assert table.GetCell.call_count == 3
+
+
 class TestTableControlColumnTemplates:
     def _table(self, cells):
         table = MagicMock()
