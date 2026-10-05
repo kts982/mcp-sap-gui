@@ -584,6 +584,111 @@ class TestTableControlsStayOneElement:
         assert mock_ctrl.get_screen_elements.call_args.kwargs["expand_tables"] is True
 
 
+class TestClassicListsStayOutOfDiscovery:
+    """One page of an SE16 standard list was 1,139 elements (124k characters),
+    too large for the client to accept: every word is its own lbl[col,row]."""
+
+    _PREFIX = "/app/con[0]/ses[0]/wnd[0]/usr"
+
+    def _screen(self):
+        cells = [_child(f"{self._PREFIX}/lbl[0,0]", "GuiLabel", text="Table:")]
+        for row in (5, 6):
+            cells.append(_child(f"{self._PREFIX}/chk[1,{row}]", "GuiCheckBox",
+                                changeable=True))
+            cells.append(_child(f"{self._PREFIX}/lbl[4,{row}]", "GuiLabel", text="001"))
+        return _child(self._PREFIX, "GuiUserArea", children=cells)
+
+    def test_cells_are_counted_not_listed(self):
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = self._screen()
+        lists = []
+
+        elements = controller.get_screen_elements("wnd[0]/usr", lists=lists)
+
+        assert elements == []
+        assert lists == [{"container": "wnd[0]/usr", "cells": 5, "rows": 3}]
+
+    def test_cell_properties_are_not_read(self):
+        """Skipping costs one COM call per cell (its Id) instead of five."""
+        controller = _make_controller_with_session()
+        usr = self._screen()
+        text = PropertyMock(return_value="")
+        for i in range(usr.Children.Count):
+            type(usr.Children(i)).Text = text
+        controller._session.findById.return_value = usr
+
+        controller.get_screen_elements("wnd[0]/usr")
+
+        assert text.call_count == 0
+
+    def test_other_elements_are_kept(self):
+        controller = _make_controller_with_session()
+        usr = self._screen()
+        button = _child(f"{self._PREFIX}/btnB", "GuiButton")
+        kids = [button] + [usr.Children(i) for i in range(usr.Children.Count)]
+        usr.Children.Count = len(kids)
+        usr.Children.side_effect = lambda i: kids[i]
+        controller._session.findById.return_value = usr
+
+        elements = controller.get_screen_elements("wnd[0]/usr")
+
+        assert [e.id for e in elements] == ["wnd[0]/usr/btnB"]
+
+    def test_expand_tables_lists_the_cells(self):
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = self._screen()
+        lists = []
+
+        elements = controller.get_screen_elements(
+            "wnd[0]/usr", expand_tables=True, lists=lists,
+        )
+
+        assert len(elements) == 5
+        assert lists == []
+
+    def test_table_control_cells_are_not_list_cells(self):
+        """tblT/txtV-F[0,1] also ends in [col,row], but carries a field name."""
+        cell = _child(f"{self._PREFIX}/tblT/txtV-F[0,1]", "GuiTextField")
+        table = _child(f"{self._PREFIX}/tblT", "GuiTableControl", children=[cell])
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = _child(
+            self._PREFIX, "GuiUserArea", children=[table],
+        )
+        lists = []
+
+        controller.get_screen_elements(
+            "wnd[0]/usr", max_depth=3, expand_tables=True, lists=lists,
+        )
+
+        assert lists == []
+
+    async def test_tool_reports_the_list_and_points_to_read_list(self, srv):
+        ctx = _make_mock_ctx()
+        mock_ctrl = MagicMock()
+        summary = {"container": "wnd[0]/usr", "cells": 1139, "rows": 58}
+
+        def get_screen_elements(*args, lists, **kwargs):
+            lists.append(summary)
+            return []
+        mock_ctrl.get_screen_elements.side_effect = get_screen_elements
+        mock_ctrl.get_docking_containers.return_value = []
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            result = await srv.sap_get_screen_elements(ctx)
+
+        assert result["lists"] == [summary]
+        assert "sap_read_list" in result["note"]
+
+    async def test_tool_adds_nothing_without_a_list(self, srv):
+        ctx = _make_mock_ctx()
+        mock_ctrl = MagicMock()
+        mock_ctrl.get_screen_elements.return_value = []
+        mock_ctrl.get_docking_containers.return_value = []
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            result = await srv.sap_get_screen_elements(ctx)
+
+        assert "lists" not in result and "note" not in result
+
+
 class TestTableControlColumnTemplates:
     def _table(self, cells):
         table = MagicMock()

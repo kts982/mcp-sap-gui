@@ -156,7 +156,7 @@ Every action tool also reports a popup that it opened: `screen.popup` carries th
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any. A table control is one element (`expand_tables=true` lists its cells); IDs are returned in the short `wnd[0]/...` form |
+| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any. A table control is one element, and a classic list is reported under `lists` without its cells (`expand_tables=true` lists the cells of both); IDs are returned in the short `wnd[0]/...` form |
 | `sap_screenshot` | Capture a screenshot of the active SAP window. `save_path` also writes a full-resolution PNG (never overwrites an existing file) and returns its path and pixel size; `inline=false` skips the image when only the file is needed |
 
 ## Preview

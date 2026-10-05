@@ -475,8 +475,8 @@ These appear when you execute SPRO activities or use SM30:
 ## Classic Lists (WRITE Output)
 
 A report that prints a plain list (program `SAPMSSY0`, screen 120) has no table \
-object — every word is a `GuiLabel` named `lbl[col,row]`, so discovery returns \
-hundreds of elements per page:
+object — every word is a `GuiLabel` named `lbl[col,row]`. Discovery leaves \
+these cells out and reports the list under `lists` instead:
 - Read it with `sap_read_list`: the visible page as lines of text, plus the list \
 colour of a line (`negative` = red / error, `positive`, `total`, `heading`)
 - Page through a long list with `scroll_to` (see `scroll` in the response)
@@ -1446,8 +1446,9 @@ async def sap_read_list(
     Use it when a report shows a plain list rather than an ALV grid (program
     SAPMSSY0, screen 120), and for F4 hit lists in a popup (window_id=
     'wnd[1]'). Such a list has no table object: every word is its own label,
-    so sap_get_screen_elements returns ~500 elements for one page. This
-    returns the page as the lines the user sees, with no screenshot needed.
+    so sap_get_screen_elements leaves the cells out and reports it under
+    'lists'. This returns the page as the lines the user sees, with no
+    screenshot needed.
 
     - colors: rows whose text has a semantic list colour, e.g. 'negative'
       (red, errors), 'positive' (green), 'total', 'heading'
@@ -1601,6 +1602,16 @@ async def sap_get_tree_node_children(tree_id: str, ctx: Context, node_key: str =
 # Discovery tools
 # ===========================================================================
 
+_LIST_DISCOVERY_NOTE = (
+    "Classic ABAP list: every word is its own cell, so the cells are left "
+    "out. Read it with sap_read_list (window_id = the window in 'container'; "
+    "with_ids=true gives each line's first cell). Any cell's ID is "
+    "<container>/lbl[col,row] (chk[..] for a checkbox, txt[..] for an input "
+    "field): row = first_row + line index, col = character offset in the "
+    "line. expand_tables=true lists every cell."
+)
+
+
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_get_screen_elements(
     ctx: Context,
@@ -1626,7 +1637,9 @@ async def sap_get_screen_elements(
 
     A table control (SM30-style) is ONE element here, not one per cell: use
     sap_read_table(columns_only=true) for its columns and cell_id templates.
-    expand_tables=true lists every visible cell (large).
+    A classic list (report WRITE output, SE16 standard list, F4 hit list) is
+    left out and reported under 'lists': read it with sap_read_list.
+    expand_tables=true lists every visible cell of both (large).
 
     Docking containers sit BESIDE the user area, not inside it: the
     dialog-structure tree of a view cluster (SM34, most IMG activities) and
@@ -1637,22 +1650,27 @@ async def sap_get_screen_elements(
     usr_window = re.search(r"(wnd\[\d+\])/usr$", container_id.strip())
 
     def _discover():
+        lists: list = []
         found = c.get_screen_elements(
             container_id, max_depth=max_depth,
             type_filter=type_filter,
             changeable_only=changeable_only,
             expand_tables=expand_tables,
+            lists=lists,
         )
         docking = c.get_docking_containers(usr_window.group(1)) if usr_window else []
-        return found, docking
+        return found, docking, lists
 
-    elements, docking = await _com(_discover)
+    elements, docking, lists = await _com(_discover)
     result = {
         "element_count": len(elements),
         "elements": [e.__dict__ for e in elements],
     }
     if docking:
         result["docking_containers"] = docking
+    if lists:
+        result["lists"] = lists
+        result["note"] = _LIST_DISCOVERY_NOTE
     return result
 
 

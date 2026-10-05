@@ -233,8 +233,9 @@ class DiscoveryMixin:
         if depth > 3:
             return
         try:
-            for i in range(container.Children.Count):
-                child = container.Children(i)
+            children = container.Children  # once: see _enumerate_elements
+            for i in range(children.Count):
+                child = children(i)
                 ctype = getattr(child, 'Type', '')
                 text = getattr(child, 'Text', '').strip()
 
@@ -597,8 +598,8 @@ class DiscoveryMixin:
 
         A classic list (report output, program SAPMSSY0; also many F4 hit
         lists) has no table object: every word is a GuiLabel named
-        ``lbl[col,row]``. Discovery returns one element per label (about 500
-        for a single page); this reassembles them into the lines a user sees.
+        ``lbl[col,row]``, over 1,000 on one page of an SE16 list (discovery
+        leaves them out); this reassembles them into the lines a user sees.
 
         Args:
             window_id: Window holding the list (a popup for F4 hit lists)
@@ -625,8 +626,9 @@ class DiscoveryMixin:
                 usr = self._session.findById(usr_id)
 
             rows: Dict[int, list] = {}
-            for i in range(usr.Children.Count):
-                child = usr.Children(i)
+            children = usr.Children  # once: see _enumerate_elements
+            for i in range(children.Count):
+                child = children(i)
                 match = self._LIST_CELL_RE.search(child.Id)
                 if not match:
                     continue
@@ -726,7 +728,9 @@ class DiscoveryMixin:
                             max_depth: int = 3,
                             type_filter: str = "",
                             changeable_only: bool = False,
-                            expand_tables: bool = False) -> List[ScreenElement]:
+                            expand_tables: bool = False,
+                            lists: List[Dict[str, Any]] | None = None,
+                            ) -> List[ScreenElement]:
         """
         Enumerate all elements on the current screen.
 
@@ -741,9 +745,12 @@ class DiscoveryMixin:
                 (e.g. "GuiTextField,GuiCTextField"). Empty = all types.
             changeable_only: If True, only return editable/input elements
             expand_tables: If True, also list every visible cell of a
-                GuiTableControl. Off by default: an empty two-column table is
-                76 elements, and read_table / get_column_info describe the
-                columns (incl. a cell-ID template) far more compactly.
+                GuiTableControl and of a classic list. Off by default: an
+                empty two-column table is 76 elements and one page of an SE16
+                list over 1,100, while read_table / read_list describe them
+                far more compactly.
+            lists: If given, receives one summary per container whose
+                classic-list cells were left out: container, cells, rows.
 
         Returns:
             List of ScreenElement objects
@@ -758,12 +765,21 @@ class DiscoveryMixin:
             container = self._session.findById(
                 self._validate_container_id(container_id)
             )
+            list_rows: Dict[str, List[int]] = {}
             elements = self._enumerate_elements(
                 container, max_depth,
                 type_filter_set=type_filter_set,
                 changeable_only=changeable_only,
                 expand_tables=expand_tables,
+                list_rows=list_rows,
             )
+            if lists is not None:
+                for list_container, rows in list_rows.items():
+                    lists.append({
+                        "container": list_container,
+                        "cells": len(rows),
+                        "rows": len(set(rows)),
+                    })
             return elements
         except ValueError:
             raise
@@ -802,8 +818,14 @@ class DiscoveryMixin:
                             current_depth: int = 0,
                             type_filter_set: set = None,
                             changeable_only: bool = False,
-                            expand_tables: bool = False) -> List[ScreenElement]:
-        """Recursively enumerate screen elements."""
+                            expand_tables: bool = False,
+                            list_rows: Dict[str, List[int]] | None = None,
+                            ) -> List[ScreenElement]:
+        """Recursively enumerate screen elements.
+
+        Classic-list cells are left out unless expand_tables; list_rows, when
+        given, collects their row numbers per parent container.
+        """
         elements = []
 
         if current_depth >= max_depth:
@@ -819,11 +841,28 @@ class DiscoveryMixin:
                 return default
 
         try:
-            for i in range(container.Children.Count):
-                child = container.Children(i)
+            # Fetch the collection once: each container.Children access builds
+            # it anew, which made one SE16 list page take 13 s instead of 1.4.
+            children = container.Children
+            for i in range(children.Count):
+                child = children(i)
+                child_id = self._normalize_element_id(child.Id)
+
+                # A classic list has no table object: every word is its own
+                # cell (lbl[col,row]), over 1,000 on one page. read_list shows
+                # them as lines, so count them here and skip their properties.
+                if not expand_tables:
+                    cell = self._LIST_CELL_RE.search(child_id)
+                    if cell:
+                        if list_rows is not None:
+                            parent_id = child_id[:cell.start()]
+                            list_rows.setdefault(parent_id, []).append(
+                                int(cell.group(3))
+                            )
+                        continue
 
                 element = ScreenElement(
-                    id=self._normalize_element_id(child.Id),
+                    id=child_id,
                     type=child.Type,
                     name=prop(child, 'Name', ''),
                     text=str(prop(child, 'Text', ''))[:200],
@@ -852,6 +891,7 @@ class DiscoveryMixin:
                         type_filter_set=type_filter_set,
                         changeable_only=changeable_only,
                         expand_tables=expand_tables,
+                        list_rows=list_rows,
                     )
                     elements.extend(child_elements)
 
