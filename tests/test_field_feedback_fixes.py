@@ -1018,10 +1018,12 @@ class TestPopupAndListFromObjectTree:
         assert "sap_set_field" in popup["calendar"]["hint"]
         assert controller.handle_popup("auto")["action"] == "read"
 
-    def _message_popup(self, title, message):
+    def _message_popup(self, title, message, icon_name=""):
         """SAP's message popup (SAPMSDYP 10) as seen live: the message sits in
-        display-only text fields MESSTXT1.., an empty icon field IK1."""
+        display-only text fields MESSTXT1.., the type is the icon of the empty
+        field IK1 (M_INFO for an I message)."""
         icon = _child(f"{self._WND1}/usr/txtIK1", "GuiTextField")
+        icon.IconName = icon_name
         line = _child(f"{self._WND1}/usr/txtMESSTXT1", "GuiTextField", text=message)
         usr = _child(f"{self._WND1}/usr", "GuiUserArea", children=[icon, line])
         go = _child(f"{self._WND1}/tbar[0]/btn[0]", "GuiButton")
@@ -1029,19 +1031,74 @@ class TestPopupAndListFromObjectTree:
         tbar = _child(f"{self._WND1}/tbar[0]", "GuiToolbar", children=[go])
         return _child(self._WND1, "GuiModalWindow", text=title, children=[usr, tbar])
 
+    @staticmethod
+    def _main_status_bar(controller, message_type, as_popup=True):
+        """The main window's status bar: with MessageAsPopup it holds the
+        type of the message the popup shows (the popup has none)."""
+        sbar = MagicMock(MessageType=message_type, MessageAsPopup=as_popup)
+        serve = controller._session.findById.side_effect
+        controller._session.findById.side_effect = (
+            lambda element_id: sbar if element_id == "wnd[0]/sbar" else serve(element_id))
+
     def test_message_popup_text_is_text_not_input(self, discovery_path):
         """Its display-only fields were inputs: input_required, and the
         action digest (texts only) dropped the message."""
         controller = _make_controller_with_session()
         _serve_window(controller, self._message_popup(
-            "Information", "Document 4711 saved"), discovery_path)
+            "Information", "Document 4711 saved", icon_name="M_INFO"), discovery_path)
 
         popup = controller.get_popup_window()
 
         assert popup["texts"] == ["Document 4711 saved"]
         assert "interactive_elements" not in popup and popup["has_inputs"] is False
-        assert popup["classification"] == "information"
+        assert (popup["classification"], popup["message_type"]) == ("information", "I")
         assert popup["safe_auto_action"] == "confirm"
+
+    def test_a_warning_in_any_language_is_never_auto_continued(self, discovery_path):
+        """The title test only knows "warning": a German logon says "Warnung"
+        and "Weiter", and the popup would have been auto-continued."""
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._message_popup(
+            "Warnung", "Liefertermin liegt in der Vergangenheit"), discovery_path)
+        self._main_status_bar(controller, "W")
+
+        popup = controller.get_popup_window()
+
+        assert popup["classification"] == "warning"
+        assert "safe_auto_action" not in popup
+        assert controller.handle_popup("auto")["action"] == "read"
+
+    def test_the_main_status_bar_gives_the_type_with_message_as_popup(
+            self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._message_popup(
+            "Information", "Document 4711 saved"), discovery_path)
+        self._main_status_bar(controller, "I")
+
+        popup = controller.get_popup_window()
+
+        assert popup["message_type"] == "I"
+        assert popup["safe_auto_action"] == "confirm"
+
+    @pytest.mark.parametrize("icon_name, as_popup", [
+        ("", False), ("", None),
+        ("M_WARN", None),   # not an icon name seen live: not trusted
+    ])
+    def test_a_message_popup_of_unknown_type_is_not_auto_handled(
+            self, discovery_path, icon_name, as_popup):
+        """No known icon, no MessageAsPopup: it could be a warning."""
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._message_popup(
+            "Information", "Document 4711 saved", icon_name=icon_name),
+            discovery_path)
+        if as_popup is not None:
+            self._main_status_bar(controller, "", as_popup=as_popup)
+
+        popup = controller.get_popup_window()
+
+        assert popup["message_popup"] is True
+        assert "safe_auto_action" not in popup
+        assert controller.handle_popup("auto")["action"] == "read"
 
     def test_warning_popup_is_never_auto_continued(self, discovery_path):
         controller = _make_controller_with_session()

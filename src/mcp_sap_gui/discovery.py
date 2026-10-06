@@ -19,6 +19,10 @@ class _PopupFindings:
 
     list_rows: Dict[str, List[int]] = field(default_factory=dict)
     calendars: List[str] = field(default_factory=list)
+    # SAP's message popup (SAPMSDYP): its text fields are MESSTXT1.., its
+    # icon field IK1 shows the message type as an icon (live: M_INFO for I).
+    message_popup: bool = False
+    message_icon: str = ""
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +152,8 @@ class DiscoveryMixin:
             }
         if found.calendars:
             result["calendar"] = self._calendar_summary(found.calendars[0])
+        if found.message_popup:
+            self._read_message_popup_type(result, found.message_icon)
 
         if texts:
             result["texts"] = texts
@@ -222,7 +228,37 @@ class DiscoveryMixin:
         return digest
 
     _POPUP_PROPS = ["Id", "Type", "SubType", "Name", "Text", "Tooltip",
-                    "Changeable", "MessageType"]
+                    "Changeable", "MessageType", "IconName"]
+
+    # Field names are not translated: this recognises SAP's message popup in
+    # any logon language, where its title ("Warning") would not.
+    _MESSAGE_FIELD_RE = re.compile(r"MESSTXT\d+$")
+    _MESSAGE_ICON_RE = re.compile(r"IK\d+$")
+    # Icon names seen live. Only the information icon is mapped: a type
+    # guessed wrong could let a warning be auto-continued.
+    _MESSAGE_ICON_TYPES = {"M_INFO": "I"}
+
+    def _read_message_popup_type(self, result: Dict[str, Any],
+                                 icon: str) -> None:
+        """Mark SAP's message popup and find its message type.
+
+        The popup has no status message of its own (and on A4H the main
+        window's MessageAsPopup stayed False): the type is the icon of its
+        IK1 field. An unknown type keeps the popup out of auto-handling
+        (_classify_popup), as a warning could be behind it.
+        """
+        result["message_popup"] = True
+        if result.get("message_type"):
+            return
+        if icon in self._MESSAGE_ICON_TYPES:
+            result["message_type"] = self._MESSAGE_ICON_TYPES[icon]
+            return
+        try:
+            sbar = self._session.findById("wnd[0]/sbar")
+            if sbar.MessageAsPopup:
+                result["message_type"] = str(sbar.MessageType or "")
+        except Exception:
+            pass
 
     def _calendar_summary(self, calendar_id: str) -> Dict[str, Any]:
         """What an agent needs about the F4 date picker (a Calendar shell)."""
@@ -268,6 +304,11 @@ class DiscoveryMixin:
             if changeable is False and ctype in ('GuiTextField', 'GuiCTextField'):
                 # SAP's message popup (SAPMSDYP) shows the message in
                 # display-only fields: it is text, not an input.
+                name = read('Name', '')
+                if self._MESSAGE_FIELD_RE.search(name):
+                    found.message_popup = True
+                elif self._MESSAGE_ICON_RE.search(name):
+                    found.message_icon = read('IconName', '')
                 if text:
                     texts.append(text)
                 return
@@ -465,7 +506,12 @@ class DiscoveryMixin:
 
         recommended_action = "read"
         safe_auto_action = None
-        if classification == "information" and not has_inputs:
+        # A message popup of unknown type may be a warning: the title test
+        # above only knows the English word.
+        unverified_message = (popup.get("message_popup")
+                              and message_type not in ("I", "S"))
+        if (classification == "information" and not has_inputs
+                and not unverified_message):
             if has_confirm and not has_cancel:
                 recommended_action = "confirm"
                 safe_auto_action = "confirm"
