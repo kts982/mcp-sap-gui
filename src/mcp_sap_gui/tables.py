@@ -241,6 +241,10 @@ class TablesMixin:
         We advance ``firstVisibleRow`` one visible-window at a time so each row is
         rendered before we read it. Without this, an ALV read past the first
         screenful silently drops or corrupts every off-screen row.
+
+        Returns ``(rows, unread_from)``: unread_from is the first row not read
+        because the grid would not scroll to it, else None. Read-only
+        scripting sets no property, so there only the rows on screen read.
         """
         try:
             visible = int(grid.VisibleRowCount)
@@ -254,9 +258,16 @@ class TablesMixin:
         while row < end_row:
             try:
                 grid.firstVisibleRow = row
+                window_end = min(row + visible, end_row)
             except Exception:
-                pass
-            window_end = min(row + visible, end_row)
+                # Rows outside the rendered window would read as row handles.
+                try:
+                    shown = int(grid.firstVisibleRow)
+                except Exception:
+                    return data, row
+                if not shown <= row < shown + visible:
+                    return data, row
+                window_end = min(shown + visible, end_row)
             for r in range(row, window_end):
                 row_data = {}
                 for col in columns:
@@ -267,7 +278,7 @@ class TablesMixin:
                 row_data["_absolute_row_index"] = r
                 data.append(row_data)
             row = window_end
-        return data
+        return data, None
 
     def _read_alv_grid(self, grid, table_id: str, max_rows: int,
                        col_filter: List[str] = None,
@@ -301,10 +312,11 @@ class TablesMixin:
             column_info = all_column_info
 
         data = []
+        unread_from = None
         start_row = max(0, start_row)
         if not columns_only:
             end_row = min(start_row + max_rows, grid.RowCount)
-            data = self._read_alv_rows(grid, columns, start_row, end_row)
+            data, unread_from = self._read_alv_rows(grid, columns, start_row, end_row)
 
         result = {
             "table_id": table_id,
@@ -318,6 +330,14 @@ class TablesMixin:
         }
         if columns_only:
             result["columns_only"] = True
+        if unread_from is not None:
+            result["unread_from_row"] = unread_from
+            result["note"] = (
+                f"Rows from {unread_from} on were not read: the grid would not "
+                "scroll to them (read-only scripting allows no scrolling), and "
+                "off-screen rows read as row handles, not values. Only the "
+                "rows on screen can be read here."
+            )
         return result
 
     def _read_table_control(self, table, table_id: str, max_rows: int,

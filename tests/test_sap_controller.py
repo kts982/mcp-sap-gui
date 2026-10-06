@@ -846,6 +846,40 @@ class TestGridEnhancements:
         # No row should contain the off-screen placeholder handle.
         assert all(row["MATNR"] != "0000000062" for row in result["data"])
 
+    @pytest.mark.parametrize("start_row, shown, expected_rows, unread_from", [
+        (0, 0, list(range(0, 16)), 16),    # what is on screen, then stop
+        (3, 0, list(range(3, 16)), 16),    # inside the rendered window
+        (40, 0, [], 40),                   # outside it: nothing true to read
+    ])
+    def test_alv_read_stops_where_the_grid_cannot_scroll(
+            self, start_row, shown, expected_rows, unread_from):
+        """Read-only scripting sets no property, firstVisibleRow included: the
+        read went on and returned row handles ("0000000062") as values."""
+        controller = self._make_controller_with_session()
+        visible = 16
+        mock_grid = MagicMock()
+        mock_grid.ColumnCount = 1
+        mock_grid.ColumnOrder.return_value = "MATNR"
+        mock_grid.RowCount = 67
+        mock_grid.VisibleRowCount = visible
+
+        def refuse(_self, _value):
+            raise Exception("The scripting is read-only")
+
+        type(mock_grid).firstVisibleRow = property(lambda _self: shown, refuse)
+        mock_grid.GetCellValue.side_effect = (
+            lambda row, col: f"MAT{row:03d}" if shown <= row < shown + visible
+            else "0000000062")
+        controller._session.findById.return_value = mock_grid
+
+        result = controller.read_table("wnd[0]/usr/grid", max_rows=67,
+                                       start_row=start_row)
+
+        assert [row["_absolute_row_index"] for row in result["data"]] == expected_rows
+        assert all(row["MATNR"] != "0000000062" for row in result["data"])
+        assert result["unread_from_row"] == unread_from
+        assert "read-only" in result["note"]
+
     def test_alv_toolbar_includes_tooltip_and_enabled(self):
         """get_alv_toolbar now includes tooltip and enabled per button."""
         controller = self._make_controller_with_session()

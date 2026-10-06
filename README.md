@@ -108,7 +108,7 @@ Read the first 20 rows of the visible table
 
 ### SAP Business Client (experimental)
 
-- Classic transactions in SAP Business Client run in embedded SAP GUI for Windows, so the server-side scripting parameter is still required. `sapgui/nwbc_scripting` gives read-only scripting (same effect as `sapgui/user_scripting` + `sapgui/user_scripting_set_readonly`).
+- Classic transactions in SAP Business Client run in embedded SAP GUI for Windows, so the server-side scripting parameter is still required. `sapgui/nwbc_scripting` gives read-only scripting (same effect as `sapgui/user_scripting` + `sapgui/user_scripting_set_readonly`): write tools refuse, and grids cannot be scrolled, so a table read stops at the rows on screen.
 - Sessions are discovered through the SAP GUI server process's COM Running Object Table entries (`SAPGUISERVER-<pid>`), next to the usual SAP Logon entry. `sap_list_connections` reports `host: "sapguiserver"` for them.
 - Tabs of one Business Client window are sessions of one connection; a second system is a second connection.
 - Business Client connections have no SAP Logon description; the list shows the system and client instead (e.g. `DEV (100)`).

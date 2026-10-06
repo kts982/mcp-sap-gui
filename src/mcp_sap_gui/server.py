@@ -624,7 +624,8 @@ def _check_write(ctx: Context | None = None):
             "This SAP session only allows read-only scripting (server profile "
             "parameter sapgui/user_scripting_set_readonly, or "
             "sapgui/nwbc_scripting in SAP Business Client): nothing can be "
-            "entered, pressed or navigated through scripting. Reading works."
+            "entered, pressed or navigated through scripting. Reading works "
+            "for what is on screen; grids and tables cannot be scrolled."
         )
 
 
