@@ -336,7 +336,11 @@ opens documentation, not the activity.
 
 - **Enter**: Confirm / continue
 - **F3 / Back**: Go back one screen
-- **F4**: Open search help / dropdown (set focus on field first with `sap_set_focus`)
+- **F4**: Value help on the focused field (`sap_set_focus` first). The popup's \
+classification says what opened: `list` (hit list), `date_picker`, `time_picker`, \
+or `input_required` (restriction dialog); `sap_get_workflow_guide("search_help", \
+field_id)` covers each. Dropdowns (`cmb`) have no F4: `sap_set_field` takes an \
+entry's key or text.
 - **F5 / Refresh**: Context-dependent — in table maintenance views this means \
 "New Entries", NOT refresh. Check toolbar button tooltips first.
 - **F8 / Execute**: Run report / execute selection
@@ -481,7 +485,8 @@ these cells out and reports the list under `lists` instead:
 colour of a line (`negative` = red / error, `positive`, `total`, `heading`)
 - Page through a long list with `scroll_to` (see `scroll` in the response)
 - F4 hit lists in a popup are the same kind of list: `window_id="wnd[1]"`
-- To act on a line, read with `with_ids=true`, `sap_set_focus` that label, then F2
+- To act on a line, read with `with_ids=true`, `sap_set_focus` that label, then F2 \
+(Enter to apply a line of an F4 hit list)
 
 ## Web Dynpro Screens
 

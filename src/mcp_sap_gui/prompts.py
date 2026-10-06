@@ -64,66 +64,96 @@ def normalize_transaction(raw: str) -> str:
 def render_search_help_guide(field_id: str) -> str:
     """Return the step-by-step guide for F4 search help on *field_id*."""
     return f"""\
-Follow these steps exactly to use F4 search help on field `{field_id}`:
+Follow these steps to use F4 value help on field `{field_id}`:
 
-## Step 1 — Set focus on the target field
+## Step 1 — Dropdowns have no F4
+A dropdown (`GuiComboBox`, ID prefix `cmb`) opens nothing on F4. List its \
+values and set one by its key or its text:
+```
+sap_get_combobox_entries("{field_id}")
+sap_set_field("{field_id}", "<key or text>")
+```
+For any other field, continue.
+
+## Step 2 — Focus the field and press F4
 ```
 sap_set_focus("{field_id}")
-```
-
-## Step 2 — Open search help
-```
 sap_send_key("F4")
 ```
 
-## Step 3 — Verify the popup opened
-Check that `active_window` is `wnd[1]` or higher in the response.
-If it is still `wnd[0]`, the field may not support F4. Read the status bar:
-```
-sap_read_field("wnd[0]/sbar")
-```
+## Step 3 — See what opened
+The response shows `screen.active_window` and, for a popup, \
+`screen.popup.classification`:
 
-## Step 4 — Discover the popup structure
-```
-sap_get_screen_elements(container_id="wnd[1]/usr", type_filter="GuiGridView,GuiTableControl")
-```
-The popup typically contains a table with selectable values.
-If there are filter fields at the top, fill them first with `sap_set_field`
-and press Enter to narrow results.
+| Response | Meaning | Next |
+|----------|---------|------|
+| still `wnd[0]`, message "No input help is available" | the field has no F4 help | type the value with `sap_set_field` |
+| `list` | hit list | Step 5 |
+| `input_required` with filter fields | restriction dialog | Step 4 |
+| `date_picker` | calendar (date field) | Step 6 |
+| `time_picker` | time picker (time field) | Step 7 |
 
-## Step 5 — Read the results table
+## Step 4 — Restriction dialog
+Some value helps ask for search criteria first. Find the filter fields:
 ```
-sap_read_table("<table_id_from_step_4>", columns_only=true)
+sap_get_screen_elements(container_id="wnd[1]/usr", changeable_only=true)
 ```
-Then read the data columns you need:
-```
-sap_read_table("<table_id>", columns="<relevant_columns>")
-```
+Fill one or more (`*` is a wildcard, e.g. `T00*`) and press Enter: the hit \
+list follows. A pre-filled "Maximum No. of Hits" is flagged by the popup \
+notice; keeping it is fine. A dialog with tabs offers one search path per tab \
+(`sap_select_tab`).
 
-## Step 6 — Select a row
+## Step 5 — Hit list
+An F4 hit list is a classic list, not a grid or table control: \
+`sap_get_screen_elements` leaves its cells out. Read it as lines:
 ```
-sap_select_table_row("<table_id>", <row_index>)
+sap_read_list(window_id="wnd[1]", with_ids=true)
 ```
-Or double-click to select and confirm in one step:
-```
-sap_double_click_cell("<table_id>", <row_index>, "<column_name>")
-```
+- The first line is the column heading; `line_ids` maps each line to a label ID.
+- A longer list has `scroll` in the response: pass `scroll_to` for the next page.
+- The title often shows the count ("57 Hits"). When it equals the maximum \
+number of hits, narrow the selection instead of paging.
 
-## Step 7 — Verify selection
-The popup should close (active_window back to `wnd[0]`).
-Confirm the field was filled:
+Pick a line by focusing it and pressing Enter (the popup's Apply):
 ```
-sap_read_field("{field_id}")
-```
-If the popup is still open, press Enter to confirm:
-```
+sap_set_focus("<line_id>")
 sap_send_key("Enter")
 ```
 
+## Step 6 — Date picker
+Cancel it and type the date in the format the field shows (e.g. `10.10.2026`):
+```
+sap_handle_popup(action="cancel")
+sap_set_field("{field_id}", "<date>")
+```
+Continue copies the calendar's focused date (`focus_date`, today by default) \
+into the field.
+
+## Step 7 — Time picker
+Its three dropdowns show the CURRENT time (`time_picker.shown`). Either cancel \
+and type the time (`17:30:00`, or `173000`: SAP formats it on Enter):
+```
+sap_handle_popup(action="cancel")
+sap_set_field("{field_id}", "<HH:MM:SS>")
+```
+or set the dropdowns (two-digit keys; the IDs are in `time_picker`) and press \
+Continue in the same call:
+```
+sap_set_batch_fields({{"<hour_id>": "08", "<minute_id>": "30", "<second_id>": "00"}}, validate=true)
+```
+
+## Step 8 — Verify
+`active_window` is back to `wnd[0]`. Confirm the value:
+```
+sap_read_field("{field_id}")
+```
+
 ## Common pitfalls
-- **Forgetting sap_set_focus first**: F4 acts on the focused field. Without focus, it may open the wrong search help or do nothing.
-- **Using sap_send_key("F4") without checking the popup**: Always verify `active_window` changed.
-- **Trying to type in the field instead**: Some fields require F4 selection and reject typed values.
+- **No focus first**: F4 acts on the focused field; without it, it opens the wrong help or nothing.
+- **Looking for a table in the popup**: hit lists are classic lists. Use `sap_read_list`, not `sap_read_table`.
+- **Confirming a date or time picker untouched**: it enters today or the current time, not the value you meant.
+- **F4 on a dropdown**: nothing happens. Use the combobox tools.
+- **`sap_handle_popup(action="auto")`**: only reads hit lists and pickers; it never picks a value for you.
 """
 
 

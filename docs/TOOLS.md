@@ -65,7 +65,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | Tool | Description |
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active transaction policy (presets and policy file: see the README's Security Considerations). A bare `/n` leaves the current transaction |
-| `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, or `Save`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients. A key the screen does not accept is not sent: the response lists `available_keys` |
+| `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, `Save`, or `Ctrl+F` / `Ctrl+G` / `Ctrl+P`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients. A key the screen does not accept is not sent: the response lists `available_keys` |
 | `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window. `message_has_long_text` / `message_as_popup` appear when set |
 
 ## Fields And UI Elements
@@ -131,11 +131,11 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 |------|-------------|
 | `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`, the F4 time picker `time_picker` (with its dropdown IDs and the time shown); none is ever auto-handled. SAP's message popup is only auto-confirmed when its icon shows an information message, so a warning in any logon language is not. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are |
 | `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification. After an action the result keeps the popup's title, texts and entered values and drops its now-dead element IDs |
-
-Every action tool also reports a popup that it opened: `screen.popup` carries the classification, texts, button labels and any `prefilled_inputs`, so the values are visible before the agent decides how to respond.
 | `sap_get_toolbar_buttons` | List standard SAP toolbar buttons |
 | `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers (page text only with the Internet Explorer browser control; the Edge control, e.g. the F1 Performance Assistant, is reported as not readable) |
 | `sap_read_list` | Read a classic ABAP list (`WRITE` output, F4 hit lists) as lines of text, with list colours and paging. One page is ~500 label elements to discovery; this returns the lines |
+
+Every action tool also reports a popup that it opened: `screen.popup` carries the classification, texts, button labels and any `prefilled_inputs`, so the values are visible before the agent decides how to respond.
 
 ## Trees
 
@@ -228,7 +228,7 @@ that are better at discovering tools than prompts:
 
 | Prompt | Parameter | What it guides |
 |---|---|---|
-| `sap_search_help` | `field_id` | F4 search help: focus, open popup, browse results, select, confirm |
+| `sap_search_help` | `field_id` | F4 value help by what opens: hit list, restriction dialog, date picker, time picker, or none; dropdowns take `sap_set_field` instead |
 | `sap_table_export` | `table_id` | Read all rows: schema discovery, column selection, pagination |
 | `sap_spro_navigate` | `activity_name` | SPRO customizing: open tree, search/expand, execute activity |
 
