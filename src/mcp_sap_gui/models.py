@@ -73,6 +73,9 @@ class ScreenElement:
     name: str
     text: str
     changeable: bool
+    # Dropdowns (GuiComboBox) only: the selected entry's key; text is then
+    # the entry's text. None elsewhere, and left out of tool responses.
+    key: str | None = None
 
 
 class SAPGUIError(Exception):

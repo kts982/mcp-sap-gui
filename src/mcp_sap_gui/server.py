@@ -997,6 +997,7 @@ async def sap_read_field(field_id: str, ctx: Context) -> dict:
     """Read the value of a field on the current SAP screen.
 
     Returns value, type, changeable status, and labels (left/right).
+    For a dropdown, value is the selected entry's text and key its key.
     Use sap_get_screen_elements to discover field IDs on unknown screens."""
     c = _ctrl(ctx)
     return await _com(lambda: c.read_field(field_id))
@@ -1006,9 +1007,12 @@ async def sap_read_field(field_id: str, ctx: Context) -> dict:
 async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
     """Set (type/enter) a value into an input field on the current SAP screen.
 
-    Works on GuiTextField and GuiCTextField input fields. For filling in
-    multiple fields of a form at once, use sap_set_batch_fields instead.
-    After setting a field, you may need to press Enter to trigger validation."""
+    Works on GuiTextField and GuiCTextField input fields, and on dropdowns
+    (GuiComboBox, ID prefix cmb): there value picks the entry by its key or
+    its text, and the response reports the key and text selected. For
+    filling in multiple fields of a form at once, use sap_set_batch_fields
+    instead. After setting a field, you may need to press Enter to trigger
+    validation."""
     _check_write(ctx)
     _check_okcode_bypass(field_id, value)
     c = _ctrl(ctx)
@@ -1069,7 +1073,9 @@ async def sap_select_combobox_entry(combobox_id: str, key_or_value: str, ctx: Co
     """Select an entry in a combobox/dropdown by its key or display value text.
 
     Accepts either the technical key or the visible display text.
-    Use sap_get_combobox_entries first to see all valid options."""
+    Use sap_get_combobox_entries first to see all valid options.
+    F4 opens nothing on a dropdown; sap_set_field selects entries the same
+    way."""
     _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.select_combobox_entry(combobox_id, key_or_value))
@@ -1108,7 +1114,8 @@ async def sap_set_batch_fields(
     Use this to fill a form or selection screen in one call — more
     efficient than repeated sap_set_field calls. Table-control cells work
     too: take the cell_id template of each column from
-    sap_read_table(columns_only=true) and replace {row}.
+    sap_read_table(columns_only=true) and replace {row}. A dropdown (cmb)
+    takes an entry's key or text, as in sap_set_field.
 
     The result gives counts; `results` lists only the fields that did NOT
     succeed (all of them with verbose=true).
@@ -1698,7 +1705,10 @@ async def sap_get_screen_elements(
     elements, docking, lists = await _com(_discover)
     result = {
         "element_count": len(elements),
-        "elements": [e.__dict__ for e in elements],
+        "elements": [
+            {k: v for k, v in e.__dict__.items() if v is not None}
+            for e in elements
+        ],
     }
     if docking:
         result["docking_containers"] = docking

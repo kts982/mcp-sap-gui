@@ -1079,7 +1079,19 @@ class DiscoveryMixin:
             logger.debug("Could not list docking containers of %s: %s", window_id, e)
             return []
 
-    _DISCOVERY_PROPS = ["Id", "Type", "Name", "Text", "Changeable"]
+    # Key / Value are a dropdown's selection ("" for every other element).
+    _DISCOVERY_PROPS = ["Id", "Type", "Name", "Text", "Changeable", "Key", "Value"]
+
+    @staticmethod
+    def _apply_combobox_selection(element: ScreenElement, key, value) -> None:
+        """Give a dropdown its selected key, and the entry's text as text.
+
+        A dropdown's Text is padded to 200+ characters and, with SAP GUI's
+        "show keys" option, prefixed with the key ("1 DD.MM.YYYY"); Value is
+        the entry's text alone. The empty entry's key is a single space.
+        """
+        element.key = str(key or "").strip()
+        element.text = (str(value or "").strip() or element.text.strip())[:200]
 
     def _elements_from_tree(self, node: Dict[str, Any], max_depth: int,
                             current_depth: int = 0,
@@ -1106,6 +1118,9 @@ class DiscoveryMixin:
                 text=props.get("Text", "")[:200],
                 changeable=props.get("Changeable") == "true",
             )
+            if element.type == "GuiComboBox":
+                self._apply_combobox_selection(
+                    element, props.get("Key"), props.get("Value"))
             if self._wanted(element, type_filter_set, changeable_only):
                 elements.append(element)
             if element.type == "GuiTableControl" and not expand_tables:
@@ -1194,6 +1209,9 @@ class DiscoveryMixin:
                     text=str(prop(child, 'Text', ''))[:200],
                     changeable=prop(child, 'Changeable', False),
                 )
+                if element.type == "GuiComboBox":
+                    self._apply_combobox_selection(
+                        element, prop(child, 'Key', ''), prop(child, 'Value', ''))
 
                 # Apply filters — but always recurse into containers
                 if self._wanted(element, type_filter_set, changeable_only):

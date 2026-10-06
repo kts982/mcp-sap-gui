@@ -5,13 +5,63 @@ Provides all field-level operations for the SAP GUI controller.
 """
 
 import logging
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 class FieldsMixin:
     """Mixin for field operations on SAP GUI screens."""
+
+    # A dropdown's ID names its type: .../cmbNAME, or .../cmbNAME[col,row] as
+    # a table-control cell. Telling it from the ID costs no COM call per
+    # field, which counts in a batch of table cells.
+    _COMBOBOX_ID_RE = re.compile(r"/cmb[^/]*$")
+
+    @staticmethod
+    def _combobox_text(combobox) -> str:
+        """The selected entry's text, without SAP's padding."""
+        try:
+            value = combobox.Value
+        except Exception:
+            return ""
+        return value.strip() if isinstance(value, str) else ""
+
+    def _choose_combobox_entry(self, combobox,
+                               wanted: str) -> Optional[Tuple[str, str]]:
+        """Select the dropdown entry *wanted* names: (key, text), or None.
+
+        *wanted* may be the key (what sap_read_table shows for a dropdown
+        cell), the entry's text, or "key text" (how the dropdown shows it
+        with SAP GUI's "show keys" option on). Keys win over texts. Padding
+        is ignored: the empty entry's key is a single space.
+        """
+        wanted = str(wanted)
+        try:
+            # Most callers pass a key: one COM call instead of reading every
+            # entry. An unknown key raises.
+            combobox.Key = wanted
+            return wanted, self._combobox_text(combobox)
+        except Exception:
+            pass
+
+        entries = combobox.Entries
+        pairs = []
+        for i in range(entries.Count):
+            entry = entries(i)
+            pairs.append((str(entry.Key), str(entry.Value)))
+        target = wanted.strip()
+        for matches in (
+            lambda key, text: key.strip() == target,
+            lambda key, text: text.strip() == target,
+            lambda key, text: f"{key.strip()} {text.strip()}" == target,
+        ):
+            for key, text in pairs:
+                if matches(key, text):
+                    combobox.Key = key
+                    return key, text.strip()
+        return None
 
     # =========================================================================
     # Field Operations
@@ -43,6 +93,11 @@ class FieldsMixin:
                 "name": getattr(element, 'Name', ''),
                 "changeable": getattr(element, 'Changeable', None),
             }
+            if result["type"] == "GuiComboBox":
+                # Text is padded to 255 characters and may carry the key.
+                result["value"] = (self._combobox_text(element)
+                                   or str(result["value"]).strip())
+                result["key"] = str(getattr(element, 'Key', '')).strip()
 
             # Extended metadata for text fields
             for attr, key in [
@@ -82,6 +137,9 @@ class FieldsMixin:
         """
         Set a field value on the screen.
 
+        A dropdown (GuiComboBox) has no settable text: *value* picks the
+        entry by key, text or "key text" instead.
+
         Args:
             field_id: SAP GUI element ID
             value: Value to set
@@ -93,6 +151,9 @@ class FieldsMixin:
 
         try:
             element = self._find_element(field_id)
+            if self._COMBOBOX_ID_RE.search(field_id):
+                return self._select_entry_result({"field_id": field_id},
+                                                 element, value)
             element.text = value
 
             logger.debug("Set %s = %s", field_id, self._mask_field_value(field_id, value))
@@ -230,12 +291,9 @@ class FieldsMixin:
         """
         Select an entry in a combobox/dropdown.
 
-        First tries to set the key directly. If that fails, searches the
-        Entries collection by value text.
-
         Args:
             combobox_id: SAP GUI combobox ID (e.g., 'wnd[0]/usr/cmbLANGU')
-            key_or_value: Key or display value text of the entry to select
+            key_or_value: Key, display text, or "key text" of the entry
 
         Returns:
             Dict with result status and selected key/value
@@ -244,41 +302,30 @@ class FieldsMixin:
 
         try:
             combobox = self._find_element(combobox_id)
-
-            # Try setting key directly first
-            try:
-                combobox.Key = key_or_value
-                return {
-                    "combobox_id": combobox_id,
-                    "key": key_or_value,
-                    "status": "success",
-                }
-            except Exception:
-                pass
-
-            # Fallback: search Entries by value text
-            entries = combobox.Entries
-            for i in range(entries.Count):
-                entry = entries(i)
-                if entry.Value == key_or_value or entry.Key == key_or_value:
-                    combobox.Key = entry.Key
-                    return {
-                        "combobox_id": combobox_id,
-                        "key": entry.Key,
-                        "value": entry.Value,
-                        "status": "success",
-                    }
-
-            return {
-                "combobox_id": combobox_id,
-                "error": f"Entry '{key_or_value}' not found in combobox",
-            }
+            return self._select_entry_result({"combobox_id": combobox_id},
+                                             combobox, key_or_value)
         except Exception as e:
             return self._error_result(
                 {"combobox_id": combobox_id},
                 e,
                 "Could not select combobox entry",
             )
+
+    def _select_entry_result(self, result: Dict[str, Any], combobox,
+                             wanted: str) -> Dict[str, Any]:
+        """Select a dropdown entry and report it in *result*."""
+        chosen = self._choose_combobox_entry(combobox, wanted)
+        if chosen is None:
+            result["error"] = f"Entry '{wanted}' not found in combobox"
+            result["hint"] = (
+                "sap_get_combobox_entries lists its entries; pass a key or "
+                "an entry's text."
+            )
+            return result
+        result["key"] = chosen[0].strip()
+        result["value"] = chosen[1]
+        result["status"] = "success"
+        return result
 
     def select_tab(self, tab_id: str) -> Dict[str, Any]:
         """
@@ -335,6 +382,7 @@ class FieldsMixin:
             return {
                 "combobox_id": combobox_id,
                 "current_key": getattr(combo, 'Key', ''),
+                "current_value": self._combobox_text(combo),
                 "entry_count": len(entries),
                 "entries": entries,
             }
@@ -386,7 +434,15 @@ class FieldsMixin:
                     results[field_id] = "skipped: read-only"
                     skipped += 1
                     continue
-                element.text = value
+                if self._COMBOBOX_ID_RE.search(field_id):
+                    if self._choose_combobox_entry(element, value) is None:
+                        results[field_id] = (
+                            f"error: no dropdown entry '{value}' "
+                            "(sap_get_combobox_entries lists them)"
+                        )
+                        continue
+                else:
+                    element.text = value
                 results[field_id] = "success"
             except Exception as e:
                 results[field_id] = (

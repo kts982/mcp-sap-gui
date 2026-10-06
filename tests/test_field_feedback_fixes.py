@@ -505,7 +505,8 @@ def _tree_value(value):
     return ""
 
 
-def _object_tree_json(element, props=("Id", "Type", "Name", "Text", "Changeable")):
+def _object_tree_json(element, props=("Id", "Type", "Name", "Text", "Changeable",
+                                      "Key", "Value")):
     """What GetObjectTree returns for a _child() screen."""
     def node(el):
         result = {"properties": {name: _tree_value(getattr(el, name)) for name in props}}
@@ -820,7 +821,7 @@ class TestObjectTreeDiscovery:
         elements = controller.get_screen_elements("wnd[0]/usr")
 
         controller._session.GetObjectTree.assert_called_once_with(
-            "wnd[0]/usr", ["Id", "Type", "Name", "Text", "Changeable"],
+            "wnd[0]/usr", ["Id", "Type", "Name", "Text", "Changeable", "Key", "Value"],
         )
         assert [(e.id, e.text, e.changeable) for e in elements] == [
             ("wnd[0]/usr/sub", "", False),
@@ -1617,3 +1618,198 @@ class TestReadList:
         mock_ctrl.read_list.assert_called_once_with(
             "wnd[1]", max_lines=200, scroll_to=47, with_ids=True,
         )
+
+
+# ===========================================================================
+# Dropdowns (GuiComboBox)
+# ===========================================================================
+
+def _dropdown(entries, current=" "):
+    """A GuiComboBox mock: setting an unknown Key raises, as it does live."""
+    combo = MagicMock()
+    combo.Type = "GuiComboBox"
+    state = {"key": current}
+    texts = dict(entries)
+
+    def set_key(_self, key):
+        if key not in texts:
+            raise Exception("Invalid key")
+        state["key"] = key
+
+    type(combo).Key = property(lambda _self: state["key"], set_key)
+    type(combo).Value = property(lambda _self: texts[state["key"]])
+    type(combo).Text = property(
+        lambda _self: f"{state['key']} {texts[state['key']]}".ljust(255))
+    items = [MagicMock(Key=key, Value=text) for key, text in entries]
+    combo.Entries.Count = len(items)
+    combo.Entries.side_effect = lambda i: items[i]
+    return combo, state
+
+
+_TIME_FORMATS = [
+    ("0", "24 Hour Format (Example: 12:05:10)"),
+    ("1", "12 Hour Format (Example: 12:05:10 PM)"),
+]
+
+
+class TestDropdownDiscovery:
+    """A dropdown's Text is padded to 200+ characters and, with SAP GUI's
+    "show keys" option, prefixed with the key (live on SU3 / SM37):
+    discovery reports the entry's text and the key instead."""
+
+    _PREFIX = "/app/con[0]/ses[0]/wnd[0]"
+
+    def _screen(self, key, value):
+        combo = _child(f"{self._PREFIX}/usr/cmbTIMEFM", "GuiComboBox",
+                       changeable=True, text=f"{key} {value}".ljust(200))
+        combo.Key, combo.Value = key, value
+        field = _child(f"{self._PREFIX}/usr/ctxtFROM_TIME", "GuiCTextField",
+                       changeable=True, text="08:30:00")
+        return _child(f"{self._PREFIX}/usr", "GuiUserArea", children=[combo, field])
+
+    def test_key_and_entry_text(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve(controller, self._screen("1", "DD.MM.YYYY (Gregorian Date)"),
+               discovery_path)
+
+        combo, field = controller.get_screen_elements("wnd[0]/usr")
+
+        assert (combo.key, combo.text) == ("1", "DD.MM.YYYY (Gregorian Date)")
+        assert (field.key, field.text) == (None, "08:30:00")
+
+    def test_empty_selection(self, discovery_path):
+        """SM37 "Or after event": nothing selected is the key " "."""
+        controller = _make_controller_with_session()
+        _serve(controller, self._screen(" ", " "), discovery_path)
+
+        combo, _ = controller.get_screen_elements("wnd[0]/usr")
+
+        assert (combo.key, combo.text) == ("", "")
+
+    async def test_key_only_in_dropdown_elements(self, srv):
+        from mcp_sap_gui.models import ScreenElement
+        mock_ctrl = MagicMock()
+        mock_ctrl.get_screen_elements.return_value = [
+            ScreenElement("wnd[0]/usr/cmbTIMEFM", "GuiComboBox", "TIMEFM",
+                          "24 Hour Format", True, key="0"),
+            ScreenElement("wnd[0]/usr/txtF", "GuiTextField", "F", "", True),
+        ]
+        mock_ctrl.get_docking_containers.return_value = []
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            result = await srv.sap_get_screen_elements(_make_mock_ctx())
+
+        combo, field = result["elements"]
+        assert combo["key"] == "0"
+        assert "key" not in field
+
+
+class TestDropdownWrites:
+    """sap_set_field and sap_set_batch_fields wrote .text, which a dropdown
+    refuses ("Could not set field", live on SM37 and SU3)."""
+
+    _ID = "wnd[0]/usr/cmbTIMEFM"
+
+    def _controller(self, combo):
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = combo
+        return controller
+
+    @pytest.mark.parametrize("wanted", [
+        "1",                                          # key
+        "12 Hour Format (Example: 12:05:10 PM)",      # entry text
+        "1 12 Hour Format (Example: 12:05:10 PM)",    # as shown with keys on
+        "  1 ",                                       # padded
+    ])
+    def test_set_field_picks_the_entry(self, wanted):
+        combo, state = _dropdown(_TIME_FORMATS, current="0")
+
+        result = self._controller(combo).set_field(self._ID, wanted)
+
+        assert state["key"] == "1"
+        assert result == {
+            "field_id": self._ID, "key": "1",
+            "value": "12 Hour Format (Example: 12:05:10 PM)", "status": "success",
+        }
+
+    def test_keys_win_over_texts(self):
+        combo, state = _dropdown([("A", "B"), ("B", "C")], current="A")
+
+        self._controller(combo).set_field(self._ID, "B")
+
+        assert state["key"] == "B"
+
+    def test_space_key_matches_empty(self):
+        combo, state = _dropdown([("X", "Selected"), (" ", " ")], current="X")
+
+        result = self._controller(combo).set_field(self._ID, "")
+
+        assert state["key"] == " "
+        assert (result["key"], result["value"]) == ("", "")
+
+    def test_unknown_entry_is_an_error_with_a_hint(self):
+        combo, state = _dropdown(_TIME_FORMATS, current="0")
+
+        result = self._controller(combo).set_field(self._ID, "NOT_AN_ENTRY")
+
+        assert state["key"] == "0"
+        assert "not found" in result["error"]
+        assert "sap_get_combobox_entries" in result["hint"]
+
+    def test_text_fields_still_take_text(self):
+        field = MagicMock()
+        controller = self._controller(field)
+
+        controller.set_field("wnd[0]/usr/ctxtFROM_TIME", "08:30:00")
+
+        assert field.text == "08:30:00"
+
+    def test_select_combobox_entry_takes_the_shown_form(self):
+        combo, state = _dropdown(_TIME_FORMATS, current="1")
+
+        result = self._controller(combo).select_combobox_entry(
+            self._ID, "0 24 Hour Format (Example: 12:05:10)")
+
+        assert state["key"] == "0"
+        assert result["status"] == "success"
+
+    def test_batch_fills_dropdown_cells(self):
+        """SM30 table controls have dropdown columns (cmb...[col,row])."""
+        combo, state = _dropdown(_TIME_FORMATS, current="0")
+        text = MagicMock()
+        cell = "wnd[0]/usr/tblSAPLTCTRL/cmbV_T-FMT[2,0]"
+        controller = _make_controller_with_session()
+        controller._session.findById.side_effect = (
+            lambda element_id: combo if "cmb" in element_id else text)
+
+        result = controller.set_batch_fields({
+            cell: "12 Hour Format (Example: 12:05:10 PM)",
+            "wnd[0]/usr/tblSAPLTCTRL/txtV_T-NAME[1,0]": "Night shift",
+        })
+
+        assert (result["succeeded"], result["failed"]) == (2, 0)
+        assert state["key"] == "1"
+        assert text.text == "Night shift"
+
+    def test_batch_reports_an_unknown_entry(self):
+        combo, _ = _dropdown(_TIME_FORMATS, current="0")
+        controller = self._controller(combo)
+
+        result = controller.set_batch_fields({self._ID: "99"})
+
+        assert result["failed"] == 1
+        assert "no dropdown entry '99'" in result["results"][self._ID]
+
+    def test_read_field_gives_text_and_key(self):
+        combo, _ = _dropdown(_TIME_FORMATS, current="1")
+
+        result = self._controller(combo).read_field(self._ID)
+
+        assert result["value"] == "12 Hour Format (Example: 12:05:10 PM)"
+        assert result["key"] == "1"
+
+    def test_entries_report_the_current_text(self):
+        combo, _ = _dropdown(_TIME_FORMATS, current="0")
+
+        result = self._controller(combo).get_combobox_entries(self._ID)
+
+        assert result["current_value"] == "24 Hour Format (Example: 12:05:10)"

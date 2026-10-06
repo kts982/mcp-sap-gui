@@ -72,16 +72,16 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_read_field` | Read a field value with metadata |
-| `sap_set_field` | Set a field value |
+| `sap_read_field` | Read a field value with metadata. For a dropdown, `value` is the selected entry's text and `key` its key |
+| `sap_set_field` | Set a field value. On a dropdown (`cmb`) the value selects the entry by its key or its text |
 | `sap_press_button` | Press a button. On the status bar (`wnd[0]/sbar`) it opens the message's long text, which shows as a list popup (`sap_read_list(window_id="wnd[1]")`) |
 | `sap_select_menu` | Select a menu item or submenu |
 | `sap_select_checkbox` | Select or clear a checkbox |
 | `sap_select_radio_button` | Select a radio button |
-| `sap_select_combobox_entry` | Select a combobox entry by key or visible value |
+| `sap_select_combobox_entry` | Select a combobox entry by key, visible text, or both as shown with SAP GUI's "show keys" option (`1 DD.MM.YYYY`) |
 | `sap_select_tab` | Select a tab strip tab |
-| `sap_get_combobox_entries` | List combobox entries |
-| `sap_set_batch_fields` | Set multiple fields in one call, with optional `validate` and `skip_readonly` support for safer form fill. Returns counts and lists only the fields that did not succeed (`verbose=true` lists all). Works on table-control cells via the `cell_id` templates from `sap_read_table(columns_only=true)` |
+| `sap_get_combobox_entries` | List combobox entries, with the current key and text |
+| `sap_set_batch_fields` | Set multiple fields in one call, with optional `validate` and `skip_readonly` support for safer form fill. Returns counts and lists only the fields that did not succeed (`verbose=true` lists all). Works on table-control cells via the `cell_id` templates from `sap_read_table(columns_only=true)`, and on dropdowns (key or text) |
 | `sap_read_textedit` | Read a multiline text editor |
 | `sap_set_textedit` | Set a multiline text editor |
 | `sap_set_focus` | Set focus to a screen element |
@@ -156,7 +156,7 @@ Every action tool also reports a popup that it opened: `screen.popup` carries th
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any. A table control is one element, and a classic list is reported under `lists` without its cells (`expand_tables=true` lists the cells of both); IDs are returned in the short `wnd[0]/...` form |
+| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any. A table control is one element, and a classic list is reported under `lists` without its cells (`expand_tables=true` lists the cells of both); a dropdown reports its selected `key` and the entry's text; IDs are returned in the short `wnd[0]/...` form |
 | `sap_screenshot` | Capture a screenshot of the active SAP window. `save_path` also writes a full-resolution PNG (never overwrites an existing file) and returns its path and pixel size; `inline=false` skips the image when only the file is needed |
 
 ## Preview
