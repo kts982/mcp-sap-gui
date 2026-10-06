@@ -865,7 +865,7 @@ class SAPGUIControllerBase:
             )
 
     # The keys sap_send_key offers: Enter, F1-F12, Shift+F1-F9, Ctrl+F/G/P.
-    _SENDABLE_VKEYS = (*range(0, 22), 32, 33, 34)
+    _SENDABLE_VKEYS = (*range(0, 22), 71, 84, 86)
 
     @staticmethod
     def _vkey_allowed(window, vkey: int) -> bool:
@@ -884,7 +884,7 @@ class SAPGUIControllerBase:
             return f"F{vkey}"
         if 13 <= vkey <= 24:
             return f"Shift+F{vkey - 12}"
-        return {32: "Ctrl+F", 33: "Ctrl+G", 34: "Ctrl+P"}.get(vkey, str(vkey))
+        return {71: "Ctrl+F", 84: "Ctrl+G", 86: "Ctrl+P"}.get(vkey, str(vkey))
 
     def press_enter(self) -> Dict[str, Any]:
         """Press Enter key."""

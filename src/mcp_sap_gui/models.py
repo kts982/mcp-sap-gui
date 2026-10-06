@@ -26,7 +26,7 @@ class VKey(IntEnum):
     F12 = 12  # Cancel
     SHIFT_F1 = 13
     SHIFT_F2 = 14
-    SHIFT_F3 = 15  # Back (same as F3)
+    SHIFT_F3 = 15  # Exit
     SHIFT_F4 = 16
     SHIFT_F5 = 17
     SHIFT_F6 = 18
@@ -34,9 +34,11 @@ class VKey(IntEnum):
     SHIFT_F8 = 20
     SHIFT_F9 = 21
     CTRL_S = 11     # Save (same as F11)
-    CTRL_F = 32     # Find
-    CTRL_G = 33     # Continue search
-    CTRL_P = 34     # Print
+    # Ctrl+letter codes per the VKey table of the scripting API guide
+    # (7.60 and 8.10): 32-34 are Ctrl+F8..F10, not Ctrl+F/G/P.
+    CTRL_F = 71     # Find
+    CTRL_G = 84     # Continue search
+    CTRL_P = 86     # Print
     ESC = 12        # Cancel (same as F12)
 
 
