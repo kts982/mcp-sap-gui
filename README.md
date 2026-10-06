@@ -6,7 +6,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
 
-Current release: `0.4.0` for local Windows use over MCP `stdio`.
+Current release: `0.5.0` for local Windows use over MCP `stdio`.
 
 [![CI](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml)
 [![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
@@ -18,6 +18,17 @@ Current release: `0.4.0` for local Windows use over MCP `stdio`.
 - Primary repository: GitHub (`kts982/mcp-sap-gui`).
 
 ## What's New
+
+**0.5.0 — the SAP GUI Scripting API, used to the full.** This round went through the 8.10 Scripting API guide on a trial system and closed the gaps it found:
+
+- **Much faster on large screens.** On SAP GUI 7.70 PL3 or later a whole screen, popup, list page or table control is read in one call (`GetObjectTree`): a 1,139-cell list page takes 0.2 s instead of 4.7 s. Older releases fall back to reading element by element.
+- **Value help that agents get right.** F4 popups are recognised for what they are (hit list, restriction dialog, date picker, time picker) and never auto-cancelled, and a rewritten `search_help` guide covers each case. Dropdowns are set with `sap_set_field` and `sap_set_batch_fields` by key or text, and discovery shows their selected key instead of 200 padded characters.
+- **Safer popups.** SAP's message popups are recognised in any logon language, and only an information message is ever auto-confirmed: a warning standing between you and a save is always left to you.
+- **Keys that mean what they say.** `sap_send_key` refuses a key the screen does not accept and lists the ones it does, and `Ctrl+F` / `Ctrl+G` / `Ctrl+P` now send Find / Find next / Print (they sent Ctrl+F8 to Ctrl+F10 before).
+- **More of SAP's own metadata.** Session info reports the SAP GUI release and whether the server only allows read-only scripting (write tools then refuse up front); ALV cells report their type, error or warning state, F4 help and hotspots; an ALV toolbar menu lists its items when it opens; a status message with a long text says so, and pressing the status bar opens it.
+- **SAP Business Client (experimental).** Sessions of Business Client's embedded SAP GUI are discovered next to SAP Logon's. Details: [SAP Business Client](#sap-business-client-experimental).
+
+Changed behaviour when upgrading: discovery elements no longer carry `visible` (SAP GUI Scripting has no such property, so it was always true); F4 hit lists are classified `list` instead of `information`; a key the screen does not accept returns an error with `available_keys` instead of a COM error.
 
 **0.4.0 — shaped by two days of real agent work on a live system.** The lesson was that token cost per call hurts more than missing tools, and that a few screens could not be reached at all:
 
@@ -40,6 +51,7 @@ This server allows AI assistants to:
 - Connect to SAP systems (like double-clicking in SAP Logon Pad)
 - Execute transactions (MM03, VA01, /SCWM/MON, etc.)
 - Read and write screen fields, checkboxes, radio buttons, comboboxes, and tabs
+- Use F4 value help: hit lists, restriction dialogs, date and time pickers
 - Select menu items from the menu bar (Table View, Edit, Selection, etc.)
 - Navigate through SAP screens using keyboard keys and buttons
 - Extract data from ALV grids (GuiGridView) and classic table controls (GuiTableControl)

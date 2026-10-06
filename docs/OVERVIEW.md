@@ -17,12 +17,12 @@ This project is intentionally focused on **real SAP GUI automation**, not browse
 
 ## Current Release Shape
 
-The current public release is **`0.4.0`**.
+The current public release is **`0.5.0`**.
 
 That means:
 
 - Windows only
-- SAP GUI for Windows only
+- SAP GUI for Windows only, including the SAP GUI embedded in SAP Business Client (experimental)
 - MCP `stdio` (default) and `streamable HTTP` transports
 - interactive MCP client usage only
 
@@ -47,7 +47,8 @@ This project reduces that work by giving an assistant a structured interface to 
 The current strengths are:
 
 - strong SAP GUI coverage across fields, tables, ALV grids, classic report lists, trees (including the docked dialog structure of view clusters), menus, and popups
-- responses sized for an agent's context: one element per table control, short element IDs, lists as lines of text
+- responses sized for an agent's context: one element per table control, short element IDs, lists as lines of text; on SAP GUI 7.70 PL3 or later a whole screen is read in one call
+- popups recognised for what they are (F4 hit lists, date and time pickers, SAP messages in any logon language), and only clearly safe ones dismissed automatically
 - discovery-first workflows that reduce brittle hardcoded IDs
 - safety controls: read-only mode, a configurable transaction policy (presets plus a policy file with allow and block patterns), tag-based policy profiles, save confirmation via elicitation-capable clients, and user-defined confirmation points that make whole categories of writes ask before they run
 - built-in MCP guidance so clients start with better navigation patterns
@@ -55,7 +56,7 @@ The current strengths are:
 
 ## What It Is Not Trying To Be Yet
 
-`0.4.0` is not yet:
+`0.5.0` is not yet:
 
 - a remote multi-user SAP automation service
 - a Fiori or browser automation product
