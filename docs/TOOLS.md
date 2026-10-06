@@ -129,7 +129,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`; neither is ever auto-handled. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are |
+| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`, the F4 time picker `time_picker` (with its dropdown IDs and the time shown); none is ever auto-handled. SAP's message popup is only auto-confirmed when its icon shows an information message, so a warning in any logon language is not. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are |
 | `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification. After an action the result keeps the popup's title, texts and entered values and drops its now-dead element IDs |
 
 Every action tool also reports a popup that it opened: `screen.popup` carries the classification, texts, button labels and any `prefilled_inputs`, so the values are visible before the agent decides how to respond.

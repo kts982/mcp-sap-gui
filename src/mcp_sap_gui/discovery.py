@@ -165,10 +165,16 @@ class DiscoveryMixin:
         else:
             result["has_inputs"] = False
 
-        prefilled = self._prefilled_inputs(interactive_elements)
-        if prefilled:
-            result["prefilled_inputs"] = prefilled
-            result["notice"] = self._PREFILL_NOTICE
+        time_picker = self._time_picker_summary(interactive_elements)
+        if time_picker:
+            # Its hint says what the pre-filled notice would: Continue
+            # enters the time shown, the current time.
+            result["time_picker"] = time_picker
+        else:
+            prefilled = self._prefilled_inputs(interactive_elements)
+            if prefilled:
+                result["prefilled_inputs"] = prefilled
+                result["notice"] = self._PREFILL_NOTICE
 
         return self._classify_popup(result)
 
@@ -222,7 +228,8 @@ class DiscoveryMixin:
         buttons = [b for b in buttons if b]
         if buttons:
             digest["buttons"] = buttons
-        for key in ("list", "calendar", "prefilled_inputs", "notice"):
+        for key in ("list", "calendar", "time_picker", "prefilled_inputs",
+                    "notice"):
             if key in popup:
                 digest[key] = popup[key]
         return digest
@@ -259,6 +266,30 @@ class DiscoveryMixin:
                 result["message_type"] = str(sbar.MessageType or "")
         except Exception:
             pass
+
+    # F4 on a time field (SAPLSHL3 101, "Choose Time"): three dropdowns.
+    _TIME_PICKER_RE = re.compile(r"SHL3_TIME-S(HOUR|MINUTE|SECOND)$")
+
+    def _time_picker_summary(self, interactive_elements: list) -> Dict[str, Any]:
+        """What an agent needs about the F4 time picker, or {} for others."""
+        parts = {}
+        for el in interactive_elements:
+            match = self._TIME_PICKER_RE.search(el.get("name", ""))
+            if match and el.get("type") == "GuiComboBox":
+                parts[match.group(1).lower()] = el
+        if len(parts) != 3:
+            return {}
+        order = ("hour", "minute", "second")
+        summary: Dict[str, Any] = {f"{part}_id": parts[part]["id"] for part in order}
+        summary["shown"] = ":".join(parts[part].get("text", "") for part in order)
+        summary["hint"] = (
+            "Time picker (F4 on a time field). It shows the CURRENT time: "
+            "Continue enters that. To enter a time, cancel it and type the "
+            "time into the field with sap_set_field (HH:MM:SS), or set the "
+            "three dropdowns (two-digit keys, e.g. '08') with "
+            "sap_set_batch_fields and press Enter."
+        )
+        return summary
 
     def _calendar_summary(self, calendar_id: str) -> Dict[str, Any]:
         """What an agent needs about the F4 date picker (a Calendar shell)."""
@@ -485,6 +516,9 @@ class DiscoveryMixin:
             # Continue/Cancel made it look like a confirmation; continuing
             # writes the focused date (today) into the field.
             classification = "date_picker"
+        elif popup.get("time_picker"):
+            # Like the calendar: Continue writes the current time.
+            classification = "time_picker"
         elif has_inputs or any(p in text_blob for p in self._POPUP_INPUT_PATTERNS):
             classification = "input_required"
         elif (

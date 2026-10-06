@@ -1101,6 +1101,39 @@ class TestPopupAndListFromObjectTree:
         assert "safe_auto_action" not in popup
         assert controller.handle_popup("auto")["action"] == "read"
 
+    def _time_picker(self):
+        """F4 on a time field as seen live (SAPLSHL3 101, SM37 From time)."""
+        parts = [
+            _child(f"{self._WND1}/usr/cmbSHL3_TIME-S{part}", "GuiComboBox",
+                   changeable=True, text=value)
+            for part, value in (("HOUR", "20"), ("MINUTE", "26"), ("SECOND", "29"))
+        ]
+        usr = _child(f"{self._WND1}/usr", "GuiUserArea", children=parts)
+        buttons = []
+        for index, tooltip in ((0, "Continue   (Enter)"), (12, "Cancel   (F12)")):
+            button = _child(f"{self._WND1}/tbar[0]/btn[{index}]", "GuiButton")
+            button.Tooltip = tooltip
+            buttons.append(button)
+        tbar = _child(f"{self._WND1}/tbar[0]", "GuiToolbar", children=buttons)
+        return _child(self._WND1, "GuiModalWindow", text="Choose Time",
+                      children=[usr, tbar])
+
+    def test_time_picker(self, discovery_path):
+        """It was input_required with a generic pre-fill notice: Continue
+        enters the current time, which the agent never chose."""
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._time_picker(), discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert popup["classification"] == "time_picker"
+        assert "safe_auto_action" not in popup
+        assert popup["time_picker"]["shown"] == "20:26:29"
+        assert popup["time_picker"]["second_id"] == "wnd[1]/usr/cmbSHL3_TIME-SSECOND"
+        assert "sap_set_field" in popup["time_picker"]["hint"]
+        assert "notice" not in popup
+        assert controller.handle_popup("auto")["action"] == "read"
+
     def test_warning_popup_is_never_auto_continued(self, discovery_path):
         controller = _make_controller_with_session()
         _serve_window(controller, self._message_popup(
