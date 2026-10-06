@@ -1702,7 +1702,10 @@ def _fake_pythoncom(rot_names=(), enum_error=None):
     monikers = []
     for name in rot_names:
         moniker = MagicMock()
-        moniker.GetDisplayName.side_effect = lambda ctx, left, _n=name: _n
+        if isinstance(name, Exception):
+            moniker.GetDisplayName.side_effect = name
+        else:
+            moniker.GetDisplayName.side_effect = lambda ctx, left, _n=name: _n
         monikers.append(moniker)
     if enum_error is not None:
         pythoncom.GetRunningObjectTable.side_effect = enum_error
@@ -1847,6 +1850,18 @@ class TestEngineDiscovery:
         with pytest.raises(SAPGUIError, match="sapgui/user_scripting"):
             self._run(controller, controller.connect_to_existing_session, 0, 0)
         assert controller.is_connected is False
+
+    def test_an_unreadable_rot_entry_hides_nothing(self):
+        """Another application's ROT entry may fail GetDisplayName: reading
+        all names in one go dropped every SAP GUI server engine with it."""
+        controller = self._make_controller(
+            {}, rot_names=["SAPGUI", Exception("RPC server unavailable"),
+                           "SAPGUISERVER"],
+        )
+
+        names = self._run(controller, controller._list_rot_names)
+
+        assert names == ["SAPGUI", "SAPGUISERVER"]
 
     def test_rot_enumeration_failure_falls_back_to_saplogon(self):
         conn = _fake_connection("/app/con[0]", [_fake_session("s")], description="DEV")

@@ -144,15 +144,22 @@ class SAPGUIControllerBase:
         return self._application
 
     def _list_rot_names(self) -> List[str]:
-        """Return the display names of all COM Running Object Table entries."""
+        """Return the display names of all COM Running Object Table entries.
+
+        Other applications register there too: one whose name cannot be read
+        is skipped, so it cannot hide the SAP entries.
+        """
         import pythoncom
 
         rot = pythoncom.GetRunningObjectTable()
         bind_ctx = pythoncom.CreateBindCtx(0)
-        return [
-            str(moniker.GetDisplayName(bind_ctx, None))
-            for moniker in rot.EnumRunning()
-        ]
+        names = []
+        for moniker in rot.EnumRunning():
+            try:
+                names.append(str(moniker.GetDisplayName(bind_ctx, None)))
+            except Exception as e:
+                logger.debug("Skipping unreadable ROT entry: %s", e)
+        return names
 
     def _get_engine_from_rot(self, rot_name: str):
         """Resolve a ROT entry to its scripting engine, or None on failure."""
