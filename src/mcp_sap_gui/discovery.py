@@ -110,15 +110,17 @@ class DiscoveryMixin:
 
         - ``texts``: labels, display-only text fields (a message popup's
           MESSTXT lines among them, without element IDs) and, for a
-          list-shaped popup, its first ``_POPUP_LIST_TEXT_LINES`` non-empty
-          list lines.
+          list-shaped popup without Cancel (a note or message shown as a
+          list), its first ``_POPUP_LIST_TEXT_LINES`` non-empty list lines.
         - ``list``: present when the popup body is a classic list (cells
           ``lbl[c,r]``, ``txt[c,r]``, ``chk[c,r]``). Those cells are never
           listed one by one in ``texts`` or ``interactive_elements``, so a
           changeable list cell does not set ``has_inputs``. ``list`` holds
-          ``cells``, ``rows``, ``lines_in_texts``, ``truncated`` (more lines
-          on the page than were copied) and a ``hint``; sap_read_list reads
-          every line, with IDs.
+          ``cells``, ``rows`` and a ``hint``; sap_read_list reads every
+          line, with IDs. A list one can cancel out of (an F4 hit list:
+          F12 or a Cancel button) is a choice, and its lines stay out of
+          ``texts``. A list without Cancel also has ``lines_in_texts`` and
+          ``truncated`` (more lines on the page than were copied).
         - ``interactive_elements``: changeable inputs and display-only
           widgets other than text fields.
 
@@ -159,12 +161,26 @@ class DiscoveryMixin:
             self._read_popup_com(popup_id, popup_wnd, result, texts, buttons,
                                  interactive_elements, found)
 
-        # A classic list (an F4 hit list, or a message or log shown as a
-        # list) is one cell per word, hundreds for a long one. Summarise it;
-        # sap_read_list shows it line by line.
+        # An F4 hit list is a classic list: one cell per word, hundreds for a
+        # long one. Summarise it; sap_read_list shows it line by line.
         rows = [row for cells in found.list_rows.values() for row in cells]
         list_lines: List[str] = []
-        if rows:
+        if rows and self._popup_offers_cancel(buttons):
+            # A list one can cancel out of is a choice (an F4 hit list): its
+            # lines are data, not message text, and stay out of texts.
+            result["list"] = {
+                "cells": len(rows),
+                "rows": len(set(rows)),
+                "hint": (
+                    f"Classic list (e.g. an F4 hit list): read it with "
+                    f"sap_read_list(window_id='{popup_id}'). To pick a line, "
+                    f"read with with_ids=true, sap_set_focus that line's ID, "
+                    f"then Enter."
+                ),
+            }
+        elif rows:
+            # No Cancel: the list can only be acknowledged, so it is a note
+            # or message shown as a list, and its lines are the message.
             list_lines = self._popup_list_lines(found.list_cells)
             in_texts = min(len(list_lines), self._POPUP_LIST_TEXT_LINES)
             result["list"] = {
@@ -173,13 +189,11 @@ class DiscoveryMixin:
                 "lines_in_texts": in_texts,
                 "truncated": len(list_lines) > in_texts,
                 "hint": (
-                    "Classic list: an F4 hit list, or a message or log "
-                    "shown as a list. "
+                    "Classic list in a popup without Cancel (a note or "
+                    "message shown as a list). "
                     + ("Its first lines are in texts; read all of it "
                        if in_texts else "Read it ")
-                    + f"with sap_read_list(window_id='{popup_id}'). To pick "
-                    f"a line of a hit list, read with with_ids=true, "
-                    f"sap_set_focus that line's ID, then Enter."
+                    + f"with sap_read_list(window_id='{popup_id}')."
                 ),
             }
         if found.calendars:
@@ -209,16 +223,24 @@ class DiscoveryMixin:
                 result["notice"] = self._PREFILL_NOTICE
 
         result = self._classify_popup(result)
-        # After classifying: the list's own words must not make a hit list
-        # look like an error or warning popup (classification is unchanged).
+        # After classifying: the list's own words must not turn a list popup
+        # into an error or warning popup (classification is unchanged).
         if list_lines:
             result.setdefault("texts", []).extend(
                 list_lines[:self._POPUP_LIST_TEXT_LINES]
             )
         return result
 
-    #: Lines of a list-shaped popup copied into ``texts``.
+    #: Lines of a list-shaped popup without Cancel copied into ``texts``.
     _POPUP_LIST_TEXT_LINES = 20
+
+    def _popup_offers_cancel(self, buttons: List[Dict[str, Any]]) -> bool:
+        """True when a popup button cancels: F12 (``tbar[0]/btn[12]``, in
+        any logon language) or a button the classifier reads as Cancel."""
+        if any(str(b.get("id", "")).endswith("tbar[0]/btn[12]")
+               for b in buttons):
+            return True
+        return self._match_button(buttons, self._CANCEL_PATTERNS) is not None
 
     @staticmethod
     def _popup_list_lines(cells: List[tuple]) -> List[str]:

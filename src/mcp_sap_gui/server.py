@@ -1426,12 +1426,13 @@ async def sap_get_popup_window(ctx: Context) -> dict:
     safe next action. Returns {popup_exists: false} if no popup.
 
     The popup's text is in `texts`: labels, display-only fields (a
-    message popup's lines) and, when the body is a classic list, its
-    first 20 non-empty lines. A list-shaped popup also has `list`
-    (`rows`, `lines_in_texts`, `truncated`, `hint`); sap_read_list reads
-    all of it. List cells never appear in `interactive_elements`.
-    `texts`, `buttons` and `interactive_elements` are omitted when
-    empty."""
+    message popup's lines) and, when the body is a classic list in a
+    popup without Cancel (a note shown as a list), its first 20
+    non-empty lines (`list.lines_in_texts`, `list.truncated`). Every
+    list-shaped popup has `list` (`rows`, `hint`); sap_read_list reads
+    all of it. An F4 hit list's lines are never in `texts`. List cells
+    never appear in `interactive_elements`. `texts`, `buttons` and
+    `interactive_elements` are omitted when empty."""
     c = _ctrl(ctx)
     return await _com(c.get_popup_window)
 
