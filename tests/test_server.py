@@ -289,6 +289,7 @@ class TestOkCodeBypassPrevention:
             )
         mock_ctrl.set_batch_fields.assert_called_once_with(
             {"f": "v"}, skip_readonly=False, validate=True, verbose=False,
+            validate_partial=False,
         )
         assert result["validation"]["performed"] is True
 
@@ -307,6 +308,7 @@ class TestOkCodeBypassPrevention:
             )
         mock_ctrl.set_batch_fields.assert_called_once_with(
             {"f": "v"}, skip_readonly=True, validate=False, verbose=False,
+            validate_partial=False,
         )
         assert result["skipped"] == 1
 

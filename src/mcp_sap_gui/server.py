@@ -309,7 +309,10 @@ Use `sap_get_alv_toolbar` for toolbar actions.
 - **GuiTableControl**: Standard for customizing (SPRO, SM30). Visible rows only.
 
 **Pagination**: Use `start_row` parameter to paginate through large tables. \
-Check `total_rows` in the response to know when you've read everything.
+For an ALV grid, check `total_rows` in the response to know when you've read \
+everything. For a TableControl, `total_rows` counts empty padding rows: page \
+with `start_row=next_start_row` while `has_more` is true. There `start_row=0` \
+reads from the current scroll position, not from the top.
 
 **Schema first**: Use `columns_only=true` to see column names before reading data. \
 Then use `columns="COL_A,COL_B"` to fetch only what you need.
@@ -473,8 +476,10 @@ These appear when you execute SPRO activities or use SM30:
 2. After execution, shows a GuiTableControl with configuration entries
 3. Toolbar has: "New Entries", "Position...", "Delete", "Save"
 4. To find specific entries, use "Position..." button (opens search dialog)
-5. To read all entries, use `sap_read_table` with `start_row` pagination
-6. Check `total_rows` in response to know total entry count
+5. To read all entries, use `sap_read_table` with `start_row` pagination: \
+pass the previous page's `next_start_row` and stop when `has_more` is false
+6. `total_rows` includes empty padding rows; the entry count is in the position \
+text under the table ("Entry 1 of 210")
 
 ## Classic Lists (WRITE Output)
 
@@ -604,6 +609,13 @@ async def _com(fn):
     return await asyncio.get_running_loop().run_in_executor(
         _session_mgr.executor, lambda: _com_with_retry(fn)
     )
+
+
+def _note_cap(result, requested: int, capped: int):
+    """Say so when a tool lowered a row/node limit to config.max_table_rows."""
+    if isinstance(result, dict) and capped < requested:
+        result["capped_to"] = capped
+    return result
 
 
 def _session_key(ctx: Context) -> int:
@@ -1113,6 +1125,7 @@ async def sap_set_batch_fields(
     validate: bool = False,
     skip_readonly: bool = False,
     verbose: bool = False,
+    validate_partial: bool = False,
 ) -> dict:
     """Fill in multiple input fields at once (dict of field_id to value).
 
@@ -1128,10 +1141,15 @@ async def sap_set_batch_fields(
     Args:
         fields: Dict mapping field_id -> value.
         validate: Press Enter after setting fields and return status-bar
-            feedback. Skipped when no fields were actually set.
+            feedback. Skipped when no fields were actually set, and when
+            any field failed (`failed` > 0) unless validate_partial=true.
+            `validation.performed` is false when Enter was not pressed or
+            SAP refused it (then with `error`).
         skip_readonly: Silently skip fields whose element reports
             Changeable == False instead of counting them as failures.
         verbose: List every field in `results`, not only the failures.
+        validate_partial: With validate=true, press Enter even when some
+            fields failed.
     """
     _check_write(ctx)
     for fid, val in fields.items():
@@ -1140,7 +1158,7 @@ async def sap_set_batch_fields(
     return await _com(
         lambda: c.set_batch_fields(
             fields, skip_readonly=skip_readonly, validate=validate,
-            verbose=verbose,
+            verbose=verbose, validate_partial=validate_partial,
         )
     )
 
@@ -1202,13 +1220,20 @@ async def sap_read_table(
     only, no data). For a TableControl it also gives each column's cell_type
     and a cell_id template ({row} = zero-based visible row) for
     sap_set_batch_fields. Use columns to fetch only specific columns (CSV).
-    Use start_row to paginate through large tables."""
+    Use start_row to paginate through large tables.
+
+    TableControl paging: start_row=0 reads from the CURRENT scroll position
+    (it does not scroll to the top), and a read returns at most the visible
+    rows. Page with start_row=next_start_row while has_more is true;
+    first_visible_row is where the read really started, start_row_note
+    explains a clamped or failed scroll, and stopped_at_blank_row marks
+    where an all-empty row ended the read. total_rows counts padding rows."""
     c = _ctrl(ctx)
     capped = min(max_rows, config.max_table_rows)
-    return await _com(lambda: c.read_table(
+    return _note_cap(await _com(lambda: c.read_table(
         table_id, capped, columns=columns,
         columns_only=columns_only, start_row=start_row,
-    ))
+    )), max_rows, capped)
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
@@ -1522,10 +1547,15 @@ async def sap_read_tree(tree_id: str, ctx: Context, max_nodes: int = 200) -> dic
     Returns node hierarchy with texts and column values. For large trees
     (e.g., SPRO with 1000+ nodes), use sap_get_tree_node_children for
     step-by-step navigation instead. Use sap_search_tree_nodes to find
-    specific nodes by text."""
+    specific nodes by text.
+
+    total_nodes is the number of nodes read; truncated=true means the tree
+    has more loaded nodes (available_nodes) than max_nodes allowed."""
     c = _ctrl(ctx)
     capped = min(max_nodes, config.max_table_rows)
-    return await _com(lambda: c.read_tree(tree_id, capped))
+    return _note_cap(
+        await _com(lambda: c.read_tree(tree_id, capped)), max_nodes, capped,
+    )
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
@@ -1620,12 +1650,16 @@ async def sap_search_tree_nodes(tree_id: str, search_text: str, ctx: Context,
     **Important limitation**: Only searches nodes that are already loaded
     (expanded) in the tree. Collapsed subtrees are not searched. If you
     don't find what you expect, expand parent nodes first using
-    sap_get_tree_node_children with expand=true, then search again."""
+    sap_get_tree_node_children with expand=true, then search again.
+
+    total_matches counts the matches returned. stopped_early=true means the
+    search reached max_results before the last loaded node, so more
+    matches are possible."""
     c = _ctrl(ctx)
     capped = min(max_results, config.max_table_rows)
-    return await _com(lambda: c.search_tree_nodes(
+    return _note_cap(await _com(lambda: c.search_tree_nodes(
         tree_id, search_text, column, capped
-    ))
+    )), max_results, capped)
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
@@ -2146,7 +2180,8 @@ SAP-specific rules:
   screen.active_window: if it is not "wnd[0]", a popup appeared — call
   sap_get_popup_window and handle it before continuing.
 - Read large tables in pages: loop sap_read_table with start_row until
-  total_rows is reached; aggregate locally and return only the aggregate.
+  total_rows is reached (ALV) or has_more is false (TableControl, with
+  start_row=next_start_row); aggregate locally and return only the aggregate.
 - Never call sap_screenshot inside a script (image results are unusable in the
   sandbox) — call it directly as a normal tool instead.
 - Sandbox limits: plain async code only; no classes; imports restricted to

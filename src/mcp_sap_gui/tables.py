@@ -204,8 +204,12 @@ class TablesMixin:
             columns_only: If True, return only column metadata with empty
                 data (schema discovery mode — very small response).
             start_row: Row index to start reading from (default 0).
-                For ALV: skips first N rows. For TableControl: scrolls to
-                that position before reading.
+                For ALV: skips first N rows. For TableControl: a value
+                above 0 scrolls to that position before reading (clamped
+                to the scrollbar maximum); 0 reads from the CURRENT scroll
+                position and does not scroll to the top. The result's
+                ``first_visible_row`` is where the read really started, and
+                ``next_start_row`` / ``has_more`` say how to read on.
 
         Returns:
             Dict with table data and metadata
@@ -340,6 +344,52 @@ class TablesMixin:
             )
         return result
 
+    @staticmethod
+    def _blank_cell(value) -> bool:
+        """True for a cell that holds nothing, as in a padding row.
+
+        Besides None and "", an unticked checkbox reads as False and the
+        empty entry of a dropdown as its key, a single space (see
+        _apply_combobox_selection), so a padding row with such a column is
+        still blank.
+        """
+        if value is None or value is False:
+            return True
+        return isinstance(value, str) and not value.strip()
+
+    @staticmethod
+    def _start_row_note(start_row: int, start_position: int,
+                        scroll_maximum: Optional[int],
+                        scroll_error: Optional[str]) -> Optional[str]:
+        """Why a table-control read did not start at the requested row."""
+        if start_row > 0 and start_position != start_row:
+            if scroll_error is not None:
+                return (
+                    f"start_row {start_row} was not reached: the scroll "
+                    f"failed ({scroll_error}), so the rows are read from row "
+                    f"{start_position}. Read-only scripting allows no "
+                    "scrolling."
+                )
+            if scroll_maximum is not None and start_row > scroll_maximum:
+                return (
+                    f"start_row {start_row} is past the scrollbar maximum "
+                    f"{scroll_maximum}, so the rows are read from row "
+                    f"{start_position} and can repeat rows of the previous "
+                    "page (compare _absolute_row_index)."
+                )
+            return (
+                f"start_row {start_row} was not reached: the table "
+                f"scrolled to row {start_position}."
+            )
+        if start_row <= 0 and start_position > 0:
+            return (
+                "start_row=0 reads from the current scroll position "
+                f"(row {start_position}); it does not scroll to the top. "
+                "Call sap_scroll_table_control with position 0 first to "
+                "read from the top."
+            )
+        return None
+
     def _read_table_control(self, table, table_id: str, max_rows: int,
                             col_filter: List[str] = None,
                             columns_only: bool = False,
@@ -355,7 +405,13 @@ class TablesMixin:
         The read is capped at VisibleRowCount.  GuiTableControl.RowCount often
         includes padding rows (empty rows that fill the visible area beyond
         the actual data), so reading stops early when an all-empty row is
-        encountered.
+        encountered (see _blank_cell) and says so in ``stopped_at_blank_row``.
+
+        Paging: ``first_visible_row`` is where the read started,
+        ``next_start_row`` the start_row of the next page, and ``has_more``
+        whether one may exist. ``total_rows`` counts padding rows and is not
+        a stop condition. ``start_row_note`` explains a read that did not
+        start at the requested row.
         """
         all_columns_info = self._get_table_control_columns(
             table, with_cell_ids=columns_only,
@@ -380,8 +436,16 @@ class TablesMixin:
         visible_rows = table.VisibleRowCount
 
         data = []
+        scroll_maximum = None
+        scroll_error = None
+        stopped_at_blank_row = None
+        rows_to_read = 0
         if total_rows > 0 and all_col_count > 0:
             scrollbar = table.VerticalScrollbar
+            try:
+                scroll_maximum = int(scrollbar.Maximum)
+            except Exception:
+                scroll_maximum = None
 
             # Scroll to start_row if explicitly requested
             if start_row > 0:
@@ -393,8 +457,11 @@ class TablesMixin:
                     # invalidates existing references — re-acquire.
                     table = self._session.findById(full_id)
                     scrollbar = table.VerticalScrollbar
-                except Exception:
-                    pass  # best-effort scroll
+                except Exception as e:
+                    # Best-effort scroll; reported in start_row_note.
+                    scroll_error = self._sanitize_error_message(
+                        e, "Could not scroll the table control",
+                    )
                 start_position = scrollbar.Position
             else:
                 start_position = scrollbar.Position
@@ -418,8 +485,7 @@ class TablesMixin:
                     all_empty = True
                     if col_filter:
                         for ci in range(all_col_count):
-                            val = cell_value(vis_idx, ci)
-                            if val is not None and val != "":
+                            if not self._blank_cell(cell_value(vis_idx, ci)):
                                 all_empty = False
                                 break
                     row_data = {}
@@ -428,9 +494,10 @@ class TablesMixin:
                         col_name = all_column_names[col_idx]
                         row_data[col_name] = value
                         if not col_filter:
-                            if value is not None and value != "":
+                            if not self._blank_cell(value):
                                 all_empty = False
                     if all_empty:
+                        stopped_at_blank_row = start_position + vis_idx
                         break
                     row_data["_absolute_row_index"] = start_position + vis_idx
                     data.append(row_data)
@@ -442,6 +509,7 @@ class TablesMixin:
             "table_type": "GuiTableControl",
             "table_field_name": getattr(table, 'TableFieldName', ''),
             "total_rows": total_rows,
+            "start_row": start_row,
             "first_visible_row": start_position,
             "visible_rows": visible_rows,
             "rows_returned": len(data),
@@ -451,6 +519,26 @@ class TablesMixin:
         }
         if columns_only:
             result["columns_only"] = True
+        else:
+            result["next_start_row"] = start_position + len(data)
+            # Not derived from total_rows: RowCount counts padding rows.
+            result["has_more"] = bool(
+                rows_to_read > 0
+                and stopped_at_blank_row is None
+                and len(data) == rows_to_read
+                and (
+                    rows_to_read < visible_rows
+                    or scroll_maximum is None
+                    or start_position < scroll_maximum
+                )
+            )
+            if stopped_at_blank_row is not None:
+                result["stopped_at_blank_row"] = stopped_at_blank_row
+        start_row_note = self._start_row_note(
+            start_row, start_position, scroll_maximum, scroll_error,
+        )
+        if start_row_note:
+            result["start_row_note"] = start_row_note
         if any(c.get("name_is_title") for c in columns_info):
             result["note"] = (
                 "The table has no rows, so technical column names are not "

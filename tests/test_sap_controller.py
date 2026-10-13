@@ -3048,6 +3048,8 @@ class TestSetBatchFields:
                 "wnd[0]/usr/txtBAD": "val2",
             },
             validate=True,
+            # A failed field skips Enter unless validate_partial=True.
+            validate_partial=True,
         )
 
         assert result["succeeded"] == 1
