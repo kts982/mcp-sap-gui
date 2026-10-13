@@ -26,13 +26,13 @@ class FakeField:
         self.writes = 0
 
     @property
-    def MaxLength(self):
+    def MaxLength(self):  # noqa: N802 (SAP GUI COM name)
         if "MaxLength" in self._unreadable:
             raise AttributeError("MaxLength")
         return self._max_length
 
     @property
-    def Changeable(self):
+    def Changeable(self):  # noqa: N802 (SAP GUI COM name)
         if "Changeable" in self._unreadable:
             raise AttributeError("Changeable")
         return self._changeable
@@ -58,10 +58,10 @@ class FakeWindow:
         self.allowed = allowed
         self.sent: list = []
 
-    def IsVKeyAllowed(self, vkey: int) -> bool:
+    def IsVKeyAllowed(self, vkey: int) -> bool:  # noqa: N802 (SAP GUI COM name)
         return self.allowed is None or vkey in self.allowed
 
-    def sendVKey(self, vkey: int) -> None:
+    def sendVKey(self, vkey: int) -> None:  # noqa: N802 (SAP GUI COM name)
         self.sent.append(vkey)
 
 
@@ -71,7 +71,7 @@ class FakeSession:
     def __init__(self, elements: Dict[str, Any]) -> None:
         self.elements = elements
 
-    def findById(self, element_id: str):
+    def findById(self, element_id: str):  # noqa: N802 (SAP GUI COM name)
         try:
             return self.elements[element_id]
         except KeyError:

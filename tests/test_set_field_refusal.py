@@ -1,6 +1,6 @@
 """set_field / set_batch_fields say why a write was refused."""
 
-from field_fakes import FakeField, FakeWindow, make_controller
+from .field_fakes import FakeField, FakeWindow, make_controller
 
 FIELD = "wnd[0]/usr/txtTHOLT-KTEXT"
 OTHER = "wnd[0]/usr/txtTHOLT-LTEXT"
@@ -106,7 +106,7 @@ def test_batch_success_path_reads_no_extra_properties():
         reads = 0
 
         @property
-        def MaxLength(self):
+        def MaxLength(self):  # noqa: N802 (SAP GUI COM name)
             CountingField.reads += 1
             return 10
 

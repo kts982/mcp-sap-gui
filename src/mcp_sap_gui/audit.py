@@ -86,8 +86,8 @@ class AuditMiddleware(Middleware):
             error_msg = result_error(
                 tool_name, getattr(result, "structured_content", None),
             )
-            failed = error_msg is not None or bool(
-                getattr(result, "is_error", False)
+            failed = error_msg is not None or (
+                isinstance(result, ToolResult) and result.is_error
             )
             line: dict[str, Any] = {
                 "event": "tool_call",
