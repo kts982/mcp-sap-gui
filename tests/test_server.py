@@ -644,7 +644,7 @@ class TestToolRegistration:
         expected = {
             # Connection & lifecycle
             "sap_connect", "sap_connect_existing", "sap_list_connections",
-            "sap_get_session_info", "sap_disconnect",
+            "sap_get_session_info", "sap_disconnect", "sap_close_session",
             # Navigation
             "sap_execute_transaction", "sap_send_key", "sap_get_screen_info",
             # Field
@@ -751,8 +751,8 @@ class TestToolRegistration:
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
 
         read_only_tools = {
-            "sap_connect", "sap_connect_existing", "sap_list_connections",
-            "sap_get_session_info", "sap_disconnect",
+            "sap_connect_existing", "sap_list_connections",
+            "sap_get_session_info",
             "sap_get_screen_info", "sap_read_field",
             "sap_get_combobox_entries", "sap_read_textedit", "sap_read_table",
             "sap_get_alv_toolbar", "sap_get_column_info", "sap_get_current_cell",
@@ -766,7 +766,8 @@ class TestToolRegistration:
             "sap_get_workflow_guide",
             "sap_get_transaction_guide",
         }
-        destructive_tools = set()  # reserved for future truly irreversible tools
+        # Closing an SAP session the server opened.
+        destructive_tools = {"sap_disconnect", "sap_close_session"}
 
         for tool in tools:
             assert tool.annotations is not None, f"{tool.name} missing annotations"
@@ -791,6 +792,11 @@ class TestToolRegistration:
 
 class TestToolTags:
     """Tests for tool tag assignments and policy profiles."""
+
+    # Session lifecycle tools whose tier is not their annotation: every
+    # profile must be able to log on and detach, but neither tool is
+    # read-only (sap_disconnect closes owned sessions at 'full').
+    TIER_NOT_ANNOTATION = {"sap_connect": {"read"}, "sap_disconnect": {"read"}}
 
     def test_all_tools_have_tags(self, srv):
         """Every tool has at least one tag from {read, write, destructive}."""
@@ -829,6 +835,9 @@ class TestToolTags:
 
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
         for tool in tools:
+            if tool.name in self.TIER_NOT_ANNOTATION:
+                assert tool.tags == self.TIER_NOT_ANNOTATION[tool.name]
+                continue
             if (tool.annotations
                     and not tool.annotations.readOnlyHint
                     and not tool.annotations.destructiveHint):
@@ -845,6 +854,9 @@ class TestToolTags:
 
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
         for tool in tools:
+            if tool.name in self.TIER_NOT_ANNOTATION:
+                assert tool.tags == self.TIER_NOT_ANNOTATION[tool.name]
+                continue
             if tool.annotations and tool.annotations.destructiveHint:
                 assert "destructive" in tool.tags, (
                     f"{tool.name} is destructive but missing 'destructive' tag"

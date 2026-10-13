@@ -33,6 +33,10 @@ def _make_controller_double(*, owns: bool = False, connected: bool = True):
     """Build a stand-in controller for tests that don't need full mocking."""
     ctrl = MagicMock()
     ctrl._owns_session = owns
+    # disconnect() returns the Ids of the sessions it closed: the owned
+    # logon session, or none for an attached or never-connected binding.
+    ctrl._owned_sessions = [MagicMock()] if owns else []
+    ctrl.disconnect.return_value = ["/app/con[0]/ses[0]"] if owns else []
     # is_connected is a property on the real class; on a MagicMock attribute
     # access works the same way.
     ctrl.is_connected = connected

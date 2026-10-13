@@ -11,7 +11,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .sap_controller import SAPGUIController
 
@@ -45,6 +45,9 @@ class SessionManager:
         # tool call, and get_or_create would eagerly build a SAPGUIController
         # for calls that never touch SAP.
         self._confirmation_points: Dict[int, set] = {}
+        # Session-level policy profile (sap_set_policy_profile), same lifetime
+        # as the confirmation points. Absent means the server floor applies.
+        self._profiles: Dict[int, str] = {}
         self._executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
@@ -93,11 +96,20 @@ class SessionManager:
         self._confirmation_points[session_key] = stored
         return set(stored)
 
-    def release(self, session_key: int) -> Dict[str, Any]:
+    def get_profile(self, session_key: int) -> Optional[str]:
+        """The profile this session switched to, or None for the floor."""
+        return self._profiles.get(session_key)
+
+    def set_profile(self, session_key: int, profile: str) -> None:
+        """Record the effective profile of this session."""
+        self._profiles[session_key] = profile
+
+    def release(self, session_key: int, close_owned: bool = True) -> Dict[str, Any]:
         """Release and clean up a managed session.
 
-        Owned sessions (opened via ``sap_connect``) are closed.
-        Attached sessions (via ``sap_connect_existing``) are detached.
+        Owned sessions (opened via ``sap_connect``, and /o windows opened from
+        them) are closed when ``close_owned`` is True and left open otherwise.
+        Attached sessions (via ``sap_connect_existing``) are always detached.
 
         Confirmation points are deliberately NOT dropped here: their lifetime
         is the MCP session, not the SAP binding.  Clearing them on release
@@ -111,27 +123,43 @@ class SessionManager:
             return {"released": False, "reason": "no active session binding"}
 
         was_connected = managed.controller.is_connected
-        owns = managed.controller._owns_session
-        managed.controller.disconnect()
+        owned_open = len(managed.controller._owned_sessions)
+        closed = managed.controller.disconnect(close_owned=close_owned)
 
-        action = ("closed" if owns else "detached") if was_connected else "none"
+        if closed:
+            action = "closed"
+        else:
+            action = "detached" if was_connected else "none"
         logger.info(
             "Released SAP session binding (key=%s, action=%s, remaining=%d)",
             session_key,
             action,
             len(self._sessions),
         )
-        return {
+        result: Dict[str, Any] = {
             "released": True,
             "was_connected": was_connected,
             "action": action,
         }
+        if closed:
+            result["closed_sessions"] = closed
+        if not close_owned and owned_open:
+            result["owned_sessions_left_open"] = owned_open
+        return result
 
-    def release_all(self) -> None:
-        """Release every session.  Called on server shutdown."""
+    def release_all(
+        self, may_close: Optional[Callable[[int], bool]] = None,
+    ) -> None:
+        """Release every session.  Called on server shutdown.
+
+        ``may_close(session_key)`` decides whether that binding's owned
+        sessions are closed; without it they are (the previous behaviour).
+        """
         for key in list(self._sessions):
             try:
-                self.release(key)
+                self.release(
+                    key, close_owned=True if may_close is None else may_close(key),
+                )
             except Exception:
                 logger.warning("Error releasing session %s", key, exc_info=True)
 
@@ -156,4 +184,5 @@ class SessionManager:
         connect/disconnect cycles and die with the server.
         """
         self._confirmation_points.clear()
+        self._profiles.clear()
         self._executor.shutdown(wait=False)
