@@ -1,7 +1,7 @@
 """read_table on a GuiTableControl: padding rows, start_row and paging keys."""
 
 import pytest
-from fakes import TABLE_ID, FakeTableControl, check, combo, controller_for, text
+from tests.fakes import TABLE_ID, FakeTableControl, check, combo, controller_for, text
 
 NAMES = ["KEY", "ACTIVE", "MODE"]
 

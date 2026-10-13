@@ -1,7 +1,7 @@
 """read_tree / search_tree_nodes say when the count was capped."""
 
 import pytest
-from fakes import controller_for
+from tests.fakes import controller_for
 
 TREE_ID = "wnd[0]/shellcont/shell"
 

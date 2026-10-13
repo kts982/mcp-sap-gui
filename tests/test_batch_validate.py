@@ -1,7 +1,7 @@
 """set_batch_fields(validate=True): no Enter after a failed field, and a
 refused Enter is not reported as a clean validation."""
 
-from fakes import controller_for
+from tests.fakes import controller_for
 
 GOOD = "wnd[0]/usr/txtF-GOOD"
 BAD = "wnd[0]/usr/txtF-BAD"
