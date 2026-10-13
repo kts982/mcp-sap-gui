@@ -400,6 +400,7 @@ class FieldsMixin:
         skip_readonly: bool = False,
         validate: bool = False,
         verbose: bool = False,
+        validate_partial: bool = False,
     ) -> Dict[str, Any]:
         """
         Set multiple field values at once.
@@ -414,11 +415,17 @@ class FieldsMixin:
                 as failures.
             validate: When True, press Enter after setting fields and
                 include validation feedback (status bar, highlighted
-                fields) in the result.
+                fields) in the result. Enter is not pressed when no field
+                was set, nor when any field failed (unless
+                *validate_partial*): Enter would check a half-filled screen.
+                ``validation.performed`` is False when Enter was not
+                pressed or SAP refused it (then with ``error``).
             verbose: When True, ``results`` lists every field. By default it
                 lists only the fields that did NOT succeed: echoing 71 table
                 cells back costs ~9k characters and says nothing the counts
                 do not.
+            validate_partial: With *validate*, press Enter even when some
+                fields failed (the behaviour before this option existed).
 
         Returns:
             Dict with counts, per-field results and optional validation info
@@ -467,7 +474,10 @@ class FieldsMixin:
             succeeded_ids = [
                 fid for fid, status in results.items() if status == "success"
             ]
-            result["validation"] = self._validate_batch(succeeded_ids, succeeded)
+            result["validation"] = self._validate_batch(
+                succeeded_ids, succeeded,
+                failed=0 if validate_partial else failed,
+            )
 
         return result
 
@@ -475,12 +485,34 @@ class FieldsMixin:
         self,
         succeeded_ids: List[str],
         succeeded: int,
+        failed: int = 0,
     ) -> Dict[str, Any]:
-        """Press Enter and gather validation feedback for a batch-set operation."""
+        """Press Enter and gather validation feedback for a batch-set operation.
+
+        *failed* > 0 skips Enter. A refused Enter (send_vkey's ``error``,
+        or a COM failure that returns no screen) is reported as not
+        performed, with the error, instead of as a clean validation.
+        """
         if succeeded == 0:
             return {"performed": False, "reason": "no fields were set"}
+        if failed > 0:
+            return {
+                "performed": False,
+                "reason": f"{failed} field(s) were not set; Enter not pressed",
+            }
 
         enter_result = self.press_enter()
+        if enter_result.get("error") or "screen" not in enter_result:
+            refused: Dict[str, Any] = {
+                "performed": False,
+                "error": enter_result.get("error")
+                or "Enter returned no screen",
+            }
+            if "available_keys" in enter_result:
+                refused["available_keys"] = enter_result["available_keys"]
+            if "screen" in enter_result:
+                refused["screen"] = enter_result["screen"]
+            return refused
         screen_info = enter_result.get("screen", {})
 
         # Check highlighted fields only among those actually set successfully

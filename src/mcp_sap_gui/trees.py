@@ -110,7 +110,9 @@ class TreesMixin:
             max_nodes: Maximum number of nodes to read (default 200)
 
         Returns:
-            Dict with tree structure, columns, and node data
+            Dict with tree structure, columns, and node data.
+            ``truncated`` is True when the tree has more loaded nodes
+            (``available_nodes``) than were read (``total_nodes``).
         """
         self._require_session()
 
@@ -149,16 +151,19 @@ class TreesMixin:
 
             # Get all visible node keys
             node_keys = []
+            available_nodes = 0
             try:
                 keys = tree.GetAllNodeKeys()
                 if hasattr(keys, 'Count'):
+                    available_nodes = keys.Count
                     for i in range(min(keys.Count, max_nodes)):
                         node_keys.append(keys(i))
                 elif hasattr(keys, '__iter__'):
+                    # Count every key (cheap: no node is read past the cap).
                     for i, key in enumerate(keys):
-                        if i >= max_nodes:
-                            break
-                        node_keys.append(key)
+                        available_nodes = i + 1
+                        if i < max_nodes:
+                            node_keys.append(key)
             except Exception as e:
                 return self._error_result(
                     {"tree_id": tree_id},
@@ -233,7 +238,12 @@ class TreesMixin:
                 "tree_id": tree_id,
                 "tree_type": tree_type,
                 "hierarchy_title": hierarchy_title,
+                # total_nodes is the number READ, kept for compatibility;
+                # available_nodes is how many keys the tree has loaded.
                 "total_nodes": len(node_keys),
+                "nodes_returned": len(nodes),
+                "available_nodes": available_nodes,
+                "truncated": available_nodes > len(node_keys),
                 "column_titles": column_titles,
                 "column_names": column_names,
                 "nodes": nodes,
@@ -500,7 +510,9 @@ class TreesMixin:
             max_results: Maximum number of matches to return
 
         Returns:
-            Dict with matching nodes and their full ancestor paths
+            Dict with matching nodes and their full ancestor paths.
+            ``stopped_early`` is True when the search reached max_results
+            before the last loaded node, so more matches are possible.
         """
         self._require_session()
 
@@ -528,10 +540,12 @@ class TreesMixin:
 
             needle = search_text.lower()
             matches = []
+            searched_nodes = 0
 
             for key in node_keys:
                 if len(matches) >= max_results:
                     break
+                searched_nodes += 1
 
                 # Determine text to search against
                 if column:
@@ -567,7 +581,13 @@ class TreesMixin:
             return {
                 "tree_id": tree_id,
                 "search_text": search_text,
+                # total_matches counts the matches RETURNED. stopped_early:
+                # the search hit max_results before the last node, so more
+                # matches are possible (not certain).
                 "total_matches": len(matches),
+                "total_nodes": len(node_keys),
+                "searched_nodes": searched_nodes,
+                "stopped_early": searched_nodes < len(node_keys),
                 "matches": matches,
             }
 

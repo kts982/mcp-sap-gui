@@ -186,6 +186,11 @@ sap_read_table("{table_id}", columns="COL_A,COL_B,COL_C", start_row=200, max_row
 ```
 Stop when `start_row >= total_rows` from step 1, or when `rows_returned` is 0.
 
+For a **GuiTableControl** page differently: one call returns at most the visible
+rows, so pass the previous response's `next_start_row` as `start_row` and stop when
+`has_more` is false. `start_row=0` reads from the current scroll position, not from
+the top: check `first_visible_row` (and `start_row_note`) on the first page.
+
 ## Step 4 — Verify completeness
 Compare the total rows read against `total_rows` from step 1.
 If they don't match, you may have missed rows — check your pagination math.
@@ -194,7 +199,7 @@ If they don't match, you may have missed rows — check your pagination math.
 - **Start with `columns_only=true`**: Don't read data until you know the schema.
 - **Select specific columns**: Wide tables waste tokens. Only fetch what you need.
 - **Batch size**: 100 rows per call is a good default. For very wide tables, use smaller batches.
-- **GuiTableControl**: `total_rows` may report the visible capacity rather than the actual data rows. Rows with all-empty values indicate you've reached the end of real data.
+- **GuiTableControl**: `total_rows` may report the visible capacity rather than the actual data rows. Rows with all-empty values indicate you've reached the end of real data; `stopped_at_blank_row` says where a read stopped at one.
 - **Position button**: For SM30-style table maintenance, look for a "Position..." button in the toolbar (`sap_get_toolbar_buttons`) to jump to specific entries instead of paginating.
 """
 
@@ -445,7 +450,8 @@ sap_read_table("<table_id>", max_rows=50)
 - `total_rows` includes empty padding rows. The real count is in the position text \
 under the table ("Entry 1 of 210").
 - To jump to an entry use the **Position...** button (a popup asks for the key), \
-not manual scrolling. For everything else page with `start_row`.
+not manual scrolling. For everything else page with `start_row`: pass the previous \
+`next_start_row` and stop when `has_more` is false.
 - An EMPTY view in display mode has no cells, so technical column names do not exist \
 yet: columns are flagged `name_is_title`. Read the schema again once a row exists.
 
@@ -483,8 +489,9 @@ sap_set_batch_fields({{"<cell_id row 0>": "...", "<cell_id row 1>": "..."}}, val
 ```
 - Only VISIBLE rows can be filled. When the visible rows are used up, scroll with \
 `sap_scroll_table_control` and read the schema again (row 0 is then the first visible row).
-- `validate=true` presses Enter: check `message_type` (E = the row was rejected) before \
-filling more rows. Offer `sap_preview` before saving a larger batch.
+- `validate=true` presses Enter: check `failed == 0`, `validation.performed` and \
+`message_type` (E = the row was rejected) before filling more rows. When a cell \
+failed, Enter is not pressed. Offer `sap_preview` before saving a larger batch.
 
 ## Step 5 — Save
 - `F11` / Save asks the user for confirmation first.
