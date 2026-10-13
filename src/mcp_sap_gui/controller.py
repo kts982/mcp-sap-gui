@@ -832,6 +832,19 @@ class SAPGUIControllerBase:
                 "Could not execute transaction",
             )
 
+    def vkey_allowed(self, vkey: int, window: str = "wnd[0]") -> bool:
+        """Whether *window* accepts *vkey* now (GuiFrameWindow.IsVKeyAllowed).
+
+        True when it cannot be asked, including a window that cannot be
+        found: send_vkey then reports that failure itself.
+        """
+        self._require_session()
+        try:
+            target = self._find_window(self._validate_window_id(window))
+        except Exception:
+            return True
+        return self._vkey_allowed(target, vkey)
+
     def send_vkey(self, vkey: int, window: str = "wnd[0]") -> Dict[str, Any]:
         """
         Send a virtual key to SAP.
