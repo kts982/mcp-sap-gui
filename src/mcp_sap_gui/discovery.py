@@ -565,6 +565,42 @@ class DiscoveryMixin:
 
     _CONFIRM_PATTERNS = ("ok", "yes", "continue", "confirm", "execute", "save")
     _CANCEL_PATTERNS = ("cancel", "no", "abort", "close", "back")
+    # Words that make a popup save-shaped: SAP's "Save the changes first?"
+    # dialog, or a button that saves. English plus the common logon
+    # languages; a substring match, so "unsaved" counts too (errs towards
+    # asking).
+    _SAVE_PATTERNS = (
+        "save", "sichern", "speichern", "enregistrer", "guardar", "salvar",
+        "salvare", "opslaan",
+    )
+
+    def _popup_save_risk(
+        self, popup: Dict[str, Any], btn: Dict[str, Any] | None,
+    ) -> bool:
+        """True when pressing *btn* (None: the Enter fallback) may save.
+
+        Either the button itself saves, or the popup's text is about saving
+        and it offers a choice (more than one button) or no button was
+        matched at all. A single-button "Data was saved" notice is not one.
+        """
+        if btn is not None and self._match_button([btn], self._SAVE_PATTERNS):
+            return True
+        text_blob = self._popup_text_blob(popup)
+        if not any(p in text_blob for p in self._SAVE_PATTERNS):
+            return False
+        return btn is None or len(popup.get("buttons", [])) > 1
+
+    def _top_popup_id(self) -> str | None:
+        """The ID of the topmost window above wnd[0], or None. No tree read."""
+        top = None
+        for i in range(1, 10):
+            wnd_id = f"wnd[{i}]"
+            try:
+                self._session.findById(wnd_id)
+            except Exception:
+                break
+            top = wnd_id
+        return top
 
     def _match_button(
         self, buttons: List[Dict[str, Any]], patterns: tuple,
@@ -590,27 +626,48 @@ class DiscoveryMixin:
         Returns:
             Dict with popup content, classification, and action taken.
         """
+        return self.apply_popup_plan(self.plan_popup_action(action, button_text))
+
+    def plan_popup_action(
+        self, action: str = "read", button_text: str = "",
+    ) -> Dict[str, Any]:
+        """Read the popup once and decide what handle_popup would press.
+
+        Presses nothing. The plan's ``save_risk`` is True when the press
+        may save (see _popup_save_risk), so a caller can ask the user first
+        and then pass the plan to apply_popup_plan. ``done`` means there is
+        nothing to press and ``popup`` is already the result.
+        """
         self._require_session()
 
         popup = self.get_popup_window()
+        plan: Dict[str, Any] = {
+            "popup": popup, "action": action, "button": None,
+            "fallback_vkey": None, "save_risk": False, "done": True,
+        }
         if not popup.get("popup_exists"):
-            return {"popup_exists": False, "action": "none"}
+            plan["popup"] = {"popup_exists": False, "action": "none"}
+            return plan
 
         popup["action_requested"] = action
-        popup_id = popup["window_id"]
         all_buttons = popup.get("buttons", [])
 
         if action == "read":
             popup["action"] = "read"
-            return popup
+            return plan
 
         if action == "auto":
             decision = popup.get("safe_auto_action") or "read"
+            if decision == "confirm" and self._popup_save_risk(
+                popup, self._match_button(all_buttons, self._CONFIRM_PATTERNS),
+            ):
+                decision = "read"  # a save is never a clearly safe action
             popup["auto_decision"] = decision
             if decision == "read":
                 popup["action"] = "read"
-                return popup
+                return plan
             action = decision
+            plan["action"] = action
 
         if action == "press" and not button_text:
             raise ValueError(
@@ -641,11 +698,67 @@ class DiscoveryMixin:
                     f"No button matching '{button_text}'. "
                     f"Available: {[b.get('text') or b.get('tooltip') for b in all_buttons]}"
                 )
-                return popup
+                return plan
         else:
             raise ValueError(
                 f"Invalid action '{action}'. Use read, confirm, cancel, press, or auto."
             )
+
+        # A press counts as affirmative unless the button reads as a
+        # cancel: "Ja" or an icon-only button may well be the save.
+        affirmative = action == "confirm" or (
+            action == "press"
+            and self._match_button([btn], self._CANCEL_PATTERNS) is None
+        )
+        save_risk = affirmative and self._popup_save_risk(popup, btn)
+        if save_risk and btn is None:
+            # Enter would take the dialog's default button, unseen: on a
+            # save-shaped popup that can be the save itself.
+            popup["action"] = "error"
+            popup["error"] = (
+                "This popup looks like a save prompt and no confirm button "
+                "was recognised, so Enter was not sent. Nothing was pressed. "
+                "Use action='press' with the button's text. Available: "
+                f"{[b.get('text') or b.get('tooltip') for b in all_buttons]}"
+            )
+            return plan
+
+        plan.update(button=btn, fallback_vkey=fallback_vkey,
+                    save_risk=save_risk, done=False)
+        return plan
+
+    def apply_popup_plan(
+        self, plan: Dict[str, Any], recheck: bool = False,
+    ) -> Dict[str, Any]:
+        """Press what plan_popup_action chose and return handle_popup's result.
+
+        With *recheck*, refuse unless the planned popup is still the topmost
+        window with the same title (a cheap check, no popup re-read): use it
+        when time has passed since the plan, e.g. for a user confirmation.
+        """
+        popup = plan["popup"]
+        if plan.get("done"):
+            return popup
+        self._require_session()
+        action = plan["action"]
+        btn = plan.get("button")
+        fallback_vkey = plan.get("fallback_vkey")
+        popup_id = popup["window_id"]
+
+        if recheck:
+            try:
+                title = str(getattr(self._find_window(popup_id), "Text", ""))
+                same = (self._top_popup_id() == popup_id
+                        and title.strip() == str(popup.get("title", "")).strip())
+            except Exception:
+                same = False
+            if not same:
+                popup["action"] = "error"
+                popup["error"] = (
+                    f"The popup {popup_id} changed before it was acted on. "
+                    "Nothing was pressed; read it again."
+                )
+                return popup
 
         # Press the button or send fallback VKey
         if btn is not None:
