@@ -1883,6 +1883,7 @@ class TestSaveConfirmation:
         """When user accepts save confirmation, send_vkey is called."""
         ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("accept", data=True))
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
         mock_controller.send_vkey.return_value = {"screen": {"transaction": "VA01"}}
 
         with patch.object(srv, "_ctrl", return_value=mock_controller), \
@@ -1898,6 +1899,7 @@ class TestSaveConfirmation:
         """'Save' key also triggers confirmation and proceeds on accept."""
         ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("accept", data=True))
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
         mock_controller.send_vkey.return_value = {"screen": {"transaction": "MM02"}}
 
         with patch.object(srv, "_ctrl", return_value=mock_controller), \
@@ -1912,6 +1914,7 @@ class TestSaveConfirmation:
         """When user declines save, send_vkey is NOT called."""
         ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("decline"))
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             result = await srv.sap_send_key("F11", ctx)
@@ -1925,6 +1928,7 @@ class TestSaveConfirmation:
         """When user cancels save confirmation, send_vkey is NOT called."""
         ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("cancel"))
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             result = await srv.sap_send_key("F11", ctx)
@@ -1940,6 +1944,7 @@ class TestSaveConfirmation:
             elicit_return=_make_elicit_result("accept", data=False),
         )
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             result = await srv.sap_send_key("Save", ctx)
@@ -1963,6 +1968,7 @@ class TestSaveConfirmation:
             ),
         )
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             with pytest.raises(ValueError, match="does not support elicitation"):
@@ -1977,6 +1983,7 @@ class TestSaveConfirmation:
             elicit_side_effect=RuntimeError("COM connection lost"),
         )
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             with pytest.raises(RuntimeError, match="COM connection lost"):

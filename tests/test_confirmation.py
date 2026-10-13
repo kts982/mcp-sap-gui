@@ -529,7 +529,9 @@ class TestGating:
 
     async def test_send_key_is_gated_once_by_the_body_gate(self, srv):
         """No point maps sap_send_key, so F11 keeps exactly its own gate."""
-        controller, patcher = _patched_controller(send_vkey={"status": "ok"})
+        controller, patcher = _patched_controller(
+            send_vkey={"status": "ok"}, check_vkey=None,  # F11 is active
+        )
         elicitor = _Elicitor("accept")
         with patcher:
             async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
@@ -546,7 +548,9 @@ class TestGating:
     async def test_all_writes_prompts_twice_for_the_save_key(self, srv):
         """Documented consequence: all_writes covers every write-tagged tool and
         the sap_send_key body gate is unchanged, so F11 asks twice."""
-        controller, patcher = _patched_controller(send_vkey={"status": "ok"})
+        controller, patcher = _patched_controller(
+            send_vkey={"status": "ok"}, check_vkey=None,  # F11 is active
+        )
         elicitor = _Elicitor("accept")
         with patcher:
             async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
@@ -686,7 +690,9 @@ class TestFailClosed:
 
     async def test_save_gate_still_fails_closed(self, srv):
         """Pins the pre-existing sap_send_key behaviour this feature must match."""
-        controller, patcher = _patched_controller(send_vkey={"status": "ok"})
+        controller, patcher = _patched_controller(
+            send_vkey={"status": "ok"}, check_vkey=None,  # F11 is active
+        )
         with patcher:
             async with Client(srv.mcp) as client:
                 result = await client.call_tool(
