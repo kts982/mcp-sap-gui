@@ -45,6 +45,12 @@ from .confirmation import (
     log_confirmation_event,
     points_with_provenance,
 )
+from .controller import (
+    _DEAD_SESSION_HRESULTS,
+    _HRESULT_DISCONNECTED,
+    _HRESULT_SERVER_UNAVAILABLE,
+)
+from .models import SAPGUINotConnectedError
 from .policy import (
     DEFAULT_PRESET,
     POLICY_FILE_ENV,
@@ -547,40 +553,71 @@ config = ServerConfig()
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Known transient COM error codes that are safe to retry
-_TRANSIENT_COM_HRESULTS = {
-    -2147417851,  # RPC_E_CALL_REJECTED (0x80010001) — "Call was rejected by callee"
-    -2147418111,  # RPC_E_DISCONNECTED (0x80010108) — object disconnected
-    -2147417848,  # RPC_E_RETRY (0x80010109) — "The callee is not available"
-}
+# COM errors that are safe to retry: the callee refused the call before
+# running it, so re-running the tool body cannot repeat any work. Values are
+# pywintypes.com_error.hresult, i.e. signed 32-bit.
+_TRANSIENT_COM_HRESULTS = frozenset({
+    -2147418111,  # 0x80010001 RPC_E_CALL_REJECTED: "Call was rejected by callee."
+    -2147417846,  # 0x8001010A RPC_E_SERVERCALL_RETRYLATER: "The message filter
+                  # indicated that the application is busy."
+})
+# Deliberately not retried:
+# - -2147417851, 0x80010105 RPC_E_SERVERFAULT ("The server threw an
+#   exception."): the call may have half-run, and a retry would re-run the
+#   whole tool body against a server that just faulted.
+# - _DEAD_SESSION_HRESULTS (0x80010108 RPC_E_DISCONNECTED, 0x800706BA
+#   RPC_S_SERVER_UNAVAILABLE): the session object or the whole SAP GUI
+#   process is gone and does not come back. Raised at once as
+#   SAPGUINotConnectedError instead.
 
 _COM_MAX_RETRIES = 3
 _COM_BASE_DELAY = 0.3  # seconds
 
+_DEAD_SESSION_NAMES = {
+    _HRESULT_DISCONNECTED: "RPC_E_DISCONNECTED",
+    _HRESULT_SERVER_UNAVAILABLE: "RPC_S_SERVER_UNAVAILABLE",
+}
+
+
+def _com_hresult(exc: BaseException) -> int | None:
+    """Return the HRESULT a COM exception carries, or None."""
+    hresult = getattr(exc, "hresult", None)
+    if isinstance(hresult, int):
+        return hresult
+    # pywintypes.com_error stores hresult in args[0]
+    if exc.args and isinstance(exc.args[0], int):
+        return exc.args[0]
+    return None
+
 
 def _is_transient_com_error(exc: Exception) -> bool:
     """Check if a COM exception is a known transient error safe to retry."""
-    hresult = getattr(exc, "hresult", None)
-    if hresult is not None and hresult in _TRANSIENT_COM_HRESULTS:
-        return True
-    # pywintypes.com_error stores hresult in args[0]
-    if exc.args and isinstance(exc.args[0], int) and exc.args[0] in _TRANSIENT_COM_HRESULTS:
-        return True
-    return False
+    return _com_hresult(exc) in _TRANSIENT_COM_HRESULTS
 
 
 def _com_with_retry(fn):
     """Run a COM operation with retry for transient errors.
 
     Runs synchronously in the COM thread. Retries up to _COM_MAX_RETRIES
-    times with exponential backoff for known transient COM errors.
+    times with exponential backoff for known transient COM errors. A COM
+    error saying the SAP GUI session or process is gone is raised at once as
+    SAPGUINotConnectedError rather than as the raw COM tuple.
     """
     last_exc = None
     for attempt in range(_COM_MAX_RETRIES + 1):
         try:
             return fn()
         except Exception as e:
-            if attempt < _COM_MAX_RETRIES and _is_transient_com_error(e):
+            hresult = _com_hresult(e)
+            if hresult in _DEAD_SESSION_HRESULTS:
+                raise SAPGUINotConnectedError(
+                    "SAP GUI is no longer reachable "
+                    f"({_DEAD_SESSION_NAMES[hresult]} "
+                    f"0x{hresult & 0xFFFFFFFF:08X}): the session window was "
+                    "closed or SAP Logon exited. Start SAP Logon if needed, "
+                    "then reconnect with sap_connect_existing."
+                ) from e
+            if attempt < _COM_MAX_RETRIES and hresult in _TRANSIENT_COM_HRESULTS:
                 delay = _COM_BASE_DELAY * (2 ** attempt)
                 logger.warning(
                     "Transient COM error (attempt %d/%d), retrying in %.1fs: %s",
@@ -596,8 +633,8 @@ def _com_with_retry(fn):
 async def _com(fn):
     """Run a synchronous COM operation in the dedicated thread.
 
-    Automatically retries known transient COM errors (e.g. RPC_E_CALL_REJECTED)
-    up to 3 times with exponential backoff.
+    Automatically retries known transient COM errors (RPC_E_CALL_REJECTED,
+    RPC_E_SERVERCALL_RETRYLATER) up to 3 times with exponential backoff.
     """
     if _session_mgr is None:
         raise RuntimeError("Server not initialised – lifespan has not started")
