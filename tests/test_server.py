@@ -1380,12 +1380,12 @@ class TestCOMRetry:
     def test_is_transient_com_error_by_hresult(self, srv):
         """Recognizes transient error by hresult attribute."""
         exc = Exception("COM error")
-        exc.hresult = -2147417851  # RPC_E_CALL_REJECTED
+        exc.hresult = -2147418111  # 0x80010001 RPC_E_CALL_REJECTED
         assert srv._is_transient_com_error(exc) is True
 
     def test_is_transient_com_error_by_args(self, srv):
         """Recognizes transient error by args[0] (pywintypes.com_error style)."""
-        exc = Exception(-2147417851, "Call was rejected", None, None)
+        exc = Exception(-2147418111, "Call was rejected by callee.", None, None)
         assert srv._is_transient_com_error(exc) is True
 
     def test_is_not_transient_for_unknown_hresult(self, srv):
@@ -1415,7 +1415,7 @@ class TestCOMRetry:
             call_count += 1
             if call_count < 3:
                 exc = Exception("COM error")
-                exc.hresult = -2147417851
+                exc.hresult = -2147418111  # RPC_E_CALL_REJECTED
                 raise exc
             return "recovered"
 
@@ -1429,7 +1429,7 @@ class TestCOMRetry:
         """Raises after exhausting all retries."""
         def always_fail():
             exc = Exception("COM error")
-            exc.hresult = -2147417851
+            exc.hresult = -2147417846  # RPC_E_SERVERCALL_RETRYLATER
             raise exc
 
         with pytest.raises(Exception, match="COM error"):
@@ -1458,7 +1458,7 @@ class TestCOMRetry:
             call_count += 1
             if call_count <= 2:
                 exc = Exception("COM error")
-                exc.hresult = -2147417851
+                exc.hresult = -2147418111  # RPC_E_CALL_REJECTED
                 raise exc
             return "ok"
 
@@ -1471,7 +1471,8 @@ class TestCOMRetry:
 
     def test_transient_hresults_cover_known_codes(self, srv):
         """All documented transient hresults are in the set."""
-        expected = {-2147417851, -2147418111, -2147417848}
+        # 0x80010001 RPC_E_CALL_REJECTED, 0x8001010A RPC_E_SERVERCALL_RETRYLATER
+        expected = {-2147418111, -2147417846}
         assert srv._TRANSIENT_COM_HRESULTS == expected
 
 
