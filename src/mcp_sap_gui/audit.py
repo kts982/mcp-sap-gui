@@ -14,6 +14,8 @@ import mcp.types
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 
+from .strict import result_error
+
 # Patterns in field IDs or argument keys that indicate secrets
 _SECRET_PATTERNS = frozenset({"password", "pwd", "bcode", "secret", "token"})
 
@@ -56,6 +58,11 @@ class AuditMiddleware(Middleware):
     Emits one JSON log line per tool call containing:
     - tool_name, arguments (secrets masked), timestamp
     - duration_ms, status (ok/error), error details
+
+    ``status`` is ``error`` when the tool raised, and also when it returned a
+    result that ``strict.result_error`` counts as failed (``error_msg`` then
+    carries the reason). Exceptions keep their ``error`` (type) and
+    ``error_msg`` keys.
     """
 
     async def on_call_tool(
@@ -73,15 +80,27 @@ class AuditMiddleware(Middleware):
             result = await call_next(context)
             duration_ms = round((time.perf_counter() - start) * 1000, 1)
 
-            logger.info(
-                json.dumps({
-                    "event": "tool_call",
-                    "ts": ts,
-                    "tool": tool_name,
-                    "args": safe_args,
-                    "status": "ok",
-                    "duration_ms": duration_ms,
-                }, default=str),
+            # Most SAP failures come back as a normal result with an
+            # ``error`` key, not as an exception: the status follows the
+            # result, in strict mode and without it.
+            error_msg = result_error(
+                tool_name, getattr(result, "structured_content", None),
+            )
+            failed = error_msg is not None or bool(
+                getattr(result, "is_error", False)
+            )
+            line: dict[str, Any] = {
+                "event": "tool_call",
+                "ts": ts,
+                "tool": tool_name,
+                "args": safe_args,
+                "status": "error" if failed else "ok",
+                "duration_ms": duration_ms,
+            }
+            if error_msg is not None:
+                line["error_msg"] = error_msg
+            (logger.warning if failed else logger.info)(
+                json.dumps(line, default=str),
             )
             return result
 

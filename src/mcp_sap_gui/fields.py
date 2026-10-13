@@ -154,6 +154,10 @@ class FieldsMixin:
             if self._COMBOBOX_ID_RE.search(field_id):
                 return self._select_entry_result({"field_id": field_id},
                                                  element, value)
+            refusal = self._write_refusal(element, field_id, value)
+            if refusal is not None:
+                # Not written: the field keeps what it had. Never truncate.
+                return {"field_id": field_id, **refusal, "status": "rejected"}
             element.text = value
 
             logger.debug("Set %s = %s", field_id, self._mask_field_value(field_id, value))
@@ -168,6 +172,42 @@ class FieldsMixin:
                 e,
                 "Could not set field",
             )
+
+    def _write_refusal(self, element, field_id: str,
+                       value: Any) -> Optional[Dict[str, Any]]:
+        """Why writing *value* into *element* would fail, or None.
+
+        The GUI refuses a value longer than the field's MaxLength, and any
+        write to a field that is not Changeable. pywin32 replaces SAP's
+        reason with "Property '<unknown>.text' can not be set.", which the
+        sanitizer reduces to "Could not set field", so the reason is read
+        from the element instead. Each property is read on its own and only
+        what could be read is enforced: True or None ("cannot tell") never
+        refuses a write.
+        """
+        try:
+            changeable = element.Changeable
+        except Exception:
+            changeable = None
+        if changeable is False:
+            return {"error": "field is not changeable"}
+
+        try:
+            max_length = element.MaxLength
+        except Exception:
+            max_length = None
+        length = len(str(value))
+        if (isinstance(max_length, int) and not isinstance(max_length, bool)
+                and 0 < max_length < length):
+            if self._is_sensitive_field_id(field_id):
+                # Do not echo the length of a password.
+                return {"error": f"value is longer than the field takes "
+                                 f"({max_length} characters)",
+                        "max_length": max_length}
+            return {"error": f"value is {length} characters, field takes "
+                             f"{max_length}",
+                    "max_length": max_length, "value_length": length}
+        return None
 
     def press_button(self, button_id: str) -> Dict[str, Any]:
         """
@@ -428,6 +468,9 @@ class FieldsMixin:
         results: Dict[str, str] = {}
         skipped = 0
         for field_id, value in fields.items():
+            # Reset per field: a failed lookup must not leave the previous
+            # field's element behind for the explanation below.
+            element = None
             try:
                 element = self._find_element(field_id)
                 if skip_readonly and not getattr(element, "Changeable", True):
@@ -445,10 +488,19 @@ class FieldsMixin:
                     element.text = value
                 results[field_id] = "success"
             except Exception as e:
-                results[field_id] = (
-                    "error: "
-                    + self._sanitize_error_message(e, "Could not set field")
-                )
+                # Explain a refused write only after it failed: the success
+                # path stays free of extra COM calls.
+                refusal = None
+                if (element is not None
+                        and not self._COMBOBOX_ID_RE.search(field_id)):
+                    refusal = self._write_refusal(element, field_id, value)
+                if refusal is not None:
+                    results[field_id] = "error: " + refusal["error"]
+                else:
+                    results[field_id] = (
+                        "error: "
+                        + self._sanitize_error_message(e, "Could not set field")
+                    )
 
         succeeded = sum(1 for v in results.values() if v == "success")
         failed = len(fields) - succeeded - skipped

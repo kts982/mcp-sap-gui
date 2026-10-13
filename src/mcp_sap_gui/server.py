@@ -74,6 +74,7 @@ from .prompts import (
 )
 from .sap_controller import VKey
 from .session_manager import SessionManager
+from .strict import STRICT_ERRORS_ENV, StrictErrorMiddleware, strict_errors_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,9 @@ class ServerConfig:
     # Server-level confirmation points (--confirm). Always active, never
     # removable by sap_set_confirmation_points.
     confirmation_floor: List[str] = field(default_factory=list)
+    # --strict-errors / MCP_SAP_GUI_STRICT_ERRORS: return a failed result
+    # (strict.result_error) as an MCP error (isError true). Off by default.
+    strict_errors: bool = False
 
     # Behavior settings
     auto_connect_existing: bool = True
@@ -690,6 +694,10 @@ mcp.add_middleware(ConfirmationMiddleware(
     active_points=active_confirmation_points,
     precheck=precheck_before_confirmation,
 ))
+# Innermost: it sees the tool body's result, and audit sees what it returns.
+# The lambda reads the running module's config at call time, because main()
+# rebinds it after this line.
+mcp.add_middleware(StrictErrorMiddleware(enabled=lambda: config.strict_errors))
 
 
 def _is_transaction_allowed(tcode: str) -> tuple[bool, str]:
@@ -826,20 +834,26 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
             response_type=bool,
         )
     except McpError as exc:
+        log_confirmation_event(SAVE_POINT, "sap_send_key", "unsupported_client")
         raise ValueError(
             f"Save action requires confirmation but the client does not "
             f"support elicitation: {exc}"
         ) from exc
 
     if result.action == "accept" and result.data is True:
+        log_confirmation_event(SAVE_POINT, "sap_send_key", "accepted")
         return None  # proceed
 
+    log_confirmation_event(SAVE_POINT, "sap_send_key", "declined")
     action = result.action
     return {
         "status": "cancelled",
         "action": action,
         "key": key,
         "reason": f"User did not confirm save ({action})",
+        # Same wording as a decline at a confirmation point, which the
+        # instructions tell agents to stop on.
+        "error": f"Save declined by user ({action}). Nothing was sent.",
     }
 
 
@@ -961,14 +975,21 @@ async def sap_send_key(
     A key that is not active on the screen is not sent: the response has an
     error and available_keys, the keys this screen accepts.
 
-    F11 / Save requires user confirmation via elicitation before proceeding."""
+    F11 / Save requires user confirmation via elicitation before proceeding.
+    The user is asked only when the screen accepts the key; a declined save
+    returns status 'cancelled' with an error."""
     _check_write(ctx)
     vkey = _parse_key(key)
+    c = _ctrl(ctx)
     if key in _SAVE_KEYS:
+        if not await _com(lambda: c.vkey_allowed(vkey)):
+            # Never ask the user to approve a Save that cannot be sent:
+            # send_vkey refuses the inactive key without sending it and
+            # returns its usual error with available_keys.
+            return await _com(lambda: c.send_vkey(vkey))
         cancellation = await _confirm_save(ctx, key)
         if cancellation is not None:
             return cancellation
-    c = _ctrl(ctx)
     return await _com(lambda: c.send_vkey(vkey))
 
 
@@ -1017,7 +1038,11 @@ async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
     its text, and the response reports the key and text selected. For
     filling in multiple fields of a form at once, use sap_set_batch_fields
     instead. After setting a field, you may need to press Enter to trigger
-    validation."""
+    validation.
+
+    A value longer than the field (MaxLength) or a field that is not
+    changeable is refused before writing: status 'rejected' and an error
+    that says which, and the field keeps its content."""
     _check_write(ctx)
     _check_okcode_bypass(field_id, value)
     c = _ctrl(ctx)
@@ -1123,7 +1148,9 @@ async def sap_set_batch_fields(
     takes an entry's key or text, as in sap_set_field.
 
     The result gives counts; `results` lists only the fields that did NOT
-    succeed (all of them with verbose=true).
+    succeed (all of them with verbose=true). Check failed == 0: a field
+    that was not set does not stop the others. With --strict-errors such a
+    batch is returned as an error.
 
     Args:
         fields: Dict mapping field_id -> value.
@@ -2227,6 +2254,12 @@ def main():
                              "operation categories in every session "
                              f"(choices: {', '.join(SETTABLE_POINTS)}). "
                              "Sessions can add points but never remove these")
+    parser.add_argument("--strict-errors", action="store_true",
+                        help="Return a failed tool result (an 'error' key, "
+                             "or a batch with fields that were not set) as "
+                             "an MCP error (isError true), keeping its "
+                             "structured content. Also enabled by "
+                             f"${STRICT_ERRORS_ENV}=1")
     parser.add_argument("--audit-log", metavar="FILE",
                         help="Write audit log to FILE (JSON lines)")
     parser.add_argument("--code-mode", action="store_true",
@@ -2273,7 +2306,10 @@ def main():
         policy_file_sha256=policy.file_sha256,
         profile=args.profile,
         confirmation_floor=list(args.confirm or []),
+        strict_errors=args.strict_errors or strict_errors_from_env(os.environ),
     )
+    if config.strict_errors:
+        logger.info("Strict errors: failed results are returned with isError")
 
     # The effective policy goes to the log and, as its own event, to the audit
     # log: a changed policy file is then visible after the fact.
