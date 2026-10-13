@@ -104,6 +104,7 @@ class TablesMixin:
         tree = self._object_tree(
             self._validate_element_id(table_id),
             ["Id", "Type", "Text", "Selected", "Key"],
+            site="table",
         )
         if tree is None:
             return None

@@ -128,7 +128,7 @@ class DiscoveryMixin:
         buttons = []
         interactive_elements = []
         found = _PopupFindings()
-        tree = self._object_tree(popup_id, self._POPUP_PROPS)
+        tree = self._object_tree(popup_id, self._POPUP_PROPS, site="popup")
         if tree is not None:
             self._read_popup_tree(tree, result, texts, buttons,
                                   interactive_elements, found)
@@ -964,7 +964,8 @@ class DiscoveryMixin:
         read(name) gives Text (str), ColorIndex (int) or Selected (bool): from
         one GetObjectTree call, or over COM on SAP GUI before 7.70 PL3.
         """
-        tree = self._object_tree(usr_id, ["Id", "Text", "ColorIndex", "Selected"])
+        tree = self._object_tree(usr_id, ["Id", "Text", "ColorIndex", "Selected"],
+                                 site="list")
         if tree is not None:
             for node in tree.get("children") or []:
                 props = node.get("properties") or {}
@@ -1066,7 +1067,7 @@ class DiscoveryMixin:
                 expand_tables=expand_tables,
                 list_rows=list_rows,
             )
-            tree = self._object_tree(root_id, self._DISCOVERY_PROPS)
+            tree = self._object_tree(root_id, self._DISCOVERY_PROPS, site="elements")
             if tree is not None:
                 elements = self._elements_from_tree(tree, max_depth, **options)
             else:
