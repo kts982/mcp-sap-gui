@@ -184,17 +184,19 @@ sap_read_table("{table_id}", columns="COL_A,COL_B,COL_C", start_row=0, max_rows=
 sap_read_table("{table_id}", columns="COL_A,COL_B,COL_C", start_row=100, max_rows=100)
 sap_read_table("{table_id}", columns="COL_A,COL_B,COL_C", start_row=200, max_rows=100)
 ```
-Stop when `start_row >= total_rows` from step 1, or when `rows_returned` is 0.
+Stop when `start_row >= total_rows` from step 1, when `rows_returned` is 0, or \
+when the response has `empty_rows_from` (GuiTableControl: the data ends there).
 
 ## Step 4 — Verify completeness
-Compare the total rows read against `total_rows` from step 1.
-If they don't match, you may have missed rows — check your pagination math.
+Compare the total rows read against `total_rows` from step 1 (GuiTableControl: \
+against `empty_rows_from`). If they don't match, you may have missed rows — check \
+your pagination math.
 
 ## Tips
 - **Start with `columns_only=true`**: Don't read data until you know the schema.
 - **Select specific columns**: Wide tables waste tokens. Only fetch what you need.
 - **Batch size**: 100 rows per call is a good default. For very wide tables, use smaller batches.
-- **GuiTableControl**: `total_rows` may report the visible capacity rather than the actual data rows. Rows with all-empty values indicate you've reached the end of real data.
+- **GuiTableControl**: `total_rows` may report the visible capacity rather than the actual data rows. The read stops at the first all-empty row and reports its index as `empty_rows_from`: the real data ends there.
 - **Position button**: For SM30-style table maintenance, look for a "Position..." button in the toolbar (`sap_get_toolbar_buttons`) to jump to specific entries instead of paginating.
 """
 
@@ -442,8 +444,9 @@ sap_get_screen_elements(type_filter="GuiTableControl")
 sap_read_table("<table_id>", columns_only=true)
 sap_read_table("<table_id>", max_rows=50)
 ```
-- `total_rows` includes empty padding rows. The real count is in the position text \
-under the table ("Entry 1 of 210").
+- `total_rows` includes empty padding rows. When a read reaches them, the response \
+has `empty_rows_from`: the entries end at that row. The position text under the \
+table ("Entry 1 of 210") gives the count too.
 - To jump to an entry use the **Position...** button (a popup asks for the key), \
 not manual scrolling. For everything else page with `start_row`.
 - An EMPTY view in display mode has no cells, so technical column names do not exist \

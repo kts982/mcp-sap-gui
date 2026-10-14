@@ -2262,6 +2262,7 @@ class TestGuiTableControl:
         assert result["rows_returned"] == 5  # only rows 95-99 are real
         assert result["data"][0]["COL"] == "v95"
         assert result["data"][4]["COL"] == "v99"
+        assert result["empty_rows_from"] == 100
 
     def test_read_table_control_padding_detection(self):
         """Padding rows (empty rows beyond real data) are excluded from results.
@@ -2290,6 +2291,74 @@ class TestGuiTableControl:
         assert result["rows_returned"] == 6
         assert result["data"][0]["LGNUM"] == "WH051"
         assert result["data"][5]["LGNUM"] == "WH056"
+        assert result["empty_rows_from"] == 57
+
+    def test_read_table_control_reports_where_the_data_ends(self):
+        """SM30 field case: RowCount 51 for a view with 14 entries.
+
+        total_rows stays the control's raw RowCount; empty_rows_from tells
+        the caller the data ended, so "have I read everything" can stop.
+        """
+        controller = self._make_controller_with_session()
+        columns = [{"name": "DEVICE", "title": "Device"}]
+        rows = [[f"D{i:02d}"] for i in range(14)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=51, visible_rows=37,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["total_rows"] == 51
+        assert result["rows_returned"] == 14
+        assert result["empty_rows_from"] == 14
+
+    def test_read_table_control_empty_rows_from_with_column_filter(self):
+        """A row with data only in unrequested columns is not the end of data."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "KEY", "title": "Key"}, {"name": "TEXT", "title": "Text"}]
+        rows = [["K1", "one"], ["", "only text"], ["K3", "three"]]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=10, visible_rows=10,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table(
+            "wnd[0]/usr/tblTEST", max_rows=100, columns="KEY",
+        )
+
+        assert result["rows_returned"] == 3
+        assert result["empty_rows_from"] == 3
+
+    def test_read_table_control_no_empty_rows_from_while_rows_are_filled(self):
+        """A full visible window says nothing about the rows below it."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL_A", "title": "A"}]
+        rows = [[f"val_{i}"] for i in range(10)]
+        mock_table = self._make_table_control(columns, rows,
+                                               total_rows=10, visible_rows=3)
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["rows_returned"] == 3
+        assert "empty_rows_from" not in result
+
+    def test_read_table_control_columns_only_has_no_empty_rows_from(self):
+        """A schema read reads no rows, so it cannot know where data ends."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL", "title": "Col"}]
+        rows = [["v0"]]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=10, visible_rows=10,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table(
+            "wnd[0]/usr/tblTEST", max_rows=100, columns_only=True,
+        )
+
+        assert "empty_rows_from" not in result
 
     def test_read_table_control_max_rows_from_scrolled_position(self):
         """max_rows cap still applies when reading from a scrolled position."""
@@ -2326,6 +2395,21 @@ class TestGuiTableControl:
         assert result["data"][0]["ACTIVE"] is True
         assert result["data"][1]["ACTIVE"] is False
         assert result["data"][0]["NAME"] == "Item1"
+
+    def test_read_table_control_unchecked_checkbox_padding_is_blank(self):
+        """The blank lines of SM30 New Entries hold unchecked checkboxes
+        (False): they still end the data."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "NAME", "title": "Name"},
+                    {"name": "ACTIVE", "title": "Active"}]
+        rows = [["Item1", True], ["Item2", False]] + [["", False]] * 8
+        mock_table = self._make_table_control(columns, rows)
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["rows_returned"] == 2
+        assert result["empty_rows_from"] == 2
 
     def test_read_table_control_combobox_cells(self):
         """Combobox cells return the key value."""

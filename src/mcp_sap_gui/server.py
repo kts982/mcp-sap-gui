@@ -309,7 +309,9 @@ Use `sap_get_alv_toolbar` for toolbar actions.
 - **GuiTableControl**: Standard for customizing (SPRO, SM30). Visible rows only.
 
 **Pagination**: Use `start_row` parameter to paginate through large tables. \
-Check `total_rows` in the response to know when you've read everything.
+Check `total_rows` in the response to know when you've read everything. \
+A TableControl's `total_rows` counts empty lines too: `empty_rows_from` in the \
+response means the data ended there.
 
 **Schema first**: Use `columns_only=true` to see column names before reading data. \
 Then use `columns="COL_A,COL_B"` to fetch only what you need.
@@ -474,7 +476,8 @@ These appear when you execute SPRO activities or use SM30:
 3. Toolbar has: "New Entries", "Position...", "Delete", "Save"
 4. To find specific entries, use "Position..." button (opens search dialog)
 5. To read all entries, use `sap_read_table` with `start_row` pagination
-6. Check `total_rows` in response to know total entry count
+6. `total_rows` counts empty lines too, so it is not the entry count: the data \
+ends at `empty_rows_from` when the response has it
 
 ## Classic Lists (WRITE Output)
 
@@ -1202,7 +1205,11 @@ async def sap_read_table(
     only, no data). For a TableControl it also gives each column's cell_type
     and a cell_id template ({row} = zero-based visible row) for
     sap_set_batch_fields. Use columns to fetch only specific columns (CSV).
-    Use start_row to paginate through large tables."""
+    Use start_row to paginate through large tables.
+
+    A TableControl's total_rows counts its empty lines too (SM30 pads the
+    view). When the read reaches the first empty row, the response has
+    empty_rows_from, that row's absolute index: the data ends there."""
     c = _ctrl(ctx)
     capped = min(max_rows, config.max_table_rows)
     return await _com(lambda: c.read_table(
