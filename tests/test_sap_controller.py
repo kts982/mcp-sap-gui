@@ -4091,6 +4091,111 @@ class TestScreenInfoActiveWindow:
         assert result["message"] is not None  # got "" from mock, not None
 
 
+def _tree_json(node_id, *children):
+    """A GetObjectTree reply: {"children": [root]} with Id-only nodes."""
+    import json
+
+    def node(spec):
+        if isinstance(spec, str):
+            return {"properties": {"Id": spec}, "children": []}
+        spec_id, *kids = spec
+        return {"properties": {"Id": spec_id}, "children": [node(k) for k in kids]}
+
+    return json.dumps({"children": [node((node_id, *children))]})
+
+
+class TestScreenInfoSubscreensAndCursor:
+    """Sub-screens and the cursor field: where an RF step or a tab page is,
+    which Info.Program / ScreenNumber (the main screen) do not show."""
+
+    _P = "/app/con[0]/ses[0]/"
+
+    def _controller(self, tree=None, focus_id=None, window="wnd[0]"):
+        controller = TestScreenInfoActiveWindow()._make_controller_with_session()
+        TestScreenInfoActiveWindow()._setup_screen(
+            controller, popup_wnd_id=None if window == "wnd[0]" else window,
+        )
+        session = controller._session
+        if tree is None:
+            session.GetObjectTree.side_effect = AttributeError("GetObjectTree")
+        else:
+            session.GetObjectTree.return_value = tree
+        if focus_id is None:
+            type(session.ActiveWindow).SystemFocus = PropertyMock(
+                side_effect=AttributeError("SystemFocus"),
+            )
+        else:
+            session.ActiveWindow.SystemFocus.Id = focus_id
+        return controller
+
+    def test_namespaced_rf_subscreen_and_cursor(self):
+        p = self._P + "wnd[0]/usr"
+        sub = p + "/subX:/SCWM/SAPLRF_ADHOC:0103"
+        controller = self._controller(
+            tree=_tree_json(p, (sub, sub + "/txt/SCWM/S_RF_ADHOC-PROCTY"),
+                            p + "/txt/SCWM/S_RF_SCRELM-SHORTCUT"),
+            focus_id=sub + "/txt/SCWM/S_RF_ADHOC-PROCTY",
+        )
+
+        result = controller.get_screen_info()
+
+        assert result["subscreens"] == ["/SCWM/SAPLRF_ADHOC:0103"]
+        assert result["cursor"] == (
+            "wnd[0]/usr/subX:/SCWM/SAPLRF_ADHOC:0103/txt/SCWM/S_RF_ADHOC-PROCTY"
+        )
+        controller._session.GetObjectTree.assert_called_once_with(
+            "wnd[0]/usr", ["Id"],
+        )
+
+    def test_nested_subscreens_outer_first_tab_strip_ssub(self):
+        p = self._P + "wnd[0]/usr"
+        tab = p + "/tabsTABSTRIP1/tabpADDR"
+        outer = tab + "/ssubMAINAREA:SAPLSUID_MAINTENANCE:1900"
+        inner = outer + "/subADDR:SAPLSZA1:0300"
+        controller = self._controller(tree=_tree_json(
+            p, (p + "/tabsTABSTRIP1", (tab, (outer, (inner, inner + "/txtX")))),
+        ))
+
+        result = controller.get_screen_info()
+
+        assert result["subscreens"] == [
+            "SAPLSUID_MAINTENANCE:1900", "SAPLSZA1:0300",
+        ]
+
+    def test_popup_reads_its_own_user_area(self):
+        p = self._P + "wnd[1]/usr"
+        controller = self._controller(
+            tree=_tree_json(p, p + "/subSUB:SAPLSPO4:0300"), window="wnd[1]",
+        )
+
+        result = controller.get_screen_info(include_popup=False)
+
+        controller._session.GetObjectTree.assert_called_once_with(
+            "wnd[1]/usr", ["Id"],
+        )
+        assert result["subscreens"] == ["SAPLSPO4:0300"]
+
+    def test_plain_screen_has_neither_field(self):
+        """Easy Access: no sub-screen, no system focus -> both left out."""
+        p = self._P + "wnd[0]/usr"
+        controller = self._controller(tree=_tree_json(p, p + "/cntlIMAGE_CONTAINER"))
+
+        result = controller.get_screen_info()
+
+        assert "subscreens" not in result
+        assert "cursor" not in result
+
+    def test_older_sap_gui_without_object_tree_reports_no_subscreens(self):
+        controller = self._controller(
+            tree=None, focus_id=self._P + "wnd[0]/usr/txtBTCH2170-JOBNAME",
+        )
+
+        result = controller.get_screen_info()
+
+        assert "subscreens" not in result
+        assert result["cursor"] == "wnd[0]/usr/txtBTCH2170-JOBNAME"
+
+
 # ===========================================================================
 # Screen Element Filtering Tests (P1)
 # ===========================================================================

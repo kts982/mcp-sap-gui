@@ -1000,7 +1000,14 @@ async def sap_get_screen_info(ctx: Context) -> dict:
 
     Present only when true: message_has_long_text (sap_press_button on
     'wnd[0]/sbar' opens it) and message_as_popup (the message also sits in a
-    popup that must be closed first)."""
+    popup that must be closed first).
+
+    Present only when set: subscreens, the sub-screens on the active window
+    as "program:dynnr", outer first (program / screen_number name only the
+    main screen, so an RF step, a tab page or a detail area that changes
+    shows only here), and cursor, the ID of the field the cursor is in. A
+    screen redisplayed without a message, e.g. for an empty required
+    field, still moves the cursor to that field."""
     c = _ctrl(ctx)
     return await _com(c.get_screen_info)
 

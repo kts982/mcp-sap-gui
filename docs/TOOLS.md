@@ -66,7 +66,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active transaction policy (presets and policy file: see the README's Security Considerations). A bare `/n` leaves the current transaction |
 | `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, `Save`, or `Ctrl+F` / `Ctrl+G` / `Ctrl+P`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients. A key the screen does not accept is not sent: the response lists `available_keys` |
-| `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window. `message_has_long_text` / `message_as_popup` appear when set |
+| `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window. `message_has_long_text` / `message_as_popup` appear when set, and so do `subscreens` (the sub-screens on the window as `program:dynnr`, outer first: an RF step, a tab page or a detail area, which `program` / `screen_number` do not show) and `cursor` (the ID of the field the cursor is in; a redisplay without a message, e.g. for an empty required field, moves it). Every action response carries the same screen info |
 
 ## Fields And UI Elements
 
