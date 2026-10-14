@@ -829,14 +829,17 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
             response_type=bool,
         )
     except McpError as exc:
+        log_confirmation_event(SAVE_POINT, "sap_send_key", "unsupported_client")
         raise ValueError(
             f"Save action requires confirmation but the client does not "
             f"support elicitation: {exc}"
         ) from exc
 
     if result.action == "accept" and result.data is True:
+        log_confirmation_event(SAVE_POINT, "sap_send_key", "accepted")
         return None  # proceed
 
+    log_confirmation_event(SAVE_POINT, "sap_send_key", "declined")
     action = result.action
     return {
         "status": "cancelled",
@@ -964,15 +967,21 @@ async def sap_send_key(
     A key that is not active on the screen is not sent: the response has an
     error and available_keys, the keys this screen accepts.
 
-    F11 / Save requires user confirmation via elicitation before proceeding."""
+    F11 / Save requires user confirmation via elicitation before proceeding;
+    the response then has confirmed_by_user: true."""
     _check_write(ctx)
     vkey = _parse_key(key)
+    confirmed = False
     if key in _SAVE_KEYS:
         cancellation = await _confirm_save(ctx, key)
         if cancellation is not None:
             return cancellation
+        confirmed = True
     c = _ctrl(ctx)
-    return await _com(lambda: c.send_vkey(vkey))
+    result = await _com(lambda: c.send_vkey(vkey))
+    if confirmed:
+        result["confirmed_by_user"] = True
+    return result
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)

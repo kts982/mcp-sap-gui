@@ -40,7 +40,7 @@ A confirmation point is a category of write operations that requires blocking us
 
 Activate points per session with `sap_set_confirmation_points`, or for every session with `--confirm POINT [POINT ...]`. Adding a point is silent; removing a session point asks the user first and a declined removal keeps it. Points set by `--confirm` and the `save` point can never be removed.
 
-Declining a confirmation returns an error and nothing is executed. Clients without elicitation support fail closed — the gated call errors rather than running unconfirmed, matching the save gate. Removal fails closed on those clients too, so a point activated there cannot be turned off again and blocks that whole category for the rest of the session. Confirmation outcomes (`accepted`, `declined`, `unsupported_client`) are written to the audit log.
+An accepted call's result carries `confirmed_by_user: true`, so the agent, which never sees the prompt, can tell an approved write from an ungated one. Declining a confirmation returns an error and nothing is executed. Clients without elicitation support fail closed — the gated call errors rather than running unconfirmed, matching the save gate. Removal fails closed on those clients too, so a point activated there cannot be turned off again and blocks that whole category for the rest of the session. Confirmation outcomes (`accepted`, `declined`, `unsupported_client`) are written to the audit log.
 
 Points are scoped to the MCP session, not the SAP connection: they survive `sap_disconnect` and a later reconnect.
 
