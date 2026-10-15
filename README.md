@@ -6,7 +6,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
 
-Current release: `0.5.0` for local Windows use over MCP `stdio`.
+Current release: `0.5.1` for local Windows use over MCP `stdio`.
 
 [![CI](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml)
 [![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
@@ -18,6 +18,13 @@ Current release: `0.5.0` for local Windows use over MCP `stdio`.
 - Primary repository: GitHub (`kts982/mcp-sap-gui`).
 
 ## What's New
+
+**0.5.1 — a crash fix for SAP GUI 8.00, and screens that say more.**
+
+- **No more SAP Logon crashes on SAP GUI 8.00.** On 8.00, reading a table control or a classic list in one call could take SAP Logon down with every session in it ([issue #22](https://github.com/kts982/mcp-sap-gui/issues/22)). The cause was one property in that call: the server no longer asks for it and reads checkboxes one by one, still about 3x faster than reading cell by cell. Two environment variables, contributed by [@nelz0n](https://github.com/nelz0n) in [#23](https://github.com/kts982/mcp-sap-gui/pull/23), turn the one-call read off per call site and trace each call to a file, for any other SAP GUI build that misbehaves. Which SAP GUI releases SAP still supports, and what needs which: [SAP GUI Versions](docs/SAP_GUI_VERSIONS.md).
+- **Screen info names sub-screens and the cursor.** Every action response lists the active window's sub-screens (`subscreens`, as `program:dynnr`) and the field the cursor is in (`cursor`), so an RF step, a tab page or a redisplay that only moves the cursor shows without a screenshot.
+- **Table controls say where their data ends.** `sap_read_table` on a table control reports `empty_rows_from`, the first padding line: `total_rows` also counts the empty lines that pad an SM30 view.
+- **Confirmed writes say so.** After you approve a save or another confirmation point, the result carries `confirmed_by_user: true`, so the agent can tell an approved write from an ungated one.
 
 **0.5.0 — the SAP GUI Scripting API, used to the full.** This round went through the 8.10 Scripting API guide on a trial system and closed the gaps it found:
 
