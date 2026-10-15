@@ -314,7 +314,9 @@ Use `sap_get_alv_toolbar` for toolbar actions.
 - **GuiTableControl**: Standard for customizing (SPRO, SM30). Visible rows only.
 
 **Pagination**: Use `start_row` parameter to paginate through large tables. \
-Check `total_rows` in the response to know when you've read everything.
+Check `total_rows` in the response to know when you've read everything. \
+A TableControl's `total_rows` counts empty lines too: `empty_rows_from` in the \
+response means the data ended there.
 
 **Schema first**: Use `columns_only=true` to see column names before reading data. \
 Then use `columns="COL_A,COL_B"` to fetch only what you need.
@@ -479,7 +481,8 @@ These appear when you execute SPRO activities or use SM30:
 3. Toolbar has: "New Entries", "Position...", "Delete", "Save"
 4. To find specific entries, use "Position..." button (opens search dialog)
 5. To read all entries, use `sap_read_table` with `start_row` pagination
-6. Check `total_rows` in response to know total entry count
+6. `total_rows` counts empty lines too, so it is not the entry count: the data \
+ends at `empty_rows_from` when the response has it
 
 ## Classic Lists (WRITE Output)
 
@@ -831,14 +834,17 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
             response_type=bool,
         )
     except McpError as exc:
+        log_confirmation_event(SAVE_POINT, "sap_send_key", "unsupported_client")
         raise ValueError(
             f"Save action requires confirmation but the client does not "
             f"support elicitation: {exc}"
         ) from exc
 
     if result.action == "accept" and result.data is True:
+        log_confirmation_event(SAVE_POINT, "sap_send_key", "accepted")
         return None  # proceed
 
+    log_confirmation_event(SAVE_POINT, "sap_send_key", "declined")
     action = result.action
     return {
         "status": "cancelled",
@@ -966,15 +972,21 @@ async def sap_send_key(
     A key that is not active on the screen is not sent: the response has an
     error and available_keys, the keys this screen accepts.
 
-    F11 / Save requires user confirmation via elicitation before proceeding."""
+    F11 / Save requires user confirmation via elicitation before proceeding;
+    the response then has confirmed_by_user: true."""
     _check_write(ctx)
     vkey = _parse_key(key)
+    confirmed = False
     if key in _SAVE_KEYS:
         cancellation = await _confirm_save(ctx, key)
         if cancellation is not None:
             return cancellation
+        confirmed = True
     c = _ctrl(ctx)
-    return await _com(lambda: c.send_vkey(vkey))
+    result = await _com(lambda: c.send_vkey(vkey))
+    if confirmed:
+        result["confirmed_by_user"] = True
+    return result
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
@@ -993,7 +1005,14 @@ async def sap_get_screen_info(ctx: Context) -> dict:
 
     Present only when true: message_has_long_text (sap_press_button on
     'wnd[0]/sbar' opens it) and message_as_popup (the message also sits in a
-    popup that must be closed first)."""
+    popup that must be closed first).
+
+    Present only when set: subscreens, the sub-screens on the active window
+    as "program:dynnr", outer first (program / screen_number name only the
+    main screen, so an RF step, a tab page or a detail area that changes
+    shows only here), and cursor, the ID of the field the cursor is in. A
+    screen redisplayed without a message, e.g. for an empty required
+    field, still moves the cursor to that field."""
     c = _ctrl(ctx)
     return await _com(c.get_screen_info)
 
@@ -1207,7 +1226,11 @@ async def sap_read_table(
     only, no data). For a TableControl it also gives each column's cell_type
     and a cell_id template ({row} = zero-based visible row) for
     sap_set_batch_fields. Use columns to fetch only specific columns (CSV).
-    Use start_row to paginate through large tables."""
+    Use start_row to paginate through large tables.
+
+    A TableControl's total_rows counts its empty lines too (SM30 pads the
+    view). When the read reaches the first empty row, the response has
+    empty_rows_from, that row's absolute index: the data ends there."""
     c = _ctrl(ctx)
     capped = min(max_rows, config.max_table_rows)
     return await _com(lambda: c.read_table(

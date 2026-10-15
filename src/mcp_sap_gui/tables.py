@@ -15,6 +15,17 @@ from .models import _TOOLBAR_BUTTON_TYPES, VKey
 logger = logging.getLogger(__name__)
 
 
+def _is_blank_cell(value: Any) -> bool:
+    """True for a table-control cell with nothing in it.
+
+    An unchecked checkbox reads False and counts as blank. Padding rows in
+    display / change mode have no cells at all, but the blank lines of SM30
+    New Entries do, unchecked checkboxes included (seen live, V_TTZZ): with
+    False as data every blank line read as an entry.
+    """
+    return value is None or value == "" or value is False
+
+
 class TablesMixin:
     """Mixin for table/grid operations on SAP GUI screens."""
 
@@ -356,7 +367,8 @@ class TablesMixin:
         The read is capped at VisibleRowCount.  GuiTableControl.RowCount often
         includes padding rows (empty rows that fill the visible area beyond
         the actual data), so reading stops early when an all-empty row is
-        encountered.
+        encountered.  Its absolute index is returned as ``empty_rows_from``:
+        the data ends there, whatever RowCount says (SM30: 51 vs 14 entries).
         """
         all_columns_info = self._get_table_control_columns(
             table, with_cell_ids=columns_only,
@@ -381,6 +393,7 @@ class TablesMixin:
         visible_rows = table.VisibleRowCount
 
         data = []
+        empty_rows_from = None
         if total_rows > 0 and all_col_count > 0:
             scrollbar = table.VerticalScrollbar
 
@@ -419,8 +432,7 @@ class TablesMixin:
                     all_empty = True
                     if col_filter:
                         for ci in range(all_col_count):
-                            val = cell_value(vis_idx, ci)
-                            if val is not None and val != "":
+                            if not _is_blank_cell(cell_value(vis_idx, ci)):
                                 all_empty = False
                                 break
                     row_data = {}
@@ -428,10 +440,10 @@ class TablesMixin:
                         value = cell_value(vis_idx, col_idx)
                         col_name = all_column_names[col_idx]
                         row_data[col_name] = value
-                        if not col_filter:
-                            if value is not None and value != "":
-                                all_empty = False
+                        if not col_filter and not _is_blank_cell(value):
+                            all_empty = False
                     if all_empty:
+                        empty_rows_from = start_position + vis_idx
                         break
                     row_data["_absolute_row_index"] = start_position + vis_idx
                     data.append(row_data)
@@ -450,6 +462,8 @@ class TablesMixin:
             "column_info": columns_info,
             "data": data,
         }
+        if empty_rows_from is not None:
+            result["empty_rows_from"] = empty_rows_from
         if columns_only:
             result["columns_only"] = True
         if any(c.get("name_is_title") for c in columns_info):

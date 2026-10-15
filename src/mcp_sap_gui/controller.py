@@ -64,8 +64,9 @@ _ELEMENT_ID_RE = re.compile(
 # The callers of GuiSession.GetObjectTree, as named in
 # MCP_SAP_GUI_DISABLE_OBJECT_TREE: table control cells (sap_read_table),
 # popup windows (sap_get_popup_window and the popup digest of every action
-# response), classic list screens (sap_read_list) and sap_get_screen_elements.
-OBJECT_TREE_SITES = ("table", "popup", "list", "elements")
+# response), classic list screens (sap_read_list), sap_get_screen_elements
+# and the sub-screen IDs in the screen info of every action response.
+OBJECT_TREE_SITES = ("table", "popup", "list", "elements", "subscreens")
 OBJECT_TREE_DISABLE_ENV = "MCP_SAP_GUI_DISABLE_OBJECT_TREE"
 OBJECT_TREE_TRACE_ENV = "MCP_SAP_GUI_TRACE_FILE"
 _ALL_SITES_VALUES = frozenset({"1", "true", "yes", "on", "all"})
@@ -139,6 +140,13 @@ def _trace_object_tree(phase: str, site: str, root_id: str, detail: str = "") ->
             os.fsync(handle.fileno())
     except OSError as e:
         _tree_logger.debug("Cannot write %s %s: %s", OBJECT_TREE_TRACE_ENV, path, e)
+
+
+# A sub-screen container: sub<area>:<program>:<dynnr>, ssub inside a tab strip.
+# A namespaced program brings its slashes along: subX:/SCWM/SAPLRF_SSCR:0001.
+_SUBSCREEN_ID_RE = re.compile(
+    r"/s?sub[A-Za-z0-9_]*:((?:/[A-Za-z0-9_]+/)?[A-Za-z0-9_]+):(\d{4})$"
+)
 
 
 class SAPGUIControllerBase:
@@ -1051,6 +1059,7 @@ class SAPGUIControllerBase:
             # Determine the active window -- use ActiveWindow when
             # available, fall back to wnd[0].
             active_wnd_id = "wnd[0]"
+            active = None
             try:
                 active = self._session.ActiveWindow
                 if active is not None:
@@ -1083,6 +1092,12 @@ class SAPGUIControllerBase:
                 result["message_has_long_text"] = True
             if status.get("as_popup"):
                 result["message_as_popup"] = True
+            subscreens = self._subscreens(active_wnd_id)
+            if subscreens:
+                result["subscreens"] = subscreens
+            cursor = self._cursor_field(active)
+            if cursor:
+                result["cursor"] = cursor
 
             # A popup opened: say what it is in THIS response, so the caller
             # sees pre-filled values before deciding to confirm it.
@@ -1094,6 +1109,42 @@ class SAPGUIControllerBase:
             return result
         except Exception as e:
             return self._error_result({}, e, "Could not read screen information")
+
+    def _subscreens(self, window_id: str) -> List[str]:
+        """The sub-screens on the window, outer first, as ``program:dynnr``.
+
+        Info.Program / ScreenNumber name only the main screen: an RF step,
+        a tab page or a header/item area is a sub-screen, and when only it
+        changes the screen info looks the same. One GetObjectTree call
+        (1-9 ms live, against up to 180 ms walking the elements over COM);
+        an older SAP GUI without it reports none.
+        """
+        tree = self._object_tree(f"{window_id}/usr", ["Id"], site="subscreens")
+        if tree is None:
+            return []
+        found: List[str] = []
+        stack = [tree]
+        while stack:
+            node = stack.pop()
+            node_id = (node.get("properties") or {}).get("Id", "")
+            match = _SUBSCREEN_ID_RE.search(node_id)
+            if match:
+                found.append(f"{match.group(1)}:{match.group(2)}")
+            stack.extend(reversed(node.get("children") or []))
+        return list(dict.fromkeys(found))
+
+    def _cursor_field(self, window) -> str:
+        """ID of the field the cursor is in, '' when there is none.
+
+        SystemFocus is where the application put the cursor. GuiFocus is
+        not: after a transaction start it stays on the command field while
+        the cursor sits in the first input field. A redisplay that moves the
+        cursor to a required field without a message is visible only here.
+        """
+        try:
+            return self._normalize_element_id(window.SystemFocus.Id)
+        except Exception:
+            return ""
 
     def _get_status_bar_info(
         self, window_id: str = "wnd[0]",
