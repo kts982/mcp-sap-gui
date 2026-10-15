@@ -74,6 +74,11 @@ _ALL_SITES_VALUES = frozenset({"1", "true", "yes", "on", "all"})
 _DISP_E_UNKNOWNNAME = -2147352570
 _DISP_E_MEMBERNOTFOUND = -2147352573
 _NOT_SUPPORTED_HRESULTS = frozenset({_DISP_E_UNKNOWNNAME, _DISP_E_MEMBERNOTFOUND})
+# Never asked of GetObjectTree. On SAP GUI 8.00 (PL14 and PL16 seen) a call
+# that requests Selected fails, and SAP Logon often dies with every session
+# in it (issue #22); every other property read fine on the same screens.
+# Read Selected over COM, on the checkboxes that have it.
+_OBJECT_TREE_UNSAFE_PROPS = frozenset({"Selected"})
 
 
 @lru_cache(maxsize=8)
@@ -418,12 +423,19 @@ class SAPGUIControllerBase:
         round trip per property: 4.7 s against 0.2 s for a 1,139-cell list.
         None on an older SAP GUI or any failure, so callers walk instead.
 
+        *props* must not include Selected (_OBJECT_TREE_UNSAFE_PROPS).
         *site* names the caller (one of OBJECT_TREE_SITES). A site listed in
         MCP_SAP_GUI_DISABLE_OBJECT_TREE returns None without making the call,
         and MCP_SAP_GUI_TRACE_FILE records each call before it is made.
         """
         if site not in OBJECT_TREE_SITES:
             raise ValueError(f"unknown GetObjectTree site {site!r}")
+        unsafe = _OBJECT_TREE_UNSAFE_PROPS.intersection(props)
+        if unsafe:
+            raise ValueError(
+                f"GetObjectTree must not read {', '.join(sorted(unsafe))}: "
+                "it crashes SAP GUI 8.00 (issue #22)"
+            )
         if site in object_tree_disabled_sites():
             return None
         _tree_logger.debug("GetObjectTree start site=%s root=%s props=%d",

@@ -963,9 +963,10 @@ class DiscoveryMixin:
 
         read(name) gives Text (str), ColorIndex (int) or Selected (bool): from
         one GetObjectTree call, or over COM on SAP GUI before 7.70 PL3.
+        Selected is always read over COM: the tree must not carry it
+        (_OBJECT_TREE_UNSAFE_PROPS), and only checkboxes ask for it.
         """
-        tree = self._object_tree(usr_id, ["Id", "Text", "ColorIndex", "Selected"],
-                                 site="list")
+        tree = self._object_tree(usr_id, ["Id", "Text", "ColorIndex"], site="list")
         if tree is not None:
             for node in tree.get("children") or []:
                 props = node.get("properties") or {}
@@ -973,7 +974,12 @@ class DiscoveryMixin:
                 def read(name, props=props):
                     value = props.get(name, "")
                     if name == "Selected":
-                        return value == "true"
+                        try:
+                            box = self._session.findById(
+                                self._normalize_element_id(props.get("Id", "")))
+                        except Exception:
+                            return False
+                        return bool(self._list_prop(box, "Selected", False))
                     if name == "ColorIndex":
                         return int(value) if value.lstrip("-").isdigit() else 0
                     return value

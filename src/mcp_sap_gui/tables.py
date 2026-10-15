@@ -110,11 +110,12 @@ class TablesMixin:
 
         A cell's ID ends in [column,visible_row], the indexes GetCell takes;
         values follow _read_cell_value. Reading cell by cell costs about
-        three COM calls each instead.
+        three COM calls each instead. A checkbox is still read over COM: the
+        tree must not carry Selected (_OBJECT_TREE_UNSAFE_PROPS).
         """
         tree = self._object_tree(
             self._validate_element_id(table_id),
-            ["Id", "Type", "Text", "Selected", "Key"],
+            ["Id", "Type", "Text", "Key"],
             site="table",
         )
         if tree is None:
@@ -127,7 +128,12 @@ class TablesMixin:
                 continue
             cell_type = props.get("Type", "")
             if cell_type == "GuiCheckBox":
-                value = props.get("Selected") == "true"
+                try:
+                    value = self._read_cell_value(
+                        self._session.findById(self._normalize_element_id(props["Id"]))
+                    )
+                except Exception:
+                    value = None  # as _read_cell_value gives for an unreadable cell
             elif cell_type == "GuiComboBox":
                 value = props.get("Key", "")
             else:

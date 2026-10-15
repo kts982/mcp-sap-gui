@@ -88,6 +88,13 @@ class TestObjectTreeSwitch:
         assert tree == _TREE["children"][0]
         assert session.calls == [("wnd[1]", ["Id"])]
 
+    def test_selected_is_refused_before_the_call(self):
+        # Asking for Selected crashes SAP GUI 8.00 (issue #22).
+        session = FakeSession()
+        with pytest.raises(ValueError, match="Selected"):
+            _controller(session)._object_tree("wnd[0]/usr", ["Id", "Selected"], site="list")
+        assert session.calls == []
+
     def test_disabled_site_skips_the_call(self, monkeypatch):
         monkeypatch.setenv("MCP_SAP_GUI_DISABLE_OBJECT_TREE", "table")
         session = FakeSession()
