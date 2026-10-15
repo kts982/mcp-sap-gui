@@ -45,6 +45,11 @@ from .confirmation import (
     log_confirmation_event,
     points_with_provenance,
 )
+from .controller import (
+    OBJECT_TREE_DISABLE_ENV,
+    OBJECT_TREE_TRACE_ENV,
+    object_tree_disabled_sites,
+)
 from .policy import (
     DEFAULT_PRESET,
     POLICY_FILE_ENV,
@@ -2208,6 +2213,25 @@ def _build_code_mode_transform():
 # Main entry point
 # ===========================================================================
 
+def _object_tree_settings() -> dict:
+    """The GetObjectTree switch and trace file, as read from the environment.
+
+    Raises ValueError for an unknown site in MCP_SAP_GUI_DISABLE_OBJECT_TREE
+    or a MCP_SAP_GUI_TRACE_FILE that cannot be opened for appending.
+    """
+    disabled = object_tree_disabled_sites()
+    trace_file = os.environ.get(OBJECT_TREE_TRACE_ENV, "").strip() or None
+    if trace_file:
+        try:
+            with open(trace_file, "a", encoding="utf-8"):
+                pass
+        except OSError as exc:
+            raise ValueError(
+                f"{OBJECT_TREE_TRACE_ENV}: cannot write {trace_file}: {exc}"
+            ) from exc
+    return {"disabled_sites": sorted(disabled), "trace_file": trace_file}
+
+
 def main():
     """Main entry point."""
     import argparse
@@ -2286,6 +2310,13 @@ def main():
     except PolicyError as exc:
         parser.error(f"transaction policy: {exc}")
 
+    # Same for the GetObjectTree switch: a mistyped site name would leave on
+    # the very call it was meant to turn off.
+    try:
+        object_tree = _object_tree_settings()
+    except ValueError as exc:
+        parser.error(str(exc))
+
     config = ServerConfig(
         read_only=args.read_only,
         allowed_transactions=args.allowed_transactions,
@@ -2305,6 +2336,13 @@ def main():
     logging.getLogger("mcp_sap_gui.audit").info(
         json.dumps({"event": "policy", **config.policy.describe()})
     )
+    if object_tree["disabled_sites"] or object_tree["trace_file"]:
+        logger.info("GetObjectTree: disabled for %s (%s); trace file %s",
+                    ", ".join(object_tree["disabled_sites"]) or "no site",
+                    OBJECT_TREE_DISABLE_ENV, object_tree["trace_file"] or "off")
+        logging.getLogger("mcp_sap_gui.audit").info(
+            json.dumps({"event": "object_tree", **object_tree})
+        )
 
     if config.confirmation_floor:
         logger.info("Confirmation floor: %s (plus always-on '%s')",
