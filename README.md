@@ -111,7 +111,7 @@ Read the first 20 rows of the visible table
 
 - **Windows** (SAP GUI only runs on Windows)
 - **SAP GUI for Windows** installed
-  - Live compatibility verified with SAP GUI for Windows 8.10 64-bit Patch 0
+  - Live compatibility verified with SAP GUI for Windows 8.10 64-bit Patch 0. SAP supports 8.10 until 30 June 2029 and 8.00 until 12 January 2027 (restricted support until 31 July 2027); 7.70 and older are out of SAP support and run best effort. Dates, sources and what needs which release: [SAP GUI Versions](docs/SAP_GUI_VERSIONS.md)
   - 7.70 Patch Level 3 or later reads a whole screen, popup, list page or table control in one call (`GetObjectTree`); older releases fall back to reading element by element, which is much slower on large screens (seconds instead of a fraction of a second for a full list page)
 - **SAP Logon Pad** running, or a SAP GUI session hosted by **SAP Business Client** (experimental, see [below](#sap-business-client-experimental)) or another embedded SAP GUI (for COM connections)
 - **SAP GUI Scripting enabled** on your SAP systems
@@ -685,6 +685,10 @@ mcp-sap-gui/
 - Confirm the client is launching the server from the project root
 - Restart the MCP client after changing its MCP configuration
 - Run `uv sync` first so the environment and dependencies exist
+
+### SAP Logon exits during a read
+- On SAP GUI 8.00 with 0.5.0, table-control and classic-list reads can take SAP Logon down: upgrade to 0.5.1 ([issue #22](https://github.com/kts982/mcp-sap-gui/issues/22))
+- Another SAP GUI build that fails on the one-call read: turn it off per call site with `MCP_SAP_GUI_DISABLE_OBJECT_TREE`, and find the call with `MCP_SAP_GUI_TRACE_FILE`. See [Switches for a misbehaving SAP GUI build](docs/SAP_GUI_VERSIONS.md#switches-for-a-misbehaving-sap-gui-build)
 
 ### "The tool is available, but the action is blocked"
 - Check whether the server is running with `--read-only`
