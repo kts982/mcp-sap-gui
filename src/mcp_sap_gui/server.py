@@ -896,11 +896,12 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
         return None
     # The popup is still open and unchanged: keep its buttons for the next
     # step (e.g. press "No").
+    what = "the answer" if plan.get("unread_question") else "save"
     popup.update({
         "status": "cancelled",
         "action": "none",
         "button": label,
-        "reason": f"User did not confirm save ({action})",
+        "reason": f"User did not confirm {what} ({action})",
     })
     return popup
 

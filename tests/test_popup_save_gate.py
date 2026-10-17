@@ -538,6 +538,7 @@ def test_press_button_decline_presses_nothing(tools):
     ctx = FakeCtx("decline", None)
     result = _run(server.sap_press_button("wnd[1]/usr/btnBUTTON_2", ctx))
     assert result["status"] == "cancelled"
+    assert result["reason"] == "User did not confirm the answer (decline)"
     assert result["buttons"]  # still there for the next step
     assert tools.session.log == []
 
