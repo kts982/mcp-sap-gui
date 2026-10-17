@@ -1,4 +1,4 @@
-"""Element-ID validation: '#' in a path segment (SAP's unnamed %#AUTOTEXT buttons)."""
+"""Element-ID validation: SAP screen names in path segments ('#', '*', '=>', '<FS>')."""
 
 import pytest
 
@@ -13,6 +13,16 @@ ACCEPTED = [
     "wnd[0]/usr/subSUB1:SAPLSO14:0960/btn%#AUTOTEXT005",
     "wnd[1]/usr/btn%#AUTOTEXT001",
     "wnd[0]/usr/tblX/btn%#AUTOTEXT005[0,1]",
+    # Names read from live screens and the screen texts table D021T.
+    "wnd[0]/usr/lbl*DY_1000-CLIF",
+    "wnd[0]/usr/radDYNPROLOGIC=>DYNPFIELDS-SELECTED_CHECKS",
+    "wnd[0]/usr/txtGO_REPORT->MV_NUMBER_OF_FREE_JOBS",
+    "wnd[0]/usr/txt<FILTER>-FIELD_LABEL",
+    "wnd[0]/usr/chk=/BA1/V_TF4_FXRTY-XFIXD",
+    "wnd[0]/usr/btnB_P++",
+    "wnd[0]/usr/txt&LOCFIELD0001",
+    "wnd[0]/usr/lbl#%'AUTOTEXT01",
+    "wnd[0]/usr/btnFE_(",
     # Shapes accepted before the change stay accepted.
     "wnd[0]/usr/txtTHOLT-KTEXT",
     "wnd[0]/shellcont[0]/shell",
@@ -23,6 +33,10 @@ REJECTED = [
     "wnd[0]/usr/btn[#]",  # '#' inside an index
     "wnd[0]/usr/txt#[0",  # unbalanced bracket
     "usr/btn%#AUTOTEXT005",  # no window
+    "wnd[0]/usr/txt A",  # whitespace
+    "wnd[0]/usr/txtA\tB",
+    "wnd[0]/usr/txtA]",  # stray bracket
+    "wnd[0]/usr//txtA",  # empty segment
 ]
 
 
