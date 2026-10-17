@@ -1893,6 +1893,7 @@ class TestSaveConfirmation:
         ctx.elicit.assert_called_once()
         mock_controller.send_vkey.assert_called_once()
         assert result.get("screen", {}).get("transaction") == "VA01"
+        assert result["confirmed_by_user"] is True
 
     @pytest.mark.asyncio
     async def test_save_alias_accepted(self, srv):
@@ -1995,9 +1996,10 @@ class TestSaveConfirmation:
 
         with patch.object(srv, "_ctrl", return_value=mock_controller), \
              patch.object(srv, "_com", new_callable=lambda: lambda fn: _async_wrap(fn)):
-            await srv.sap_send_key("Enter", ctx)
+            result = await srv.sap_send_key("Enter", ctx)
 
         ctx.elicit.assert_not_called()
+        assert "confirmed_by_user" not in result
         mock_controller.send_vkey.assert_called_once()
 
 

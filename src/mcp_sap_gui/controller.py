@@ -7,8 +7,12 @@ transaction execution, and screen information retrieval.
 
 import json
 import logging
+import os
 import re
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+import time
+from datetime import datetime
+from functools import lru_cache
+from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Tuple
 
 from .models import (
     SAPGUIError,
@@ -20,6 +24,9 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+# GetObjectTree calls and their failures, on a logger of their own so that
+# they can be raised to DEBUG (or silenced) without the rest of the package.
+_tree_logger = logging.getLogger("mcp_sap_gui.object_tree")
 
 
 _WINDOW_ID_RE = re.compile(r"^wnd\[(\d+)\]$")
@@ -52,6 +59,98 @@ _ELEMENT_ID_RE = re.compile(
     r"^wnd\[(\d+)\]"
     r"(?:/(?:usr|mbar|sbar|titl|tbar\[\d+\]|shellcont(?:\[\d+\])?)"
     r"(?:/[A-Za-z0-9_.:%\\-]+(?:\[[A-Za-z0-9_,]+\])*)*)$"
+)
+
+# The callers of GuiSession.GetObjectTree, as named in
+# MCP_SAP_GUI_DISABLE_OBJECT_TREE: table control cells (sap_read_table),
+# popup windows (sap_get_popup_window and the popup digest of every action
+# response), classic list screens (sap_read_list), sap_get_screen_elements
+# and the sub-screen IDs in the screen info of every action response.
+OBJECT_TREE_SITES = ("table", "popup", "list", "elements", "subscreens")
+OBJECT_TREE_DISABLE_ENV = "MCP_SAP_GUI_DISABLE_OBJECT_TREE"
+OBJECT_TREE_TRACE_ENV = "MCP_SAP_GUI_TRACE_FILE"
+_ALL_SITES_VALUES = frozenset({"1", "true", "yes", "on", "all"})
+# GetObjectTree is missing (SAP GUI before 7.70 PL3): the walk is by design.
+_DISP_E_UNKNOWNNAME = -2147352570
+_DISP_E_MEMBERNOTFOUND = -2147352573
+_NOT_SUPPORTED_HRESULTS = frozenset({_DISP_E_UNKNOWNNAME, _DISP_E_MEMBERNOTFOUND})
+# Never asked of GetObjectTree. On SAP GUI 8.00 (PL14 and PL16 seen) a call
+# that requests Selected fails, and SAP Logon often dies with every session
+# in it (issue #22); every other property read fine on the same screens.
+# Read Selected over COM, on the checkboxes that have it.
+_OBJECT_TREE_UNSAFE_PROPS = frozenset({"Selected"})
+
+
+@lru_cache(maxsize=8)
+def _parse_disabled_sites(value: str) -> FrozenSet[str]:
+    value = value.strip().lower()
+    if not value:
+        return frozenset()
+    if value in _ALL_SITES_VALUES:
+        return frozenset(OBJECT_TREE_SITES)
+    sites = {part.strip() for part in value.split(",") if part.strip()}
+    unknown = sorted(sites - set(OBJECT_TREE_SITES))
+    if unknown:
+        raise ValueError(
+            f"{OBJECT_TREE_DISABLE_ENV}: unknown site(s) {', '.join(unknown)}; "
+            f"use 'all' or a comma list of {', '.join(OBJECT_TREE_SITES)}"
+        )
+    return frozenset(sites)
+
+
+def object_tree_disabled_sites(value: Optional[str] = None) -> FrozenSet[str]:
+    """The GetObjectTree call sites turned off by MCP_SAP_GUI_DISABLE_OBJECT_TREE.
+
+    Unset or empty: none. ``all`` (or ``1``/``true``/``yes``/``on``): every
+    site. Otherwise a comma list of OBJECT_TREE_SITES, e.g. ``table,popup``.
+    A disabled site reads its elements one by one over COM, as on SAP GUI
+    before 7.70 PL3. Raises ValueError for an unknown site name; the server
+    checks this at start-up and refuses to run.
+    """
+    if value is None:
+        value = os.environ.get(OBJECT_TREE_DISABLE_ENV, "")
+    return _parse_disabled_sites(value)
+
+
+def _hresult(exc: BaseException) -> Optional[int]:
+    """The HRESULT of a pywin32 com_error, else None."""
+    hresult = getattr(exc, "hresult", None)
+    if isinstance(hresult, int):
+        return hresult
+    args = getattr(exc, "args", ())
+    if args and isinstance(args[0], int):
+        return args[0]
+    return None
+
+
+def _trace_object_tree(phase: str, site: str, root_id: str, detail: str = "") -> None:
+    """Append one line to MCP_SAP_GUI_TRACE_FILE and fsync it.
+
+    The ``start`` line is on disk before the COM call is made. If SAP GUI
+    dies inside the call, the last ``start`` with no ``done`` or ``failed``
+    after it names the call that was in flight. Timestamps are local time
+    with the UTC offset, to line up with the Windows event log.
+    """
+    path = os.environ.get(OBJECT_TREE_TRACE_ENV, "").strip()
+    if not path:
+        return
+    stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+    line = f"{stamp} {os.getpid()} {phase} {site} {root_id}"
+    if detail:
+        line += f" {detail}"
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as e:
+        _tree_logger.debug("Cannot write %s %s: %s", OBJECT_TREE_TRACE_ENV, path, e)
+
+
+# A sub-screen container: sub<area>:<program>:<dynnr>, ssub inside a tab strip.
+# A namespaced program brings its slashes along: subX:/SCWM/SAPLRF_SSCR:0001.
+_SUBSCREEN_ID_RE = re.compile(
+    r"/s?sub[A-Za-z0-9_]*:((?:/[A-Za-z0-9_]+/)?[A-Za-z0-9_]+):(\d{4})$"
 )
 
 
@@ -313,8 +412,8 @@ class SAPGUIControllerBase:
         normalized = self._validate_element_id(element_id)
         return self._session.findById(normalized)
 
-    def _object_tree(self, root_id: str,
-                     props: List[str]) -> Optional[Dict[str, Any]]:
+    def _object_tree(self, root_id: str, props: List[str], *,
+                     site: str) -> Optional[Dict[str, Any]]:
         """An element and all its descendants in ONE call, or None.
 
         GuiSession.GetObjectTree (SAP GUI 7.70 PL3+) returns the subtree as
@@ -323,15 +422,50 @@ class SAPGUIControllerBase:
         lacks the property). Reading each element over COM instead costs one
         round trip per property: 4.7 s against 0.2 s for a 1,139-cell list.
         None on an older SAP GUI or any failure, so callers walk instead.
+
+        *props* must not include Selected (_OBJECT_TREE_UNSAFE_PROPS).
+        *site* names the caller (one of OBJECT_TREE_SITES). A site listed in
+        MCP_SAP_GUI_DISABLE_OBJECT_TREE returns None without making the call,
+        and MCP_SAP_GUI_TRACE_FILE records each call before it is made.
         """
+        if site not in OBJECT_TREE_SITES:
+            raise ValueError(f"unknown GetObjectTree site {site!r}")
+        unsafe = _OBJECT_TREE_UNSAFE_PROPS.intersection(props)
+        if unsafe:
+            raise ValueError(
+                f"GetObjectTree must not read {', '.join(sorted(unsafe))}: "
+                "it crashes SAP GUI 8.00 (issue #22)"
+            )
+        if site in object_tree_disabled_sites():
+            return None
+        _tree_logger.debug("GetObjectTree start site=%s root=%s props=%d",
+                           site, root_id, len(props))
+        _trace_object_tree("start", site, root_id, f"props={len(props)}")
+        started = time.perf_counter()
         try:
             raw = self._session.GetObjectTree(root_id, props)
+            ms = (time.perf_counter() - started) * 1000
+            size = len(raw) if isinstance(raw, str) else -1
+            _trace_object_tree("done", site, root_id, f"ms={ms:.0f} bytes={size}")
+            _tree_logger.debug("GetObjectTree done site=%s root=%s ms=%.0f bytes=%d",
+                               site, root_id, ms, size)
             if not isinstance(raw, str):
                 return None
             nodes = json.loads(raw).get("children") or []
             return nodes[0] if nodes else None
         except Exception as e:
-            logger.debug("GetObjectTree(%s) not available: %s", root_id, e)
+            ms = (time.perf_counter() - started) * 1000
+            hresult = _hresult(e)
+            _trace_object_tree("failed", site, root_id,
+                               f"ms={ms:.0f} error={type(e).__name__} hresult={hresult}")
+            if isinstance(e, AttributeError) or hresult in _NOT_SUPPORTED_HRESULTS:
+                _tree_logger.debug("GetObjectTree(%s) not available: %s", root_id, e)
+            else:
+                _tree_logger.warning(
+                    "GetObjectTree failed site=%s root=%s props=%d hresult=%s "
+                    "error=%s: %s; reading element by element instead",
+                    site, root_id, len(props), hresult, type(e).__name__, e,
+                )
             return None
 
     def _is_sensitive_field_id(self, field_id: str) -> bool:
@@ -937,6 +1071,7 @@ class SAPGUIControllerBase:
             # Determine the active window -- use ActiveWindow when
             # available, fall back to wnd[0].
             active_wnd_id = "wnd[0]"
+            active = None
             try:
                 active = self._session.ActiveWindow
                 if active is not None:
@@ -969,6 +1104,12 @@ class SAPGUIControllerBase:
                 result["message_has_long_text"] = True
             if status.get("as_popup"):
                 result["message_as_popup"] = True
+            subscreens = self._subscreens(active_wnd_id)
+            if subscreens:
+                result["subscreens"] = subscreens
+            cursor = self._cursor_field(active)
+            if cursor:
+                result["cursor"] = cursor
 
             # A popup opened: say what it is in THIS response, so the caller
             # sees pre-filled values before deciding to confirm it.
@@ -980,6 +1121,42 @@ class SAPGUIControllerBase:
             return result
         except Exception as e:
             return self._error_result({}, e, "Could not read screen information")
+
+    def _subscreens(self, window_id: str) -> List[str]:
+        """The sub-screens on the window, outer first, as ``program:dynnr``.
+
+        Info.Program / ScreenNumber name only the main screen: an RF step,
+        a tab page or a header/item area is a sub-screen, and when only it
+        changes the screen info looks the same. One GetObjectTree call
+        (1-9 ms live, against up to 180 ms walking the elements over COM);
+        an older SAP GUI without it reports none.
+        """
+        tree = self._object_tree(f"{window_id}/usr", ["Id"], site="subscreens")
+        if tree is None:
+            return []
+        found: List[str] = []
+        stack = [tree]
+        while stack:
+            node = stack.pop()
+            node_id = (node.get("properties") or {}).get("Id", "")
+            match = _SUBSCREEN_ID_RE.search(node_id)
+            if match:
+                found.append(f"{match.group(1)}:{match.group(2)}")
+            stack.extend(reversed(node.get("children") or []))
+        return list(dict.fromkeys(found))
+
+    def _cursor_field(self, window) -> str:
+        """ID of the field the cursor is in, '' when there is none.
+
+        SystemFocus is where the application put the cursor. GuiFocus is
+        not: after a transaction start it stays on the command field while
+        the cursor sits in the first input field. A redisplay that moves the
+        cursor to a required field without a message is visible only here.
+        """
+        try:
+            return self._normalize_element_id(window.SystemFocus.Id)
+        except Exception:
+            return ""
 
     def _get_status_bar_info(
         self, window_id: str = "wnd[0]",

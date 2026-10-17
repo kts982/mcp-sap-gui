@@ -17,6 +17,7 @@ tests had missed. Each class pins one of them:
 
 import base64
 import json
+import re
 import struct
 from unittest.mock import MagicMock, PropertyMock, patch
 
@@ -1182,7 +1183,7 @@ class TestPopupAndListFromObjectTree:
 
         assert page["lines"] == ["xxx"]
         controller._session.GetObjectTree.assert_called_once_with(
-            "wnd[0]/usr", ["Id", "Text", "ColorIndex", "Selected"],
+            "wnd[0]/usr", ["Id", "Text", "ColorIndex"],
         )
 
 
@@ -1217,7 +1218,11 @@ class TestTableControlFromObjectTree:
         table.Columns.side_effect = lambda i: MagicMock(Title=f"T{i}", Tooltip="")
         table.GetCell.side_effect = self._cell
         controller = _make_controller_with_session()
-        controller._session.findById.return_value = table
+
+        def find(element_id):
+            cell = re.search(r"\[(\d+),(\d+)\]$", element_id)
+            return self._cell(int(cell.group(2)), int(cell.group(1))) if cell else table
+        controller._session.findById.side_effect = find
         if path == "tree":
             def object_tree(root, props):
                 cells = [self._cell(r, c) for r in range(2) for c in range(3)]
@@ -1249,15 +1254,22 @@ class TestTableControlFromObjectTree:
             {"V-NAME": "A3", "_absolute_row_index": 2},
         ]
 
-    def test_tree_path_reads_no_cell_values_over_com(self):
+    def test_tree_path_reads_only_checkboxes_over_com(self):
         controller, table = self._table("tree")
 
         controller.read_table("wnd[0]/usr/tblTEST")
 
-        # Column names still come from row 0 (three cells); the six data
-        # cells came from the one GetObjectTree call.
+        # Column names still come from row 0 (three cells); the data cells
+        # came from the one GetObjectTree call, except the two checkboxes:
+        # asking the tree for Selected crashes SAP GUI 8.00 (issue #22).
         assert controller._session.GetObjectTree.call_count == 1
+        assert "Selected" not in controller._session.GetObjectTree.call_args.args[1]
         assert table.GetCell.call_count == 3
+        assert [c.args[0] for c in controller._session.findById.call_args_list
+                if c.args[0].endswith("]")] == [
+            "wnd[0]/usr/tblTEST/chkV-ACTIVE[1,0]",
+            "wnd[0]/usr/tblTEST/chkV-ACTIVE[1,1]",
+        ]
 
 
 class TestTableControlColumnTemplates:
