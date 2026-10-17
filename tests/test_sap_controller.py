@@ -2262,6 +2262,7 @@ class TestGuiTableControl:
         assert result["rows_returned"] == 5  # only rows 95-99 are real
         assert result["data"][0]["COL"] == "v95"
         assert result["data"][4]["COL"] == "v99"
+        assert result["empty_rows_from"] == 100
 
     def test_read_table_control_padding_detection(self):
         """Padding rows (empty rows beyond real data) are excluded from results.
@@ -2290,6 +2291,74 @@ class TestGuiTableControl:
         assert result["rows_returned"] == 6
         assert result["data"][0]["LGNUM"] == "WH051"
         assert result["data"][5]["LGNUM"] == "WH056"
+        assert result["empty_rows_from"] == 57
+
+    def test_read_table_control_reports_where_the_data_ends(self):
+        """SM30 field case: RowCount 51 for a view with 14 entries.
+
+        total_rows stays the control's raw RowCount; empty_rows_from tells
+        the caller the data ended, so "have I read everything" can stop.
+        """
+        controller = self._make_controller_with_session()
+        columns = [{"name": "DEVICE", "title": "Device"}]
+        rows = [[f"D{i:02d}"] for i in range(14)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=51, visible_rows=37,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["total_rows"] == 51
+        assert result["rows_returned"] == 14
+        assert result["empty_rows_from"] == 14
+
+    def test_read_table_control_empty_rows_from_with_column_filter(self):
+        """A row with data only in unrequested columns is not the end of data."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "KEY", "title": "Key"}, {"name": "TEXT", "title": "Text"}]
+        rows = [["K1", "one"], ["", "only text"], ["K3", "three"]]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=10, visible_rows=10,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table(
+            "wnd[0]/usr/tblTEST", max_rows=100, columns="KEY",
+        )
+
+        assert result["rows_returned"] == 3
+        assert result["empty_rows_from"] == 3
+
+    def test_read_table_control_no_empty_rows_from_while_rows_are_filled(self):
+        """A full visible window says nothing about the rows below it."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL_A", "title": "A"}]
+        rows = [[f"val_{i}"] for i in range(10)]
+        mock_table = self._make_table_control(columns, rows,
+                                               total_rows=10, visible_rows=3)
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["rows_returned"] == 3
+        assert "empty_rows_from" not in result
+
+    def test_read_table_control_columns_only_has_no_empty_rows_from(self):
+        """A schema read reads no rows, so it cannot know where data ends."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL", "title": "Col"}]
+        rows = [["v0"]]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=10, visible_rows=10,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table(
+            "wnd[0]/usr/tblTEST", max_rows=100, columns_only=True,
+        )
+
+        assert "empty_rows_from" not in result
 
     def test_read_table_control_max_rows_from_scrolled_position(self):
         """max_rows cap still applies when reading from a scrolled position."""
@@ -2326,6 +2395,21 @@ class TestGuiTableControl:
         assert result["data"][0]["ACTIVE"] is True
         assert result["data"][1]["ACTIVE"] is False
         assert result["data"][0]["NAME"] == "Item1"
+
+    def test_read_table_control_unchecked_checkbox_padding_is_blank(self):
+        """The blank lines of SM30 New Entries hold unchecked checkboxes
+        (False): they still end the data."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "NAME", "title": "Name"},
+                    {"name": "ACTIVE", "title": "Active"}]
+        rows = [["Item1", True], ["Item2", False]] + [["", False]] * 8
+        mock_table = self._make_table_control(columns, rows)
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["rows_returned"] == 2
+        assert result["empty_rows_from"] == 2
 
     def test_read_table_control_combobox_cells(self):
         """Combobox cells return the key value."""
@@ -4005,6 +4089,111 @@ class TestScreenInfoActiveWindow:
         assert result["active_window"] == "wnd[1]"
         # Status bar should still be populated from wnd[0]
         assert result["message"] is not None  # got "" from mock, not None
+
+
+def _tree_json(node_id, *children):
+    """A GetObjectTree reply: {"children": [root]} with Id-only nodes."""
+    import json
+
+    def node(spec):
+        if isinstance(spec, str):
+            return {"properties": {"Id": spec}, "children": []}
+        spec_id, *kids = spec
+        return {"properties": {"Id": spec_id}, "children": [node(k) for k in kids]}
+
+    return json.dumps({"children": [node((node_id, *children))]})
+
+
+class TestScreenInfoSubscreensAndCursor:
+    """Sub-screens and the cursor field: where an RF step or a tab page is,
+    which Info.Program / ScreenNumber (the main screen) do not show."""
+
+    _P = "/app/con[0]/ses[0]/"
+
+    def _controller(self, tree=None, focus_id=None, window="wnd[0]"):
+        controller = TestScreenInfoActiveWindow()._make_controller_with_session()
+        TestScreenInfoActiveWindow()._setup_screen(
+            controller, popup_wnd_id=None if window == "wnd[0]" else window,
+        )
+        session = controller._session
+        if tree is None:
+            session.GetObjectTree.side_effect = AttributeError("GetObjectTree")
+        else:
+            session.GetObjectTree.return_value = tree
+        if focus_id is None:
+            type(session.ActiveWindow).SystemFocus = PropertyMock(
+                side_effect=AttributeError("SystemFocus"),
+            )
+        else:
+            session.ActiveWindow.SystemFocus.Id = focus_id
+        return controller
+
+    def test_namespaced_rf_subscreen_and_cursor(self):
+        p = self._P + "wnd[0]/usr"
+        sub = p + "/subX:/SCWM/SAPLRF_ADHOC:0103"
+        controller = self._controller(
+            tree=_tree_json(p, (sub, sub + "/txt/SCWM/S_RF_ADHOC-PROCTY"),
+                            p + "/txt/SCWM/S_RF_SCRELM-SHORTCUT"),
+            focus_id=sub + "/txt/SCWM/S_RF_ADHOC-PROCTY",
+        )
+
+        result = controller.get_screen_info()
+
+        assert result["subscreens"] == ["/SCWM/SAPLRF_ADHOC:0103"]
+        assert result["cursor"] == (
+            "wnd[0]/usr/subX:/SCWM/SAPLRF_ADHOC:0103/txt/SCWM/S_RF_ADHOC-PROCTY"
+        )
+        controller._session.GetObjectTree.assert_called_once_with(
+            "wnd[0]/usr", ["Id"],
+        )
+
+    def test_nested_subscreens_outer_first_tab_strip_ssub(self):
+        p = self._P + "wnd[0]/usr"
+        tab = p + "/tabsTABSTRIP1/tabpADDR"
+        outer = tab + "/ssubMAINAREA:SAPLSUID_MAINTENANCE:1900"
+        inner = outer + "/subADDR:SAPLSZA1:0300"
+        controller = self._controller(tree=_tree_json(
+            p, (p + "/tabsTABSTRIP1", (tab, (outer, (inner, inner + "/txtX")))),
+        ))
+
+        result = controller.get_screen_info()
+
+        assert result["subscreens"] == [
+            "SAPLSUID_MAINTENANCE:1900", "SAPLSZA1:0300",
+        ]
+
+    def test_popup_reads_its_own_user_area(self):
+        p = self._P + "wnd[1]/usr"
+        controller = self._controller(
+            tree=_tree_json(p, p + "/subSUB:SAPLSPO4:0300"), window="wnd[1]",
+        )
+
+        result = controller.get_screen_info(include_popup=False)
+
+        controller._session.GetObjectTree.assert_called_once_with(
+            "wnd[1]/usr", ["Id"],
+        )
+        assert result["subscreens"] == ["SAPLSPO4:0300"]
+
+    def test_plain_screen_has_neither_field(self):
+        """Easy Access: no sub-screen, no system focus -> both left out."""
+        p = self._P + "wnd[0]/usr"
+        controller = self._controller(tree=_tree_json(p, p + "/cntlIMAGE_CONTAINER"))
+
+        result = controller.get_screen_info()
+
+        assert "subscreens" not in result
+        assert "cursor" not in result
+
+    def test_older_sap_gui_without_object_tree_reports_no_subscreens(self):
+        controller = self._controller(
+            tree=None, focus_id=self._P + "wnd[0]/usr/txtBTCH2170-JOBNAME",
+        )
+
+        result = controller.get_screen_info()
+
+        assert "subscreens" not in result
+        assert result["cursor"] == "wnd[0]/usr/txtBTCH2170-JOBNAME"
 
 
 # ===========================================================================
