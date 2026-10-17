@@ -73,7 +73,9 @@ jobs:
 
           dist = Path("dist")
           lines = []
-          for path in sorted(dist.iterdir()):
+          # Skip dotfiles: uv build writes dist/.gitignore, which is not a
+          # release asset (upload-artifact leaves hidden files out).
+          for path in sorted(p for p in dist.iterdir() if not p.name.startswith(".")):
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
               lines.append(f"{digest}  {path.name}")
           (dist / "SHA256SUMS.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
