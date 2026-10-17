@@ -55,10 +55,16 @@ _DEAD_SESSION_HRESULTS = frozenset({_HRESULT_DISCONNECTED, _HRESULT_SERVER_UNAVA
 # docking containers. The latter (wnd[0]/shellcont, wnd[0]/shellcont[1]) sit
 # BESIDE usr and hold the dialog-structure tree of view clusters (SM34, most
 # IMG activities) and the SE80 repository tree.
+# Below them, a path segment is a type prefix plus the element's screen name,
+# and a screen name is not just letters and digits: %#AUTOTEXT001 (unnamed
+# elements, e.g. SO23's btn%#AUTOTEXT005), *DY_1000-CLIF (SE24),
+# DYNPROLOGIC=>DYNPFIELDS-SELECTED_CHECKS (SLIN), <FILTER>-FIELD_LABEL, and
+# + & ' ! ? " ( ) { in other standard screens. So a segment is anything but
+# whitespace and the separators / [ ]; discovery returns the IDs as they are.
 _ELEMENT_ID_RE = re.compile(
     r"^wnd\[(\d+)\]"
     r"(?:/(?:usr|mbar|sbar|titl|tbar\[\d+\]|shellcont(?:\[\d+\])?)"
-    r"(?:/[A-Za-z0-9_.:%\\-]+(?:\[[A-Za-z0-9_,]+\])*)*)$"
+    r"(?:/[^\s/\[\]]+(?:\[[A-Za-z0-9_,]+\])*)*)$"
 )
 
 # The callers of GuiSession.GetObjectTree, as named in
