@@ -32,7 +32,7 @@ A confirmation point is a category of write operations that requires blocking us
 
 | Point | Gated tools |
 |---|---|
-| `save` | `sap_send_key("F11")` / `sap_send_key("Save")` and `sap_press_button` on the Save toolbar button (`wnd[0]/tbar[0]/btn[11]`). Always on, cannot be turned off |
+| `save` | `sap_send_key("F11")` / `sap_send_key("Save")` and `sap_press_button` on the Save toolbar button (`wnd[0]/tbar[0]/btn[11]`). On popups (`sap_handle_popup`, or `sap_press_button` on a popup button): a Save button, Yes/OK on a popup about saving, and any answer but Cancel to a popup question the server cannot read. Always on, cannot be turned off |
 | `transactions` | `sap_execute_transaction` |
 | `batch_fields` | `sap_set_batch_fields` |
 | `field_writes` | `sap_set_field`, `sap_modify_cell`, `sap_set_textedit`, `sap_select_checkbox`, `sap_select_radio_button`, `sap_select_combobox_entry` |
@@ -129,8 +129,8 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`, the F4 time picker `time_picker` (with its dropdown IDs and the time shown); none is ever auto-handled. SAP's message popup is only auto-confirmed when its icon shows an information message, so a warning in any logon language is not. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are |
-| `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification. After an action the result keeps the popup's title, texts and entered values and drops its now-dead element IDs |
+| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`, the F4 time picker `time_picker` (with its dropdown IDs and the time shown); none is ever auto-handled. SAP's message popup is only auto-confirmed when its icon shows an information message, so a warning in any logon language is not. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are. SAP's confirmation popup draws its question in an HTML viewer: with the Internet Explorer browser control its text is in `texts`; with Edge (the default) the popup says `question_readable: false`, and `sap_screenshot` shows the question |
+| `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification. `cancel` presses a Cancel button or F12, never No (on a save prompt No drops the changes). When the Enter or F12 fallback leaves the popup as it was, the result is `action: "no_effect"`. After an action the result keeps the popup's title, texts and entered values and drops its now-dead element IDs |
 | `sap_get_toolbar_buttons` | List standard SAP toolbar buttons |
 | `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers (page text only with the Internet Explorer browser control; the Edge control, e.g. the F1 Performance Assistant, is reported as not readable) |
 | `sap_read_list` | Read a classic ABAP list (`WRITE` output, F4 hit lists) as lines of text, with list colours and paging. One page is ~500 label elements to discovery; this returns the lines |
