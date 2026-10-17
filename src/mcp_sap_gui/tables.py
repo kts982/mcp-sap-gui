@@ -557,10 +557,12 @@ class TablesMixin:
         """
         Press a toolbar button on an ALV grid.
 
-        Automatically detects Menu/ButtonAndMenu types and uses
-        PressToolbarContextButton instead of PressToolbarButton.
-        For menu types, this opens the context menu -- use
-        select_alv_context_menu_item() to pick an item.
+        The button's type on the toolbar decides: Menu/ButtonAndMenu use
+        PressToolbarContextButton, which opens the menu -- use
+        select_alv_context_menu_item() to pick an item. Other buttons use
+        PressToolbarButton. Asking the type first matters: on SAP GUI 8.10
+        PressToolbarContextButton on a plain button does not fail, it runs
+        the button (&FIND opened its popup and was reported as a menu).
 
         Args:
             grid_id: SAP GUI grid ID
@@ -574,15 +576,22 @@ class TablesMixin:
         try:
             grid = self._find_element(grid_id)
 
-            # Try PressToolbarContextButton first (works for Menu/ButtonAndMenu)
-            # Fall back to PressToolbarButton for regular buttons
-            menu_opened = False
-            try:
+            btn_type = self._alv_toolbar_button_type(grid, button_id)
+            if btn_type in ("Menu", "ButtonAndMenu"):
                 grid.PressToolbarContextButton(button_id)
                 menu_opened = True
-            except Exception:
-                # Not a menu button, use regular press
+            elif btn_type is not None:
                 grid.PressToolbarButton(button_id)
+                menu_opened = False
+            else:
+                # Type unknown (ID not listed on the toolbar): try the menu
+                # press first and fall back to a regular press
+                menu_opened = False
+                try:
+                    grid.PressToolbarContextButton(button_id)
+                    menu_opened = True
+                except Exception:
+                    grid.PressToolbarButton(button_id)
 
             if menu_opened:
                 result = {
@@ -612,6 +621,20 @@ class TablesMixin:
                 e,
                 "Could not press ALV toolbar button",
             )
+
+    @staticmethod
+    def _alv_toolbar_button_type(grid, button_id: str) -> Optional[str]:
+        """Type of the toolbar button with this ID ("Button", "Menu", ...).
+
+        None when the toolbar does not list the ID or cannot be read.
+        """
+        try:
+            for i in range(grid.ToolbarButtonCount):
+                if grid.GetToolbarButtonId(i) == button_id:
+                    return _TOOLBAR_BUTTON_TYPES.get(grid.GetToolbarButtonType(i))
+        except Exception:
+            pass
+        return None
 
     def _open_context_menu_items(self, shell, depth: int = 0) -> list:
         """Items of the context menu open on *shell*: text and function code.

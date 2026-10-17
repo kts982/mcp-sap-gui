@@ -1129,6 +1129,75 @@ class TestALVToolbarButtonType:
         assert result["buttons"][0]["type"] == "99"
 
 
+class TestPressAlvToolbarButton:
+    """The toolbar type picks the press. On SAP GUI 8.10 (live, BCALV_GRID_DEMO)
+    PressToolbarContextButton on a plain button does not fail: &FIND opened
+    its Find popup and the press was reported as menu_opened."""
+
+    def _controller(self, buttons):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[1]"})
+        grid = MagicMock()
+        grid.ToolbarButtonCount = len(buttons)
+        grid.GetToolbarButtonId.side_effect = lambda i: buttons[i][0]
+        grid.GetToolbarButtonType.side_effect = lambda i: buttons[i][1]
+        controller._session.findById.return_value = grid
+        return controller, grid
+
+    TOOLBAR = [("&DETAIL", "Button"), ("", "Separator"), ("&FIND", "Button"),
+               ("&MB_FILTER", "ButtonAndMenu"), ("&MB_EXPORT", "Menu"),
+               ("&CHECK", 4)]
+
+    def test_plain_button_is_pressed_not_opened_as_menu(self):
+        controller, grid = self._controller(self.TOOLBAR)
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&FIND")
+
+        assert result["status"] == "pressed"
+        assert "hint" not in result and "menu_items" not in result
+        assert result["screen"]["active_window"] == "wnd[1]"
+        grid.PressToolbarButton.assert_called_once_with("&FIND")
+        grid.PressToolbarContextButton.assert_not_called()
+
+    def test_numeric_checkbox_type_is_pressed(self):
+        controller, grid = self._controller(self.TOOLBAR)
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&CHECK")
+
+        assert result["status"] == "pressed"
+        grid.PressToolbarContextButton.assert_not_called()
+
+    def test_menu_types_open_the_menu(self):
+        for button_id in ("&MB_EXPORT", "&MB_FILTER"):
+            controller, grid = self._controller(self.TOOLBAR)
+
+            result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", button_id)
+
+            assert result["status"] == "menu_opened"
+            grid.PressToolbarContextButton.assert_called_once_with(button_id)
+            grid.PressToolbarButton.assert_not_called()
+
+    def test_id_not_on_toolbar_tries_menu_then_plain_press(self):
+        controller, grid = self._controller(self.TOOLBAR)
+        grid.PressToolbarContextButton.side_effect = Exception("not a menu")
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&OTHER")
+
+        assert result["status"] == "pressed"
+        grid.PressToolbarButton.assert_called_once_with("&OTHER")
+
+    def test_unreadable_toolbar_keeps_the_old_order(self):
+        controller, grid = self._controller(self.TOOLBAR)
+        type(grid).ToolbarButtonCount = PropertyMock(side_effect=Exception("no toolbar"))
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&MB_EXPORT")
+
+        assert result["status"] == "menu_opened"
+        grid.PressToolbarContextButton.assert_called_once_with("&MB_EXPORT")
+
+
 class TestTreeEnhancements:
     """Tests for tree enhancements and new tree tools (Phase 4)."""
 
