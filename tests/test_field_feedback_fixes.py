@@ -1858,3 +1858,88 @@ class TestDropdownWrites:
         result = self._controller(combo).get_combobox_entries(self._ID)
 
         assert result["current_value"] == "24 Hour Format (Example: 12:05:10)"
+
+
+class TestPopupHtmlQuestion:
+    """SAP's confirmation popup (SAPLSPO1 0500) as seen live on SAP GUI 8.10:
+    the question is drawn in an HTML viewer in subscreen 0502, the answers
+    are user-area buttons BUTTON_1..3. Its text was never in the popup read."""
+
+    _WND1 = "/app/con[0]/ses[0]/wnd[1]"
+
+    def _confirm_popup(self, *, control=1, page_text="", title="Exit Editor",
+                       answers=("Yes", "No", "Cancel")):
+        sub = f"{self._WND1}/usr/subSUBSCREEN:SAPLSPO1:0502"
+        html = _child(f"{sub}/cntlHTML_CONTROL_CON/shellcont/shell", "GuiShell",
+                      text="SAP.HTMLControl.1", changeable=True)
+        html.SubType = "HTMLViewer"
+        html.GetBrowserControlType.return_value = control  # 0 = IE, 1 = Edge
+        if control == 0:
+            html.BrowserHandle.Document.URL = "saphtmlp://htmlviewer.sap.com/HTML000001.htm"
+            html.BrowserHandle.Document.body.innerText = page_text
+        else:
+            html.BrowserHandle = None  # live with Edge
+        shellcont = _child(f"{sub}/cntlHTML_CONTROL_CON/shellcont",
+                           "GuiContainerShell", children=[html])
+        custom = _child(f"{sub}/cntlHTML_CONTROL_CON", "GuiCustomControl",
+                        children=[shellcont])
+        subscreen = _child(sub, "GuiSimpleContainer", children=[custom])
+        icon = _child(f"{self._WND1}/usr/txtICON_POPUP_TYPE", "GuiTextField")
+        buttons = []
+        for number, answer in enumerate(answers, 1):
+            button = _child(f"{self._WND1}/usr/btnBUTTON_{number}", "GuiButton",
+                            text=f" {answer}", changeable=True)
+            button.Tooltip = answer
+            buttons.append(button)
+        usr = _child(f"{self._WND1}/usr", "GuiUserArea",
+                     children=[subscreen, icon, *buttons])
+        return _child(self._WND1, "GuiModalWindow", text=f"A4H(1)/001 {title}",
+                      children=[usr])
+
+    def test_edge_question_is_marked_unreadable(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._confirm_popup(), discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert popup["question_readable"] is False
+        assert "sap_screenshot" in popup["question_note"]
+        assert "texts" not in popup
+        assert [b["id"] for b in popup["buttons"]] == [
+            "wnd[1]/usr/btnBUTTON_1", "wnd[1]/usr/btnBUTTON_2", "wnd[1]/usr/btnBUTTON_3",
+        ]
+        assert popup["classification"] == "confirmation"
+
+    def test_ie_question_is_read_into_texts(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._confirm_popup(
+            control=0,
+            page_text=" Program ZTEST was changed. Save before\r\nexiting editor?  ",
+        ), discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert popup["texts"] == ["Program ZTEST was changed. Save before exiting editor?"]
+        assert "question_readable" not in popup
+
+    def test_unreadable_german_question_is_a_confirmation(self, discovery_path):
+        """Live: Ja / Nein / Abbrechen matched no English word: unknown."""
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._confirm_popup(
+            title="Editor beenden", answers=("Ja", "Nein", "Abbrechen"),
+        ), discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert popup["classification"] == "confirmation"
+        assert popup["recommended_action"] == "read"
+        assert "safe_auto_action" not in popup
+
+    def test_action_digest_says_the_question_is_unreadable(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._confirm_popup(), discovery_path)
+
+        digest = controller._popup_digest()
+
+        assert digest["question_readable"] is False
+        assert digest["buttons"] == ["Yes", "No", "Cancel"]

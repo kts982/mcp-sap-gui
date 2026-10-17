@@ -23,6 +23,9 @@ class _PopupFindings:
     # icon field IK1 shows the message type as an icon (live: M_INFO for I).
     message_popup: bool = False
     message_icon: str = ""
+    # SAP's confirmation popup (SAPLSPO1 0500) draws its question in an HTML
+    # viewer, not in text fields.
+    html_viewers: List[str] = field(default_factory=list)
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +157,8 @@ class DiscoveryMixin:
             result["calendar"] = self._calendar_summary(found.calendars[0])
         if found.message_popup:
             self._read_message_popup_type(result, found.message_icon)
+        if found.html_viewers:
+            self._read_popup_html(found.html_viewers, texts, result)
 
         if texts:
             result["texts"] = texts
@@ -229,13 +234,43 @@ class DiscoveryMixin:
         if buttons:
             digest["buttons"] = buttons
         for key in ("list", "calendar", "time_picker", "prefilled_inputs",
-                    "notice"):
+                    "notice", "question_readable", "question_note"):
             if key in popup:
                 digest[key] = popup[key]
         return digest
 
     _POPUP_PROPS = ["Id", "Type", "SubType", "Name", "Text", "Tooltip",
                     "Changeable", "MessageType", "IconName"]
+
+    _UNREADABLE_QUESTION_NOTE = (
+        "This popup shows its text in an HTML viewer that scripts cannot "
+        "read (the Edge browser control). See it with sap_screenshot, or ask "
+        "the user."
+    )
+
+    def _read_popup_html(self, viewer_ids: List[str], texts: list,
+                         result: Dict[str, Any]) -> None:
+        """Add the text of a popup's HTML viewers to *texts*.
+
+        Live on SAP GUI 8.10 (A4H, any theme, accessibility on or off), the
+        question of SAP's confirmation popup ("Program X was changed. Save
+        before exiting editor?") is readable with the Internet Explorer
+        control only. With Edge, the default, the popup is marked
+        question_readable: false.
+        """
+        for viewer_id in viewer_ids:
+            info: Dict[str, Any] = {}
+            try:
+                self._read_html_viewer(self._session.findById(viewer_id), info)
+            except Exception as e:
+                logger.debug("Popup HTML viewer %s not readable: %s", viewer_id, e)
+            text = " ".join(str(info.get("text", "")).split())
+            if text:
+                texts.append(text[:1000])
+            else:
+                result["question_readable"] = False
+        if result.get("question_readable") is False:
+            result["question_note"] = self._UNREADABLE_QUESTION_NOTE
 
     # Field names are not translated: this recognises SAP's message popup in
     # any logon language, where its title ("Warning") would not.
@@ -321,8 +356,11 @@ class DiscoveryMixin:
             if self._tally_list_cell(element_id, found.list_rows):
                 return
         if ctype == 'GuiShell':
-            if read('SubType', '') == 'Calendar':
+            sub_type = read('SubType', '')
+            if sub_type == 'Calendar':
                 found.calendars.append(self._normalize_element_id(read('Id', '')))
+            elif sub_type == 'HTMLViewer':
+                found.html_viewers.append(self._normalize_element_id(read('Id', '')))
             return
         if ctype == 'GuiButton':
             buttons.append({
@@ -519,6 +557,12 @@ class DiscoveryMixin:
         elif popup.get("time_picker"):
             # Like the calendar: Continue writes the current time.
             classification = "time_picker"
+        elif (popup.get("question_readable") is False and len(buttons) > 1
+              and not has_inputs):
+            # A question we cannot read, with answers to choose from. The
+            # word tests below need English (live: Ja / Nein / Abbrechen
+            # came out "unknown").
+            classification = "confirmation"
         elif has_inputs or any(p in text_blob for p in self._POPUP_INPUT_PATTERNS):
             classification = "input_required"
         elif (
