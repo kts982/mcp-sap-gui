@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-sap-gui"
-version = "0.5.1"
+version = "0.5.2"
 description = "MCP Server for SAP GUI Scripting automation"
 readme = "README.md"
 license = "MIT"
@@ -56,6 +56,11 @@ apps = [
     # prefab-ui docs warn of frequent breaking changes - pin exact (like monty in code-mode)
     "prefab-ui==0.20.2",
 ]
+
+[project.urls]
+Repository = "https://github.com/kts982/mcp-sap-gui"
+Changelog = "https://github.com/kts982/mcp-sap-gui/blob/master/CHANGELOG.md"
+Issues = "https://github.com/kts982/mcp-sap-gui/issues"
 
 [project.scripts]
 mcp-sap-gui = "mcp_sap_gui.server:main"

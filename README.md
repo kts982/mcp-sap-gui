@@ -6,7 +6,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
 
-Current release: `0.5.1` for local Windows use over MCP `stdio`.
+Current release: `0.5.2` for local Windows use over MCP `stdio`.
 
 [![CI](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml)
 [![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
@@ -19,32 +19,7 @@ Current release: `0.5.1` for local Windows use over MCP `stdio`.
 
 ## What's New
 
-**0.5.1 — a crash fix for SAP GUI 8.00, and screens that say more.**
-
-- **No more SAP Logon crashes on SAP GUI 8.00.** On 8.00, reading a table control or a classic list in one call could take SAP Logon down with every session in it ([issue #22](https://github.com/kts982/mcp-sap-gui/issues/22)). The cause was one property in that call: the server no longer asks for it and reads checkboxes one by one, still about 3x faster than reading cell by cell. Two environment variables, contributed by [@nelz0n](https://github.com/nelz0n) in [#23](https://github.com/kts982/mcp-sap-gui/pull/23), turn the one-call read off per call site and trace each call to a file, for any other SAP GUI build that misbehaves. Which SAP GUI releases SAP still supports, and what needs which: [SAP GUI Versions](docs/SAP_GUI_VERSIONS.md).
-- **Screen info names sub-screens and the cursor.** Every action response lists the active window's sub-screens (`subscreens`, as `program:dynnr`) and the field the cursor is in (`cursor`), so an RF step, a tab page or a redisplay that only moves the cursor shows without a screenshot.
-- **Table controls say where their data ends.** `sap_read_table` on a table control reports `empty_rows_from`, the first padding line: `total_rows` also counts the empty lines that pad an SM30 view.
-- **Confirmed writes say so.** After you approve a save or another confirmation point, the result carries `confirmed_by_user: true`, so the agent can tell an approved write from an ungated one.
-
-**0.5.0 — the SAP GUI Scripting API, used to the full.** This round went through the 8.10 Scripting API guide on a trial system and closed the gaps it found:
-
-- **Much faster on large screens.** On SAP GUI 7.70 PL3 or later a whole screen, popup, list page or table control is read in one call (`GetObjectTree`): a 1,139-cell list page takes 0.2 s instead of 4.7 s. Older releases fall back to reading element by element.
-- **Value help that agents get right.** F4 popups are recognised for what they are (hit list, restriction dialog, date picker, time picker) and never auto-cancelled, and a rewritten `search_help` guide covers each case. Dropdowns are set with `sap_set_field` and `sap_set_batch_fields` by key or text, and discovery shows their selected key instead of 200 padded characters.
-- **Safer popups.** SAP's message popups are recognised in any logon language, and only an information message is ever auto-confirmed: a warning standing between you and a save is always left to you.
-- **Keys that mean what they say.** `sap_send_key` refuses a key the screen does not accept and lists the ones it does, and `Ctrl+F` / `Ctrl+G` / `Ctrl+P` now send Find / Find next / Print (they sent Ctrl+F8 to Ctrl+F10 before).
-- **More of SAP's own metadata.** Session info reports the SAP GUI release and whether the server only allows read-only scripting (write tools then refuse up front); ALV cells report their type, error or warning state, F4 help and hotspots; an ALV toolbar menu lists its items when it opens; a status message with a long text says so, and pressing the status bar opens it.
-- **SAP Business Client (experimental).** Sessions of Business Client's embedded SAP GUI are discovered next to SAP Logon's. Details: [SAP Business Client](#sap-business-client-experimental).
-
-Changed behaviour when upgrading: discovery elements no longer carry `visible` (SAP GUI Scripting has no such property, so it was always true); F4 hit lists are classified `list` instead of `information`; a key the screen does not accept returns an error with `available_keys` instead of a COM error.
-
-**0.4.0 — shaped by two days of real agent work on a live system.** The lesson was that token cost per call hurts more than missing tools, and that a few screens could not be reached at all:
-
-- **Lighter responses.** A table control is one discovery element instead of one per cell (an SM30 screen went from 231 elements to 3), element IDs come back in the short `wnd[0]/...` form, and batch fills and popup actions report what matters instead of echoing everything.
-- **`sap_read_list`** reads a classic report list (`WRITE` output, F4 hit lists) as lines of text with list colours and paging — 43 lines instead of 492 label elements, and no screenshot needed.
-- **View clusters work.** Docking containers (`wnd[0]/shellcont`) are valid IDs and discovery points to them, so the dialog structure of SM34 and most IMG activities can be navigated. A new `SM30` transaction guide covers table maintenance and view clusters end to end.
-- **Your transaction policy.** Presets (`default`, `abap-dev`, `strict`) plus a policy file with glob patterns replace the hard-coded blocklist. Details: [Security Considerations](#security-considerations).
-- **Popups announce pre-filled values.** When an action opens a popup, its response already says what the popup is and which inputs hold values you never chose — such as a customizing request pre-filled with another project's request.
-- **Screenshots to a file.** `sap_screenshot(save_path=...)` writes a full-resolution PNG for documents and never overwrites a file.
+**0.5.2** asks you before a popup answer that may save, as it does for F11, and makes table-control writes after a scroll land on the row you meant. Three of its fixes come from [@nelz0n](https://github.com/nelz0n). Every change, release by release: [CHANGELOG](CHANGELOG.md).
 
 **`sap_preview` — see it before it happens.** The agent can now show you an approval card at any checkpoint: before a batch write, before saving, or whenever you ask (*"before adding country GR, show me the values"*). It carries the current screenshot, session context, and the exact values about to be written — password-shaped values masked. On MCP Apps hosts (VS Code Copilot Chat) it renders as a rich inline card; everywhere else you get the same summary as text plus the screenshot. Saving still goes through the confirmation gate. Details: [Rendered Preview Cards](#rendered-preview-cards).
 
