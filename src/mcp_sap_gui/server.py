@@ -569,8 +569,11 @@ _TRANSIENT_COM_HRESULTS = frozenset({
 })
 # Deliberately not retried:
 # - -2147417851, 0x80010105 RPC_E_SERVERFAULT ("The server threw an
-#   exception."): the call may have half-run, and a retry would re-run the
-#   whole tool body against a server that just faulted.
+#   exception."): SAP GUI raises it for an element reference that went stale
+#   after a server round trip (live, 8.10: a field found before Enter, read
+#   after it, even on the same screen). That fails the same way every time,
+#   and the call may have half-run: a retry would re-run the whole tool body,
+#   its presses and keys included, only to fail again.
 # - _DEAD_SESSION_HRESULTS (0x80010108 RPC_E_DISCONNECTED, 0x800706BA
 #   RPC_S_SERVER_UNAVAILABLE): the session object or the whole SAP GUI
 #   process is gone and does not come back. Raised at once as
