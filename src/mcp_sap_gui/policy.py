@@ -37,8 +37,21 @@ from typing import Any, Callable, Dict, List, Optional
 
 POLICY_FILE_ENV = "MCP_SAP_GUI_POLICY_FILE"
 
-# Shared by every preset except "strict".
+# Session commands. The transaction normalizer strips /n, so /nex and /nend
+# reach the policy as EX and END, and /i as /I, like transaction codes. None of
+# them is a transaction; each ends sessions instead of starting anything.
+# The descriptions follow SAP's documentation of the command field.
+SESSION_COMMANDS: Dict[str, str] = {
+    "EX": "/nex logs off and closes every session of the connection, "
+          "without asking",
+    "END": "/nend logs off and closes every session of the connection, "
+           "after one confirmation popup",
+    "/I": "/i closes the current session",
+}
+
+# Shared by every preset except "strict" (which blocks everything anyway).
 _BASE_BLOCK = [
+    *SESSION_COMMANDS,        # Session commands: log off, close session
     "SU01", "SU10", "SU01D",  # User administration
     "PFCG", "SU53",           # Role administration
     "SM21", "ST22",           # System logs / dumps
