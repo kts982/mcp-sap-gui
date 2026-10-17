@@ -103,6 +103,35 @@ def _cli(srv, argv):
 # ===========================================================================
 
 
+class TestMarkConfirmed:
+    """_mark_confirmed only rewrites a plain dict result."""
+
+    def test_dict_result_gets_the_flag(self):
+        from fastmcp.tools.tool import ToolResult
+
+        marked = _confirm_mod._mark_confirmed(ToolResult(structured_content={"a": 1}))
+
+        assert marked.structured_content == {"a": 1, "confirmed_by_user": True}
+        assert json.loads(marked.content[0].text) == marked.structured_content
+
+    def test_error_and_multi_block_results_pass_unchanged(self):
+        from fastmcp.tools.tool import ToolResult
+        from mcp.types import ImageContent, TextContent
+
+        error = ToolResult(structured_content={"a": 1}, is_error=True)
+        blocks = ToolResult(
+            content=[
+                TextContent(type="text", text="summary"),
+                ImageContent(type="image", data="AA==", mimeType="image/png"),
+            ],
+            structured_content={"card": True},
+        )
+        text_only = ToolResult(content="plain text")
+
+        for result in (error, blocks, text_only):
+            assert _confirm_mod._mark_confirmed(result) is result
+
+
 class TestPointResolution:
     """Static tool->point map, arg-aware refinements, save-button closure."""
 
@@ -467,6 +496,40 @@ class TestGating:
         assert result.is_error
         assert "confirmation point 'save'" in _text(result)
         controller.press_button.assert_not_called()
+
+    async def test_accepted_save_button_reports_confirmed_by_user(self, srv):
+        """The agent never sees the prompt, so the result must say a human
+        approved it — in both the text the model reads and structured content."""
+        _, patcher = _patched_controller(press_button={"status": "ok"})
+        elicitor = _Elicitor("accept")
+        with patcher:
+            async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
+                result = await client.call_tool(
+                    "sap_press_button", {"button_id": "wnd[0]/tbar[0]/btn[11]"},
+                )
+
+        assert result.structured_content == {"status": "ok", "confirmed_by_user": True}
+        assert json.loads(_text(result)) == result.structured_content
+
+    async def test_accepted_save_key_reports_confirmed_by_user(self, srv):
+        _, patcher = _patched_controller(send_vkey={"status": "ok"}, check_vkey=None)
+        elicitor = _Elicitor("accept")
+        with patcher:
+            async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
+                result = await client.call_tool("sap_send_key", {"key": "Save"})
+
+        assert result.structured_content["confirmed_by_user"] is True
+        assert json.loads(_text(result))["confirmed_by_user"] is True
+
+    async def test_ungated_call_has_no_confirmed_by_user(self, srv):
+        _, patcher = _patched_controller(press_button={"status": "ok"})
+        with patcher:
+            async with Client(srv.mcp) as client:
+                result = await client.call_tool(
+                    "sap_press_button", {"button_id": "wnd[0]/tbar[1]/btn[8]"},
+                )
+
+        assert "confirmed_by_user" not in result.structured_content
 
     async def test_ordinary_button_is_not_gated(self, srv):
         controller, patcher = _patched_controller(press_button={"status": "ok"})
@@ -865,6 +928,34 @@ class TestConfirmationAudit:
                 await client.call_tool(
                     "sap_set_field", {"field_id": "wnd[0]/usr/txtX", "value": "1"},
                     raise_on_error=False,
+                )
+
+        events = _confirmation_records(caplog)
+        assert [e["outcome"] for e in events] == ["unsupported_client"]
+
+    @pytest.mark.parametrize("action, outcome", [
+        ("accept", "accepted"), ("decline", "declined"), ("cancel", "declined"),
+    ])
+    async def test_save_key_outcome_is_logged(self, srv, caplog, action, outcome):
+        """The sap_send_key body gate leaves the same audit record as the
+        middleware: the save point, the tool, the outcome."""
+        _, patcher = _patched_controller(send_vkey={"status": "ok"}, check_vkey=None)
+        elicitor = _Elicitor(action)
+        with caplog.at_level(logging.INFO, logger="mcp_sap_gui.audit"), patcher:
+            async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
+                await client.call_tool("sap_send_key", {"key": "Save"})
+
+        events = _confirmation_records(caplog)
+        assert [(e["point"], e["tool"], e["outcome"]) for e in events] == [
+            ("save", "sap_send_key", outcome),
+        ]
+
+    async def test_save_key_unsupported_client_is_logged(self, srv, caplog):
+        _, patcher = _patched_controller(send_vkey={"status": "ok"}, check_vkey=None)
+        with caplog.at_level(logging.INFO, logger="mcp_sap_gui.audit"), patcher:
+            async with Client(srv.mcp) as client:
+                await client.call_tool(
+                    "sap_send_key", {"key": "F11"}, raise_on_error=False,
                 )
 
         events = _confirmation_records(caplog)

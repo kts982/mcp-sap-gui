@@ -277,6 +277,25 @@ def log_confirmation_event(point: str, tool: str, outcome: str) -> None:
 # Middleware
 # ---------------------------------------------------------------------------
 
+def _mark_confirmed(result: ToolResult) -> ToolResult:
+    """Add ``confirmed_by_user: true`` to an accepted call's result.
+
+    The prompt goes to the user, not the agent: without the flag the agent
+    cannot tell an approved write from an ungated one.  Only a plain dict
+    result (one JSON text block) is rewritten; anything else passes as is.
+    """
+    data = result.structured_content
+    if (
+        result.is_error
+        or not isinstance(data, dict)
+        or len(result.content) != 1
+        or not isinstance(result.content[0], mcp.types.TextContent)
+    ):
+        return result
+    marked = {**data, "confirmed_by_user": True}
+    return ToolResult(content=marked, structured_content=marked, meta=result.meta)
+
+
 async def _tool_tags(ctx: Any, tool_name: str) -> set[str]:
     """Look up a tool's tags through the live server.
 
@@ -352,7 +371,7 @@ class ConfirmationMiddleware(Middleware):
 
         if result.action == "accept" and getattr(result, "data", None) is True:
             log_confirmation_event(point, tool_name, "accepted")
-            return await call_next(context)
+            return _mark_confirmed(await call_next(context))
 
         log_confirmation_event(point, tool_name, "declined")
         raise ToolError(

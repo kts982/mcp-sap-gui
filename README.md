@@ -6,7 +6,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
 
-Current release: `0.5.0` for local Windows use over MCP `stdio`.
+Current release: `0.5.1` for local Windows use over MCP `stdio`.
 
 [![CI](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml)
 [![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
@@ -18,6 +18,13 @@ Current release: `0.5.0` for local Windows use over MCP `stdio`.
 - Primary repository: GitHub (`kts982/mcp-sap-gui`).
 
 ## What's New
+
+**0.5.1 — a crash fix for SAP GUI 8.00, and screens that say more.**
+
+- **No more SAP Logon crashes on SAP GUI 8.00.** On 8.00, reading a table control or a classic list in one call could take SAP Logon down with every session in it ([issue #22](https://github.com/kts982/mcp-sap-gui/issues/22)). The cause was one property in that call: the server no longer asks for it and reads checkboxes one by one, still about 3x faster than reading cell by cell. Two environment variables, contributed by [@nelz0n](https://github.com/nelz0n) in [#23](https://github.com/kts982/mcp-sap-gui/pull/23), turn the one-call read off per call site and trace each call to a file, for any other SAP GUI build that misbehaves. Which SAP GUI releases SAP still supports, and what needs which: [SAP GUI Versions](docs/SAP_GUI_VERSIONS.md).
+- **Screen info names sub-screens and the cursor.** Every action response lists the active window's sub-screens (`subscreens`, as `program:dynnr`) and the field the cursor is in (`cursor`), so an RF step, a tab page or a redisplay that only moves the cursor shows without a screenshot.
+- **Table controls say where their data ends.** `sap_read_table` on a table control reports `empty_rows_from`, the first padding line: `total_rows` also counts the empty lines that pad an SM30 view.
+- **Confirmed writes say so.** After you approve a save or another confirmation point, the result carries `confirmed_by_user: true`, so the agent can tell an approved write from an ungated one.
 
 **0.5.0 — the SAP GUI Scripting API, used to the full.** This round went through the 8.10 Scripting API guide on a trial system and closed the gaps it found:
 
@@ -111,7 +118,7 @@ Read the first 20 rows of the visible table
 
 - **Windows** (SAP GUI only runs on Windows)
 - **SAP GUI for Windows** installed
-  - Live compatibility verified with SAP GUI for Windows 8.10 64-bit Patch 0
+  - Live compatibility verified with SAP GUI for Windows 8.10 64-bit Patch 0. SAP supports 8.10 until 30 June 2029 and 8.00 until 12 January 2027 (restricted support until 31 July 2027); 7.70 and older are out of SAP support and run best effort. Dates, sources and what needs which release: [SAP GUI Versions](docs/SAP_GUI_VERSIONS.md)
   - 7.70 Patch Level 3 or later reads a whole screen, popup, list page or table control in one call (`GetObjectTree`); older releases fall back to reading element by element, which is much slower on large screens (seconds instead of a fraction of a second for a full list page)
 - **SAP Logon Pad** running, or a SAP GUI session hosted by **SAP Business Client** (experimental, see [below](#sap-business-client-experimental)) or another embedded SAP GUI (for COM connections)
 - **SAP GUI Scripting enabled** on your SAP systems
@@ -685,6 +692,10 @@ mcp-sap-gui/
 - Confirm the client is launching the server from the project root
 - Restart the MCP client after changing its MCP configuration
 - Run `uv sync` first so the environment and dependencies exist
+
+### SAP Logon exits during a read
+- On SAP GUI 8.00 with 0.5.0, table-control and classic-list reads can take SAP Logon down: upgrade to 0.5.1 ([issue #22](https://github.com/kts982/mcp-sap-gui/issues/22))
+- Another SAP GUI build that fails on the one-call read: turn it off per call site with `MCP_SAP_GUI_DISABLE_OBJECT_TREE`, and find the call with `MCP_SAP_GUI_TRACE_FILE`. See [Switches for a misbehaving SAP GUI build](docs/SAP_GUI_VERSIONS.md#switches-for-a-misbehaving-sap-gui-build)
 
 ### "The tool is available, but the action is blocked"
 - Check whether the server is running with `--read-only`
