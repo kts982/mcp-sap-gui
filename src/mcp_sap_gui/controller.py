@@ -988,19 +988,9 @@ class SAPGUIControllerBase:
         try:
             window = self._validate_window_id(window)
             target = self._find_window(window)
-            if not self._vkey_allowed(target, vkey):
-                # Sending it would raise COM error 617 "The virtual key is
-                # not enabled": say so, and which keys the screen does take.
-                return {
-                    "vkey": vkey,
-                    "window": window,
-                    "error": f"{self._vkey_name(vkey)} is not active on this screen",
-                    "available_keys": [
-                        self._vkey_name(key) for key in self._SENDABLE_VKEYS
-                        if self._vkey_allowed(target, key)
-                    ],
-                    "screen": self.get_screen_info(),
-                }
+            refusal = self._vkey_refusal(target, window, vkey)
+            if refusal is not None:
+                return refusal
             logger.debug("Sending VKey %s to %s", vkey, window)
             target.sendVKey(vkey)
             return {"vkey": vkey, "screen": self.get_screen_info()}
@@ -1010,6 +1000,41 @@ class SAPGUIControllerBase:
                 e,
                 "Could not send SAP key",
             )
+
+    def check_vkey(self, vkey: int, window: str = "wnd[0]") -> Optional[Dict[str, Any]]:
+        """Return send_vkey's refusal for *vkey*, or None if it would be sent.
+
+        Sends nothing. Lets a caller that asks the user first (the Save key)
+        skip the question for a key the screen would refuse anyway.
+        """
+        self._require_session()
+
+        try:
+            window = self._validate_window_id(window)
+            return self._vkey_refusal(self._find_window(window), window, vkey)
+        except Exception as e:
+            return self._error_result(
+                {"vkey": vkey, "window": window},
+                e,
+                "Could not send SAP key",
+            )
+
+    def _vkey_refusal(self, target, window: str, vkey: int) -> Optional[Dict[str, Any]]:
+        """The error result for a key *target* does not accept, else None."""
+        if self._vkey_allowed(target, vkey):
+            return None
+        # Sending it would raise COM error 617 "The virtual key is
+        # not enabled": say so, and which keys the screen does take.
+        return {
+            "vkey": vkey,
+            "window": window,
+            "error": f"{self._vkey_name(vkey)} is not active on this screen",
+            "available_keys": [
+                self._vkey_name(key) for key in self._SENDABLE_VKEYS
+                if self._vkey_allowed(target, key)
+            ],
+            "screen": self.get_screen_info(),
+        }
 
     # The keys sap_send_key offers: Enter, F1-F12, Shift+F1-F9, Ctrl+F/G/P.
     _SENDABLE_VKEYS = (*range(0, 22), 71, 84, 86)

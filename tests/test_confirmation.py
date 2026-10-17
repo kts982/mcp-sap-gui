@@ -75,6 +75,9 @@ async def _fake_com(fn):
 def _patched_controller(**returns):
     """Patch _ctrl/_com so tool bodies hit a MagicMock instead of SAP GUI."""
     controller = MagicMock(Busy=False)
+    # No popup answer to ask about: sap_press_button asks plan_popup_button
+    # first, and a bare MagicMock would read as one.
+    controller.plan_popup_button.return_value = None
     for name, value in returns.items():
         getattr(controller, name).return_value = value
     ctx = patch.multiple(
@@ -512,7 +515,7 @@ class TestGating:
         assert json.loads(_text(result)) == result.structured_content
 
     async def test_accepted_save_key_reports_confirmed_by_user(self, srv):
-        _, patcher = _patched_controller(send_vkey={"status": "ok"})
+        _, patcher = _patched_controller(send_vkey={"status": "ok"}, check_vkey=None)
         elicitor = _Elicitor("accept")
         with patcher:
             async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
@@ -592,7 +595,9 @@ class TestGating:
 
     async def test_send_key_is_gated_once_by_the_body_gate(self, srv):
         """No point maps sap_send_key, so F11 keeps exactly its own gate."""
-        controller, patcher = _patched_controller(send_vkey={"status": "ok"})
+        controller, patcher = _patched_controller(
+            send_vkey={"status": "ok"}, check_vkey=None,  # F11 is active
+        )
         elicitor = _Elicitor("accept")
         with patcher:
             async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
@@ -609,7 +614,9 @@ class TestGating:
     async def test_all_writes_prompts_twice_for_the_save_key(self, srv):
         """Documented consequence: all_writes covers every write-tagged tool and
         the sap_send_key body gate is unchanged, so F11 asks twice."""
-        controller, patcher = _patched_controller(send_vkey={"status": "ok"})
+        controller, patcher = _patched_controller(
+            send_vkey={"status": "ok"}, check_vkey=None,  # F11 is active
+        )
         elicitor = _Elicitor("accept")
         with patcher:
             async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
@@ -749,7 +756,9 @@ class TestFailClosed:
 
     async def test_save_gate_still_fails_closed(self, srv):
         """Pins the pre-existing sap_send_key behaviour this feature must match."""
-        controller, patcher = _patched_controller(send_vkey={"status": "ok"})
+        controller, patcher = _patched_controller(
+            send_vkey={"status": "ok"}, check_vkey=None,  # F11 is active
+        )
         with patcher:
             async with Client(srv.mcp) as client:
                 result = await client.call_tool(
@@ -933,7 +942,7 @@ class TestConfirmationAudit:
     async def test_save_key_outcome_is_logged(self, srv, caplog, action, outcome):
         """The sap_send_key body gate leaves the same audit record as the
         middleware: the save point, the tool, the outcome."""
-        _, patcher = _patched_controller(send_vkey={"status": "ok"})
+        _, patcher = _patched_controller(send_vkey={"status": "ok"}, check_vkey=None)
         elicitor = _Elicitor(action)
         with caplog.at_level(logging.INFO, logger="mcp_sap_gui.audit"), patcher:
             async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
@@ -945,7 +954,7 @@ class TestConfirmationAudit:
         ]
 
     async def test_save_key_unsupported_client_is_logged(self, srv, caplog):
-        _, patcher = _patched_controller(send_vkey={"status": "ok"})
+        _, patcher = _patched_controller(send_vkey={"status": "ok"}, check_vkey=None)
         with caplog.at_level(logging.INFO, logger="mcp_sap_gui.audit"), patcher:
             async with Client(srv.mcp) as client:
                 await client.call_tool(

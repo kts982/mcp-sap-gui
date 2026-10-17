@@ -855,6 +855,31 @@ def _parse_key(key: str) -> int:
 _SAVE_KEYS = {"F11", "Save"}
 
 
+async def _elicit_save(ctx: Context, message: str,
+                       tool: str = "sap_send_key") -> str | None:
+    """Ask the user to confirm a save.
+
+    Returns ``None`` if the user accepted (caller should proceed), else the
+    elicitation action (``decline`` / ``cancel``).
+    Raises ``ValueError`` if the client does not support elicitation.
+    """
+    try:
+        result = await ctx.elicit(message=message, response_type=bool)
+    except McpError as exc:
+        log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
+        raise ValueError(
+            f"Save action requires confirmation but the client does not "
+            f"support elicitation: {exc}"
+        ) from exc
+
+    if result.action == "accept" and result.data is True:
+        log_confirmation_event(SAVE_POINT, tool, "accepted")
+        return None  # proceed
+
+    log_confirmation_event(SAVE_POINT, tool, "declined")
+    return result.action
+
+
 async def _confirm_save(ctx: Context, key: str) -> dict | None:
     """Request user confirmation before sending a save key.
 
@@ -862,34 +887,61 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
     Returns a cancellation dict if declined/cancelled.
     Raises ``ValueError`` if the client does not support elicitation.
     """
-    try:
-        result = await ctx.elicit(
-            message=(
-                f"You are about to send '{key}' which triggers Save (F11) "
-                "in SAP. This can persist changes to the database. "
-                "Do you want to proceed?"
-            ),
-            response_type=bool,
-        )
-    except McpError as exc:
-        log_confirmation_event(SAVE_POINT, "sap_send_key", "unsupported_client")
-        raise ValueError(
-            f"Save action requires confirmation but the client does not "
-            f"support elicitation: {exc}"
-        ) from exc
-
-    if result.action == "accept" and result.data is True:
-        log_confirmation_event(SAVE_POINT, "sap_send_key", "accepted")
-        return None  # proceed
-
-    log_confirmation_event(SAVE_POINT, "sap_send_key", "declined")
-    action = result.action
+    action = await _elicit_save(ctx, (
+        f"You are about to send '{key}' which triggers Save (F11) "
+        "in SAP. This can persist changes to the database. "
+        "Do you want to proceed?"
+    ))
+    if action is None:
+        return None
     return {
         "status": "cancelled",
         "action": action,
         "key": key,
         "reason": f"User did not confirm save ({action})",
     }
+
+
+async def _confirm_popup_save(ctx: Context, plan: dict,
+                              tool: str = "sap_handle_popup") -> dict | None:
+    """The Save key's confirmation, for a press on a save-shaped popup or
+    an answer to a popup question the tool cannot read.
+
+    Returns ``None`` if the user accepted, else the popup read with
+    ``status: cancelled`` (nothing was pressed).
+    """
+    popup = plan["popup"]
+    btn = plan.get("button") or {}
+    label = btn.get("text") or btn.get("tooltip") or "?"
+    title = popup.get("title") or popup.get("window_id", "")
+    question = " ".join(popup.get("texts", []))[:200]
+    if plan.get("unread_question"):
+        message = (
+            f"You are about to answer the SAP popup '{title}' with '{label}'. "
+            "Its question is shown in a browser control the tool cannot "
+            "read, so this answer may save, delete or discard data. Check "
+            "the question in the SAP window. Do you want to proceed?"
+        )
+    else:
+        message = (
+            f"You are about to press '{label}' on the SAP popup '{title}'"
+            + (f" ({question})" if question else "")
+            + ", which may save changes to the database. "
+            "Do you want to proceed?"
+        )
+    action = await _elicit_save(ctx, message, tool)
+    if action is None:
+        return None
+    # The popup is still open and unchanged: keep its buttons for the next
+    # step (e.g. press "No").
+    what = "the answer" if plan.get("unread_question") else "save"
+    popup.update({
+        "status": "cancelled",
+        "action": "none",
+        "button": label,
+        "reason": f"User did not confirm {what} ({action})",
+    })
+    return popup
 
 
 def _to_dict(obj):
@@ -1014,13 +1066,18 @@ async def sap_send_key(
     the response then has confirmed_by_user: true."""
     _check_write(ctx)
     vkey = _parse_key(key)
+    c = _ctrl(ctx)
     confirmed = False
     if key in _SAVE_KEYS:
+        # A key the screen refuses is never sent: do not ask the user to
+        # approve a save that cannot happen.
+        refusal = await _com(lambda: c.check_vkey(vkey))
+        if refusal is not None:
+            return refusal
         cancellation = await _confirm_save(ctx, key)
         if cancellation is not None:
             return cancellation
         confirmed = True
-    c = _ctrl(ctx)
     result = await _com(lambda: c.send_vkey(vkey))
     if confirmed:
         result["confirmed_by_user"] = True
@@ -1095,10 +1152,39 @@ async def sap_press_button(button_id: str, ctx: Context) -> dict:
     Use sap_get_screen_elements to find on-screen button IDs.
     When screen info has message_has_long_text, pressing 'wnd[0]/sbar' opens
     that long text (Diagnosis / Procedure), usually as a list popup: read it
-    with sap_read_list(window_id='wnd[1]')."""
+    with sap_read_list(window_id='wnd[1]').
+
+    A popup button is checked like sap_handle_popup's press: a press that
+    may save, or any answer but Cancel to a popup question the tool cannot
+    read, asks the user first (confirmed_by_user: true when accepted)."""
     _check_write(ctx)
     c = _ctrl(ctx)
-    return await _com(lambda: c.press_button(button_id))
+
+    def plan_or_press():
+        # One COM job, as before, unless the button answers a popup that
+        # needs the user: then stop after the read.
+        plan = c.plan_popup_button(button_id)
+        if plan is not None:
+            return plan, None
+        return None, c.press_button(button_id)
+
+    plan, result = await _com(plan_or_press)
+    if result is not None:
+        return result
+    cancellation = await _confirm_popup_save(ctx, plan, "sap_press_button")
+    if cancellation is not None:
+        return cancellation
+
+    def recheck_and_press():
+        changed = c.popup_changed(plan["popup"])
+        if changed is not None:
+            return {"button_id": button_id, "error": changed}
+        return c.press_button(button_id)
+
+    result = await _com(recheck_and_press)
+    if "error" not in result:
+        result["confirmed_by_user"] = True
+    return result
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
@@ -1508,15 +1594,41 @@ async def sap_handle_popup(
     Actions:
     - read: return popup content without acting (default)
     - confirm: press OK/Yes/Continue/Enter on the popup
-    - cancel: press Cancel/No/F12 on the popup
+    - cancel: press Cancel (or F12) on the popup; never No, which on a
+      save prompt drops the changes
     - press: press a specific button by its text or tooltip
     - auto: take only a clearly safe action; otherwise return the popup read-only
+
+    A press that may save (a Save button, or Yes/OK on a popup about saving,
+    e.g. "Save the changes first?") asks the user first, like F11 in
+    sap_send_key. So does any answer but Cancel when the popup's question
+    cannot be read (question_readable: false; SAP GUI's Edge browser
+    control). On such a popup, confirm never falls back to Enter, and auto
+    only reads. An accepted press reports confirmed_by_user: true.
 
     Returns the popup contents plus classification, requested action,
     and post-action screen/popup state when something was pressed."""
     _check_write(ctx)
     c = _ctrl(ctx)
-    return await _com(lambda: c.handle_popup(action, button_text))
+
+    def plan_or_handle():
+        # One COM job, as before, unless the press may save: then stop
+        # after the read and ask the user before pressing.
+        plan = c.plan_popup_action(action, button_text)
+        if plan.get("save_risk"):
+            return plan, None
+        return plan, c.apply_popup_plan(plan)
+
+    plan, result = await _com(plan_or_handle)
+    if result is not None:
+        return result
+    cancellation = await _confirm_popup_save(ctx, plan)
+    if cancellation is not None:
+        return cancellation
+    result = await _com(lambda: c.apply_popup_plan(plan, recheck=True))
+    if result.get("action") != "error":
+        result["confirmed_by_user"] = True
+    return result
 
 
 # ---- Toolbar discovery ----
