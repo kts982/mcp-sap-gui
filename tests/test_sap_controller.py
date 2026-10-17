@@ -2616,6 +2616,9 @@ class TestGuiTableControl:
             columns, rows, total_rows=100, visible_rows=10,
             initial_scroll_position=0,
         )
+        fresh = MagicMock(VisibleRowCount=10)
+        fresh.VerticalScrollbar.Position = 50
+        controller._session.findById.return_value = fresh
 
         table, vis_offset = controller._scroll_table_control_to_row(mock_table, 50)
 
@@ -2623,7 +2626,7 @@ class TestGuiTableControl:
         assert mock_table.VerticalScrollbar.Position == 50
         # The scroll invalidates the old reference; a fresh one is re-found
         controller._session.findById.assert_called_once_with(mock_table.Id)
-        assert table is controller._session.findById.return_value
+        assert table is fresh
 
     def test_select_table_row_from_scrolled_position(self):
         """select_table_row scrolls and selects the correct row."""
@@ -4856,7 +4859,7 @@ class _StaleScrollbar:
     def Position(self, value):
         self._ref._check()
         sim = self._ref._sim
-        sim.scroll_position = max(0, min(int(value), self.Maximum))
+        sim.scroll_position = max(0, min(int(value), self.Maximum) - sim.top_shift)
         # The scroll triggers a server round-trip that re-renders the
         # control: every existing COM reference into it goes stale.
         self._ref._stale = True
@@ -4969,10 +4972,13 @@ class _TableControlSim:
     FULL_ID = "/app/con[0]/ses[0]/wnd[0]/usr/tblSIM"
     SHORT_ID = "wnd[0]/usr/tblSIM"
 
-    def __init__(self, total_rows=25, visible_rows=10, col_count=3):
+    def __init__(self, total_rows=25, visible_rows=10, col_count=3, top_shift=0):
         self.total_rows = total_rows
         self.visible_rows = visible_rows
         self.col_count = col_count
+        # Rows the application moves the top up after a scroll, as SE16's
+        # multiple selection did live (row 7 on top after a scroll to 9).
+        self.top_shift = top_shift
         self.scroll_position = 0
         self.written = {}
         self.focused = []
@@ -5087,4 +5093,120 @@ class TestTableControlScrollStaleness:
         assert result["position"] == 15
         assert result["visible_rows"] == 10
         assert result["total_rows"] == 25
+        assert "requested_position" not in result
+        assert "note" not in result
+
+
+class TestTableControlTopRowAfterScroll:
+    """SAP may put another row at the top than the one scrolled to: every
+    visible-row offset must count from the row actually on top."""
+
+    _make_controller_with_sim = TestTableControlScrollStaleness._make_controller_with_sim
+
+    def test_modify_cell_writes_the_asked_row(self):
+        # Asked for 12, the table shows 10..19 (live, SE16's multiple
+        # selection: row 7 on top for 9).
+        controller, sim = self._make_controller_with_sim(top_shift=2)
+
+        result = controller.modify_cell(sim.SHORT_ID, 12, 1, "NEW")
+
+        assert result.get("status") == "success", result
+        assert sim.scroll_position == 10
+        assert sim.written == {(12, 1): "NEW"}
+
+    def test_set_current_cell_and_double_click_use_the_actual_top(self):
+        controller, sim = self._make_controller_with_sim(top_shift=2)
+
+        controller.set_current_cell(sim.SHORT_ID, 12, 1)
+        controller.double_click_table_cell(sim.SHORT_ID, 20, 0)
+
+        assert sim.focused == [(12, 1), (20, 0)]
+        assert sim.selected == [20]
+
+    def test_row_still_hidden_after_scroll_is_refused(self):
+        # Asked for 15, the table shows 3..12: row 20 is not on screen.
+        controller, sim = self._make_controller_with_sim(top_shift=12)
+
+        result = controller.modify_cell(sim.SHORT_ID, 20, 1, "NEW")
+
+        assert "not visible" in result["error"]
+        assert "rows 3 to 12" in result["error"]
+        assert sim.written == {}
+
+    def test_row_beyond_the_table_is_refused(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.set_current_cell(sim.SHORT_ID, 40, 1)
+
+        assert "not visible" in result["error"]
+        assert sim.focused == []
+
+    def test_row_selection_does_not_need_the_row_on_screen(self):
+        controller, sim = self._make_controller_with_sim(top_shift=12)
+
+        assert controller.select_table_row(sim.SHORT_ID, 20)["status"] == "success"
+        assert controller.select_multiple_rows(sim.SHORT_ID, [2, 20])["status"] == "success"
+        assert sim.selected == [20, 2, 20]
+
+    def test_scroll_reports_the_row_on_top(self):
+        controller, sim = self._make_controller_with_sim(top_shift=2)
+
+        result = controller.scroll_table_control(sim.SHORT_ID, 9)
+
+        assert result["position"] == 7
+        assert result["requested_position"] == 9
+        assert "row 7 at the top, not 9" in result["note"]
+
+    def test_scroll_past_the_end_reports_the_clamp_without_a_note(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.scroll_table_control(sim.SHORT_ID, 99)
+
+        assert result["position"] == 15
+        assert result["requested_position"] == 99
+        assert "note" not in result
+
+
+class TestTableControlStartRow:
+    """start_row=0 reads from the first row; no start_row keeps the scroll."""
+
+    _make_controller_with_sim = TestTableControlScrollStaleness._make_controller_with_sim
+
+    def test_start_row_zero_scrolls_back_to_the_top(self):
+        controller, sim = self._make_controller_with_sim()
+        sim.scroll_position = 7
+
+        result = controller.read_table(sim.SHORT_ID, max_rows=3, start_row=0)
+
+        assert sim.scroll_position == 0
+        assert result["first_visible_row"] == 0
+        assert result["data"][0]["_absolute_row_index"] == 0
+
+    def test_no_start_row_reads_where_the_table_is(self):
+        controller, sim = self._make_controller_with_sim()
+        sim.scroll_position = 7
+
+        result = controller.read_table(sim.SHORT_ID, max_rows=3)
+
+        assert sim.scroll_position == 7
+        assert sim.refs_handed_out == 1  # no scroll, no re-find
+        assert result["first_visible_row"] == 7
+        assert result["data"][0]["COL0"] == "R7C0"
+
+    def test_start_row_at_the_current_top_does_not_scroll(self):
+        controller, sim = self._make_controller_with_sim()
+        sim.scroll_position = 7
+
+        result = controller.read_table(sim.SHORT_ID, max_rows=3, start_row=7)
+
+        assert sim.refs_handed_out == 1
+        assert result["first_visible_row"] == 7
+
+    def test_start_row_reports_the_row_sap_put_on_top(self):
+        controller, sim = self._make_controller_with_sim(top_shift=2)
+
+        result = controller.read_table(sim.SHORT_ID, max_rows=3, start_row=9)
+
+        assert result["first_visible_row"] == 7
+        assert result["data"][0]["_absolute_row_index"] == 7
 

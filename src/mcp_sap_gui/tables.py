@@ -154,7 +154,8 @@ class TablesMixin:
         except Exception:
             return None
 
-    def _scroll_table_control_to_row(self, table, abs_row: int) -> tuple:
+    def _scroll_table_control_to_row(self, table, abs_row: int, *,
+                                     need_visible: bool = True) -> tuple:
         """Scroll a GuiTableControl so *abs_row* is visible.
 
         Returns a ``(table, visible_row_offset)`` tuple.  Pass the offset
@@ -164,6 +165,13 @@ class TablesMixin:
         Changing ``VerticalScrollbar.Position`` triggers a server
         round-trip that re-renders the control and invalidates existing
         references into it.
+
+        The offset counts from the row SAP actually put at the top, which
+        the application may choose differently: live, SE16's multiple
+        selection showed row 7 on top after a scroll to 9, and an offset
+        from the requested position wrote into the wrong row.  With
+        *need_visible*, a row that is still not visible raises ValueError,
+        so a caller never sets or focuses another row's cell.
         """
         visible = table.VisibleRowCount
         scrollbar = table.VerticalScrollbar
@@ -175,7 +183,15 @@ class TablesMixin:
         full_id = table.Id  # capture before the reference goes stale
         new_pos = max(scrollbar.Minimum, min(abs_row, scrollbar.Maximum))
         scrollbar.Position = new_pos
-        return self._session.findById(full_id), abs_row - new_pos
+        table = self._session.findById(full_id)
+        top = table.VerticalScrollbar.Position
+        visible = table.VisibleRowCount
+        if need_visible and not top <= abs_row < top + visible:
+            raise ValueError(
+                f"Row {abs_row} is not visible after scrolling: the table "
+                f"shows rows {top} to {top + visible - 1}. Nothing was changed."
+            )
+        return table, abs_row - top
 
     def _resolve_table_control_column(self, table, column) -> int:
         """Resolve a column name/index to a numeric column index for GuiTableControl."""
@@ -207,7 +223,7 @@ class TablesMixin:
 
     def read_table(self, table_id: str, max_rows: int = 100,
                    columns: str = "", columns_only: bool = False,
-                   start_row: int = 0) -> Dict[str, Any]:
+                   start_row: Optional[int] = None) -> Dict[str, Any]:
         """
         Read data from an ALV grid or table control.
 
@@ -221,9 +237,10 @@ class TablesMixin:
                 Reduces response size when only a few columns are needed.
             columns_only: If True, return only column metadata with empty
                 data (schema discovery mode — very small response).
-            start_row: Row index to start reading from (default 0).
-                For ALV: skips first N rows. For TableControl: scrolls to
-                that position before reading.
+            start_row: Row index to start reading from. For ALV: skips
+                the first N rows (None = 0). For TableControl: scrolls to
+                that row first, 0 included; None reads from the current
+                scroll position (e.g. after "Position...").
 
         Returns:
             Dict with table data and metadata
@@ -241,7 +258,8 @@ class TablesMixin:
                     table, table_id, max_rows, col_filter, columns_only, start_row,
                 )
             return self._read_alv_grid(
-                table, table_id, max_rows, col_filter, columns_only, start_row,
+                table, table_id, max_rows, col_filter, columns_only,
+                start_row or 0,
             )
         except Exception as e:
             return self._error_result(
@@ -361,11 +379,11 @@ class TablesMixin:
     def _read_table_control(self, table, table_id: str, max_rows: int,
                             col_filter: List[str] = None,
                             columns_only: bool = False,
-                            start_row: int = 0) -> Dict[str, Any]:
+                            start_row: Optional[int] = None) -> Dict[str, Any]:
         """Read visible rows from a GuiTableControl.
 
         Reads from the current scroll position without changing it (unless
-        start_row is explicitly provided).  This preserves the user's
+        start_row is given, 0 included).  This preserves the user's
         navigated position (e.g. after "Position..." in SPRO/SM30) and
         avoids crashing SAP GUI's COM server -- programmatic
         scrollbar.Position changes can destabilize certain table views.
@@ -403,21 +421,21 @@ class TablesMixin:
         if total_rows > 0 and all_col_count > 0:
             scrollbar = table.VerticalScrollbar
 
-            # Scroll to start_row if explicitly requested
-            if start_row > 0:
-                full_id = table.Id  # capture before the reference goes stale
+            # Scroll to start_row if one was given: 0 means the first row,
+            # not "wherever the table is" (that is start_row=None).
+            if start_row is not None:
                 new_pos = max(scrollbar.Minimum, min(start_row, scrollbar.Maximum))
-                try:
-                    scrollbar.Position = new_pos
-                    # The scroll round-trip re-renders the control and
-                    # invalidates existing references — re-acquire.
-                    table = self._session.findById(full_id)
-                    scrollbar = table.VerticalScrollbar
-                except Exception:
-                    pass  # best-effort scroll
-                start_position = scrollbar.Position
-            else:
-                start_position = scrollbar.Position
+                if new_pos != scrollbar.Position:
+                    full_id = table.Id  # capture before the reference goes stale
+                    try:
+                        scrollbar.Position = new_pos
+                        # The scroll round-trip re-renders the control and
+                        # invalidates existing references — re-acquire.
+                        table = self._session.findById(full_id)
+                        scrollbar = table.VerticalScrollbar
+                    except Exception:
+                        pass  # best-effort scroll
+            start_position = scrollbar.Position
 
             if not columns_only:
                 values = self._table_control_values(table_id)
@@ -729,7 +747,9 @@ class TablesMixin:
                 # indexing and works regardless of scroll position.
                 # Some popup tables throw COM errors on scroll.
                 try:
-                    table, _ = self._scroll_table_control_to_row(table, row)
+                    table, _ = self._scroll_table_control_to_row(
+                        table, row, need_visible=False,
+                    )
                 except Exception:
                     pass
                 table.GetAbsoluteRow(row).Selected = True
@@ -939,9 +959,10 @@ class TablesMixin:
         """
         Scroll a GuiTableControl to a specific row position.
 
-        Since read_table does not scroll (it reads only visible rows),
-        use this tool to navigate to a different section of the table
-        before reading.
+        The application may put another row at the top than the one asked
+        for (SE16's multiple selection: 7 for 9), so ``position`` in the
+        result is read back from the table: cell IDs count visible rows
+        from there.  ``requested_position`` appears when the two differ.
 
         Args:
             table_id: SAP GUI table control ID
@@ -990,14 +1011,23 @@ class TablesMixin:
             except Exception:
                 pass
 
-            return {
+            top = table.VerticalScrollbar.Position
+            result = {
                 "table_id": table_id,
                 "status": "success",
-                "position": new_pos,
+                "position": top,
                 "visible_rows": table.VisibleRowCount,
                 "total_rows": table.RowCount,
                 "scroll_max": scroll_max,
             }
+            if top != position:
+                result["requested_position"] = position
+            if top != new_pos:
+                result["note"] = (
+                    f"SAP put row {top} at the top, not {new_pos}: visible "
+                    f"row 0 in cell IDs is absolute row {top}."
+                )
+            return result
         except Exception as e:
             return self._error_result(
                 {"table_id": table_id},
@@ -1287,7 +1317,9 @@ class TablesMixin:
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 for row in rows:
-                    table, _ = self._scroll_table_control_to_row(table, row)
+                    table, _ = self._scroll_table_control_to_row(
+                        table, row, need_visible=False,
+                    )
                     table.GetAbsoluteRow(row).Selected = True
             else:
                 # ALV: comma-separated row list

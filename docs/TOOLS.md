@@ -97,10 +97,10 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_read_table` | Read rows and columns from a table or grid. With `columns_only=true` a TableControl also reports each column's `cell_type` and a `cell_id` template (`{row}` = zero-based visible row). Columns of a table without rows are flagged `name_is_title`: no cell exists yet to read the technical name from. A TableControl's `total_rows` counts its empty lines too (SM30 pads the view): the read stops at the first empty row and reports its index as `empty_rows_from`, where the data ends. An ALV read that cannot scroll (read-only scripting) stops at the rows on screen and reports `unread_from_row` |
+| `sap_read_table` | Read rows and columns from a table or grid. With `columns_only=true` a TableControl also reports each column's `cell_type` and a `cell_id` template (`{row}` = zero-based visible row). Columns of a table without rows are flagged `name_is_title`: no cell exists yet to read the technical name from. A TableControl's `total_rows` counts its empty lines too (SM30 pads the view): the read stops at the first empty row and reports its index as `empty_rows_from`, where the data ends. On a TableControl, `start_row` (0 included) scrolls there first; without it the read starts where the table is scrolled now, e.g. after "Position...". An ALV read that cannot scroll (read-only scripting) stops at the rows on screen and reports `unread_from_row` |
 | `sap_select_table_row` | Select a row |
 | `sap_double_click_cell` | Double-click a cell |
-| `sap_modify_cell` | Modify an editable cell |
+| `sap_modify_cell` | Modify an editable cell. On a TableControl it scrolls to the row first and refuses if the row is still not visible afterwards, instead of writing another row |
 | `sap_set_current_cell` | Set the focused cell |
 | `sap_get_column_info` | Get column names, titles, and metadata (ALV: data type and key flag; table control: cell type and cell ID template) |
 | `sap_get_current_cell` | Get the current focused cell |
@@ -121,7 +121,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_scroll_table_control` | Scroll a classic table control to a row position |
+| `sap_scroll_table_control` | Scroll a classic table control to a row position. `position` is the row SAP actually put at the top, which can differ from the one asked for (`requested_position` and a `note` then say so); cell IDs count visible rows from there |
 | `sap_get_table_control_row_info` | Read row metadata from a classic table control |
 | `sap_select_all_table_control_columns` | Select or clear all column headers in a classic table control |
 

@@ -1336,7 +1336,7 @@ async def sap_read_table(
     max_rows: int = 100,
     columns: str = "",
     columns_only: bool = False,
-    start_row: int = 0,
+    start_row: Optional[int] = None,
 ) -> dict:
     """Read rows from a table on the current screen — ALV grid (report/list
     output) or TableControl (SM30 maintenance view, customizing screens).
@@ -1350,7 +1350,10 @@ async def sap_read_table(
     only, no data). For a TableControl it also gives each column's cell_type
     and a cell_id template ({row} = zero-based visible row) for
     sap_set_batch_fields. Use columns to fetch only specific columns (CSV).
-    Use start_row to paginate through large tables.
+    Use start_row to paginate through large tables. On a TableControl a
+    start_row (0 included) scrolls there first; without one the read starts
+    where the table is scrolled now (e.g. after Position...).
+    first_visible_row says which row is on top.
 
     A TableControl's total_rows counts its empty lines too (SM30 pads the
     view). When the read reaches the first empty row, the response has
@@ -1494,7 +1497,11 @@ async def sap_scroll_table_control(table_id: str, position: int, ctx: Context) -
 
     Does NOT work on ALV grids (they handle scrolling internally).
     For reading data at a specific offset, prefer sap_read_table with
-    start_row parameter — it handles scrolling automatically."""
+    start_row parameter — it handles scrolling automatically.
+
+    position in the response is the row SAP actually put at the top, which
+    can differ from the one asked for (then requested_position and a note
+    say so). Cell IDs ([col,row]) count visible rows from that row."""
     _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.scroll_table_control(table_id, position))
