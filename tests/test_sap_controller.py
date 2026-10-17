@@ -4728,19 +4728,21 @@ class TestHandlePopup:
     def test_confirm_falls_back_to_enter(self):
         """Confirm falls back to Enter VKey when no confirm button found."""
         controller = self._make_controller_with_session()
-        self._setup_popup(controller, buttons=[], texts=["Info message"])
+        popup_wnd = self._setup_popup(controller, buttons=[], texts=["Info message"],
+                                      close_on_action=True)
         controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
 
         result = controller.handle_popup("confirm")
 
         assert result["action"] == "confirmed"
         assert "fallback" in result["button_pressed"]
-        controller._session.findById("wnd[1]").sendVKey.assert_called_with(0)
+        popup_wnd.sendVKey.assert_called_with(0)
 
     def test_cancel_falls_back_to_f12(self):
         """Cancel falls back to F12 when no cancel button found."""
         controller = self._make_controller_with_session()
-        self._setup_popup(controller, buttons=[], texts=["Info"])
+        self._setup_popup(controller, buttons=[], texts=["Info"],
+                          close_on_action=True)
         controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
 
         result = controller.handle_popup("cancel")

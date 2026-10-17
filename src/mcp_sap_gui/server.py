@@ -1555,7 +1555,8 @@ async def sap_handle_popup(
     Actions:
     - read: return popup content without acting (default)
     - confirm: press OK/Yes/Continue/Enter on the popup
-    - cancel: press Cancel/No/F12 on the popup
+    - cancel: press Cancel (or F12) on the popup; never No, which on a
+      save prompt drops the changes
     - press: press a specific button by its text or tooltip
     - auto: take only a clearly safe action; otherwise return the popup read-only
 

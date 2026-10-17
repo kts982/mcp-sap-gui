@@ -574,3 +574,52 @@ def test_popup_confirmation_is_audited_under_its_tool(tools, caplog):
     events = [json.loads(r.getMessage()) for r in caplog.records
               if '"confirmation"' in r.getMessage()]
     assert [(e["tool"], e["outcome"]) for e in events] == [("sap_press_button", "declined")]
+
+
+# ---------------------------------------------------------------------------
+# cancel never answers "No"; a fallback key that changed nothing says so
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("popup, pressed", [
+    # Live on "Exit Editor": cancel matched "No" first and left without saving.
+    (UNREAD, "press wnd[1]/usr/btnBUTTON_3"),
+    (SAVE_FIRST, "press wnd[1]/usr/btnSPOP-OPTION_CAN"),
+    (UNREAD_DE, "press wnd[1]/usr/btnBUTTON_3"),
+])
+def test_cancel_presses_cancel_not_no(controller, popup, pressed):
+    _open(controller, popup)
+    result = controller.handle_popup("cancel")
+    assert result["action"] == "canceled"
+    assert controller.session.log == [pressed]
+
+
+def test_cancel_without_a_cancel_button_sends_f12(controller):
+    _open(controller, SAVE_FIRST_DE)  # Ja / Nein only
+    result = controller.handle_popup("cancel")
+    assert result["button_pressed"] == "F12 (fallback)"
+    assert controller.session.log == ["vkey 12 wnd[1]"]
+
+
+def test_cancel_refuses_when_f12_is_not_active_either(controller):
+    _open(controller, SAVE_FIRST_DE)
+    controller.session.add("wnd[1]", allowed_vkeys={0})  # F12 refused
+    result = controller.handle_popup("cancel")
+    assert result["action"] == "error"
+    assert "no Cancel button and F12 is not active" in result["error"]
+    assert controller.session.log == []
+
+
+def test_fallback_key_that_changed_nothing_says_so(controller):
+    _open(controller, NO_BUTTONS)
+    controller.popups.append(NO_BUTTONS)  # still there after Enter
+    result = controller.handle_popup("confirm")
+    assert result["action"] == "no_effect"
+    assert "Enter changed nothing" in result["note"]
+    assert controller.session.log == ["vkey 0 wnd[1]"]
+
+
+def test_fallback_key_with_a_new_message_is_not_no_effect(controller):
+    _open(controller, NO_BUTTONS)
+    controller.popups.append({**NO_BUTTONS, "message": "Enter a value"})
+    result = controller.handle_popup("confirm")
+    assert result["action"] == "confirmed"

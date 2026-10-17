@@ -751,8 +751,20 @@ class DiscoveryMixin:
             btn = self._match_button(all_buttons, self._CONFIRM_PATTERNS)
             fallback_vkey = 0  # Enter
         elif action == "cancel":
-            btn = self._match_button(all_buttons, self._CANCEL_PATTERNS)
+            # A Cancel-type button, else F12. Never "No": live on "Save
+            # before exiting editor?" it was matched first ("no") and left
+            # the editor without saving.
+            btn = next((b for b in all_buttons if self._is_cancel_button(b)), None)
             fallback_vkey = 12  # F12
+            if btn is None and not self._f12_allowed(popup["window_id"]):
+                popup["action"] = "error"
+                popup["error"] = (
+                    "This popup has no Cancel button and F12 is not active, "
+                    "so nothing was pressed. Press the answer you mean with "
+                    "action='press' and its text. Available: "
+                    f"{[b.get('text') or b.get('tooltip') for b in all_buttons]}"
+                )
+                return plan
         elif action == "press":
             needle = button_text.lower()
             for b in all_buttons:
@@ -799,6 +811,12 @@ class DiscoveryMixin:
                     save_risk=save_risk or unread, unread_question=unread,
                     done=False)
         return plan
+
+    def _f12_allowed(self, window_id: str) -> bool:
+        try:
+            return self._vkey_allowed(self._find_window(window_id), 12)
+        except Exception:
+            return True  # cannot be asked: send it, as before
 
     def plan_popup_button(self, button_id: str) -> Dict[str, Any] | None:
         """sap_press_button's check: a plan when *button_id* is a button of
@@ -931,10 +949,25 @@ class DiscoveryMixin:
             if not popup["popup_closed"]:
                 # A follow-up popup is the new state: that one stays complete.
                 popup["popup_after"] = popup_after
+                if btn is None and self._same_popup(popup, popup_after):
+                    # Live (Ja / Nein / Abbrechen): Enter left the popup as
+                    # it was, and the result said "confirmed".
+                    key = "Enter" if fallback_vkey == 0 else "F12"
+                    popup["action"] = "no_effect"
+                    popup["note"] = (
+                        f"{key} changed nothing: the popup is still open. "
+                        "Press the answer you mean with action='press'."
+                    )
         except Exception:
             pass
 
         return popup
+
+    @staticmethod
+    def _same_popup(before: Dict[str, Any], after: Dict[str, Any]) -> bool:
+        """The same window, title and status message: nothing happened."""
+        return all(before.get(key, "") == after.get(key, "")
+                   for key in ("window_id", "title", "message"))
 
     # =========================================================================
     # Toolbar Discovery
