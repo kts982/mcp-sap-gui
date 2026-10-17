@@ -245,7 +245,7 @@ class DiscoveryMixin:
     _UNREADABLE_QUESTION_NOTE = (
         "This popup shows its text in an HTML viewer that scripts cannot "
         "read (the Edge browser control). See it with sap_screenshot, or ask "
-        "the user."
+        "the user. Any answer but Cancel asks the user first."
     )
 
     def _read_popup_html(self, viewer_ids: List[str], texts: list,
@@ -634,6 +634,31 @@ class DiscoveryMixin:
             return False
         return btn is None or len(popup.get("buttons", [])) > 1
 
+    # A button that backs out of a popup, matched as a whole word. Not "No":
+    # on "Save before exiting editor?" No leaves and drops the changes. Not
+    # inside a word either: "Background" is no Back.
+    _CANCEL_BUTTON_RE = re.compile(
+        r"\b(cancel|abort|close|back|abbrechen|annuler|cancelar|annulla|annuleren)\b",
+        re.IGNORECASE,
+    )
+
+    def _is_cancel_button(self, btn: Dict[str, Any]) -> bool:
+        return any(self._CANCEL_BUTTON_RE.search(btn.get(key) or "")
+                   for key in ("text", "tooltip"))
+
+    def _unread_answer(
+        self, popup: Dict[str, Any], btn: Dict[str, Any] | None,
+    ) -> bool:
+        """True when pressing *btn* (None: the Enter fallback) answers a
+        question the tool cannot read (question_readable: false) and the
+        popup offers more than one answer. Only Cancel is exempt: unread,
+        Yes may save, and No may drop the changes."""
+        if popup.get("question_readable") is not False:
+            return False
+        if len(popup.get("buttons", [])) < 2:
+            return False
+        return btn is None or not self._is_cancel_button(btn)
+
     def _top_popup_id(self) -> str | None:
         """The ID of the topmost window above wnd[0], or None. No tree read."""
         top = None
@@ -755,21 +780,77 @@ class DiscoveryMixin:
             and self._match_button([btn], self._CANCEL_PATTERNS) is None
         )
         save_risk = affirmative and self._popup_save_risk(popup, btn)
-        if save_risk and btn is None:
+        unread = action != "cancel" and self._unread_answer(popup, btn)
+        if (save_risk or unread) and btn is None:
             # Enter would take the dialog's default button, unseen: on a
             # save-shaped popup that can be the save itself.
             popup["action"] = "error"
             popup["error"] = (
-                "This popup looks like a save prompt and no confirm button "
-                "was recognised, so Enter was not sent. Nothing was pressed. "
-                "Use action='press' with the button's text. Available: "
+                ("This popup looks like a save prompt" if save_risk
+                 else "This popup's question cannot be read")
+                + " and no confirm button was recognised, so Enter was not "
+                "sent. Nothing was pressed. Use action='press' with the "
+                "button's text. Available: "
                 f"{[b.get('text') or b.get('tooltip') for b in all_buttons]}"
             )
             return plan
 
         plan.update(button=btn, fallback_vkey=fallback_vkey,
-                    save_risk=save_risk, done=False)
+                    save_risk=save_risk or unread, unread_question=unread,
+                    done=False)
         return plan
+
+    def plan_popup_button(self, button_id: str) -> Dict[str, Any] | None:
+        """sap_press_button's check: a plan when *button_id* is a button of
+        the topmost popup that needs the user first, else None.
+
+        The rules of plan_popup_action's press: a Save button, Yes/OK on a
+        popup about saving, or any answer but Cancel to a question the tool
+        cannot read. Without this, pressing wnd[1]/usr/btnBUTTON_1 by ID
+        answered what sap_handle_popup asks about. Reads the popup only for
+        a button outside wnd[0]; presses nothing.
+        """
+        self._require_session()
+        element_id = self._normalize_element_id(button_id)
+        match = re.match(r"(wnd\[(\d+)\])/", element_id)
+        if not match or match.group(2) == "0":
+            return None
+        popup = self.get_popup_window()
+        if popup.get("window_id") != match.group(1):
+            return None
+        btn = next((b for b in popup.get("buttons", [])
+                    if b.get("id") == element_id), None)
+        if btn is None:
+            return None
+        affirmative = self._match_button([btn], self._CANCEL_PATTERNS) is None
+        save_risk = affirmative and self._popup_save_risk(popup, btn)
+        unread = self._unread_answer(popup, btn)
+        if not (save_risk or unread):
+            return None
+        popup["action_requested"] = "press"
+        return {
+            "popup": popup, "action": "press", "button": btn,
+            "fallback_vkey": None, "save_risk": True,
+            "unread_question": unread, "done": False,
+        }
+
+    def popup_changed(self, popup: Dict[str, Any]) -> str | None:
+        """Why *popup* (a popup read) is no longer the one on top, or None.
+
+        A cheap check, no popup re-read: the same window ID is topmost, with
+        the same title. For a press planned before asking the user.
+        """
+        popup_id = popup["window_id"]
+        try:
+            title = str(getattr(self._find_window(popup_id), "Text", ""))
+            same = (self._top_popup_id() == popup_id
+                    and title.strip() == str(popup.get("title", "")).strip())
+        except Exception:
+            same = False
+        if same:
+            return None
+        return (f"The popup {popup_id} changed before it was acted on. "
+                "Nothing was pressed; read it again.")
 
     def apply_popup_plan(
         self, plan: Dict[str, Any], recheck: bool = False,
@@ -790,18 +871,10 @@ class DiscoveryMixin:
         popup_id = popup["window_id"]
 
         if recheck:
-            try:
-                title = str(getattr(self._find_window(popup_id), "Text", ""))
-                same = (self._top_popup_id() == popup_id
-                        and title.strip() == str(popup.get("title", "")).strip())
-            except Exception:
-                same = False
-            if not same:
+            changed = self.popup_changed(popup)
+            if changed is not None:
                 popup["action"] = "error"
-                popup["error"] = (
-                    f"The popup {popup_id} changed before it was acted on. "
-                    "Nothing was pressed; read it again."
-                )
+                popup["error"] = changed
                 return popup
 
         # Press the button or send fallback VKey

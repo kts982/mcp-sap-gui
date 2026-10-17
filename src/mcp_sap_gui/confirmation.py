@@ -80,11 +80,12 @@ POINT_BY_TOOL: dict[str, str] = {
 #: (System -> Save) and ALV/app-toolbar Save buttons remain a documented gap:
 #: their IDs are positional and locale-dependent, so there is no reliable
 #: static ID to match.
-#: Popups: sap_handle_popup asks in its tool body before a press that may save
-#: (a Save button, or Yes/OK on a popup about saving), using the sap_send_key
-#: Save prompt. Still a gap: sap_press_button on a popup button by ID
-#: (wnd[1]/usr/btnSPOP-OPTION1) and sap_send_key Enter while a popup is open;
-#: gating those needs a popup read on every call.
+#: Popups: sap_handle_popup and sap_press_button (on a button outside wnd[0])
+#: ask in their tool bodies before a press that may save (a Save button, or
+#: Yes/OK on a popup about saving) and before any answer but Cancel to a popup
+#: question the tool cannot read, using the sap_send_key Save prompt.
+#: sap_send_key always targets wnd[0]: live on SAP GUI 8.10, Enter there left
+#: an open confirmation popup untouched.
 #: Matched by suffix, so a popup's own tbar[0]/btn[11] (e.g. wnd[1]) also hits
 #: the gate. Intentional: over-prompting on a dialog errs on the safe side.
 _SAVE_BUTTON_SUFFIX = "tbar[0]/btn[11]"

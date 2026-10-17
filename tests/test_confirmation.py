@@ -75,6 +75,9 @@ async def _fake_com(fn):
 def _patched_controller(**returns):
     """Patch _ctrl/_com so tool bodies hit a MagicMock instead of SAP GUI."""
     controller = MagicMock(Busy=False)
+    # No popup answer to ask about: sap_press_button asks plan_popup_button
+    # first, and a bare MagicMock would read as one.
+    controller.plan_popup_button.return_value = None
     for name, value in returns.items():
         getattr(controller, name).return_value = value
     ctx = patch.multiple(

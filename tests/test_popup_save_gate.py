@@ -383,3 +383,194 @@ def test_handle_popup_save_without_elicitation_fails_closed(tools):
     with pytest.raises(ValueError, match="does not support elicitation"):
         _run(server.sap_handle_popup(NoElicitCtx(), action="confirm"))
     assert tools.session.log == []
+
+
+# ---------------------------------------------------------------------------
+# Questions the tool cannot read (SAPLSPO1 0500 with the Edge control)
+# ---------------------------------------------------------------------------
+
+# As read live on A4H, SAP GUI 8.10: the question is in an HTML viewer the
+# Edge control keeps from scripts, so the read has buttons and a title only.
+UNREAD = {
+    "window_id": "wnd[1]",
+    "title": "A4H(1)/001 Exit Editor",
+    "question_readable": False,
+    "buttons": [
+        {"id": "wnd[1]/usr/btnBUTTON_1", "text": "Yes", "tooltip": "Yes"},
+        {"id": "wnd[1]/usr/btnBUTTON_2", "text": "No", "tooltip": "No"},
+        {"id": "wnd[1]/usr/btnBUTTON_3", "text": "Cancel", "tooltip": "Cancel"},
+    ],
+}
+
+UNREAD_DE = {
+    "window_id": "wnd[1]",
+    "title": "A4H(1)/001 Editor beenden",
+    "question_readable": False,
+    "buttons": [
+        {"id": "wnd[1]/usr/btnBUTTON_1", "text": "Ja", "tooltip": "Ja"},
+        {"id": "wnd[1]/usr/btnBUTTON_2", "text": "Nein", "tooltip": "Nein"},
+        {"id": "wnd[1]/usr/btnBUTTON_3", "text": "Abbrechen", "tooltip": "Abbrechen"},
+    ],
+}
+
+UNREAD_NOTICE = {
+    "window_id": "wnd[1]",
+    "title": "Note",
+    "question_readable": False,
+    "buttons": [
+        {"id": "wnd[1]/tbar[0]/btn[0]", "text": "", "tooltip": "Continue (Enter)"},
+    ],
+}
+
+
+def test_confirm_on_unread_question_asks(controller):
+    _open(controller, UNREAD)
+    plan = controller.plan_popup_action("confirm")
+    assert plan["save_risk"] is True
+    assert plan["unread_question"] is True
+    assert plan["button"]["text"] == "Yes"
+    assert controller.session.log == []
+
+
+@pytest.mark.parametrize("popup, answer, asks", [
+    (UNREAD, "Yes", True),
+    (UNREAD, "No", True),        # unread, No may drop the changes
+    (UNREAD, "Cancel", False),
+    (UNREAD_DE, "Ja", True),     # live: German answers matched no word
+    (UNREAD_DE, "Nein", True),
+    (UNREAD_DE, "Abbrechen", False),
+])
+def test_any_answer_but_cancel_to_unread_question_asks(controller, popup, answer, asks):
+    _open(controller, popup)
+    plan = controller.plan_popup_action("press", answer)
+    assert plan["save_risk"] is asks
+    assert controller.session.log == []
+
+
+def test_no_enter_on_unread_question_without_a_yes_button(controller):
+    """Live: confirm on Ja / Nein / Abbrechen fell back to Enter."""
+    _open(controller, UNREAD_DE)
+    result = controller.handle_popup("confirm")
+    assert result["action"] == "error"
+    assert "question cannot be read" in result["error"]
+    assert "Enter was not sent" in result["error"]
+    assert controller.session.log == []
+
+
+def test_one_button_unread_popup_is_not_asked(controller):
+    _open(controller, UNREAD_NOTICE)
+    assert controller.plan_popup_action("confirm")["save_risk"] is False
+
+
+@pytest.mark.parametrize("button, is_cancel", [
+    ({"text": "Cancel   (F12)", "tooltip": ""}, True),
+    ({"text": "", "tooltip": "Cancel   (F12)"}, True),
+    ({"text": "Abbrechen", "tooltip": ""}, True),
+    ({"text": "No", "tooltip": "No"}, False),
+    ({"text": "Nein", "tooltip": ""}, False),
+    ({"text": "Execute in Background", "tooltip": ""}, False),
+])
+def test_cancel_button_is_matched_as_a_word(controller, button, is_cancel):
+    assert controller._is_cancel_button(button) is is_cancel
+
+
+# ---- sap_press_button on a popup button ----
+
+@pytest.mark.parametrize("button_id", [
+    "wnd[1]/usr/btnBUTTON_1",
+    "/app/con[0]/ses[0]/wnd[1]/usr/btnBUTTON_2",
+])
+def test_press_button_plan_for_an_unread_answer(controller, button_id):
+    _open(controller, UNREAD)
+    plan = controller.plan_popup_button(button_id)
+    assert plan is not None
+    assert plan["unread_question"] is True
+    assert plan["button"]["id"] == button_id.split("ses[0]/")[-1]
+
+
+def test_press_button_plan_for_a_readable_save_prompt(controller):
+    _open(controller, SAVE_FIRST)
+    plan = controller.plan_popup_button("wnd[1]/usr/btnSPOP-OPTION1")
+    assert plan is not None and plan["unread_question"] is False
+
+
+@pytest.mark.parametrize("popup, button_id", [
+    (UNREAD, "wnd[1]/usr/btnBUTTON_3"),        # Cancel
+    (CONTINUE, "wnd[1]/tbar[0]/btn[0]"),       # nothing to decide
+    (UNREAD, "wnd[1]/usr/btnELSEWHERE"),       # not one of the popup's buttons
+])
+def test_press_button_plan_none(controller, popup, button_id):
+    _open(controller, popup)
+    assert controller.plan_popup_button(button_id) is None
+
+
+def test_press_button_on_main_window_reads_no_popup(controller):
+    _open(controller, UNREAD)
+    assert controller.plan_popup_button("wnd[0]/tbar[1]/btn[8]") is None
+    assert len(controller.popups) == 1  # the popup was not read
+
+
+# ---- server tools ----
+
+def test_handle_popup_asks_before_answering_unread_question(tools):
+    _open(tools, UNREAD)
+    ctx = FakeCtx("accept", True)
+    result = _run(server.sap_handle_popup(ctx, action="confirm"))
+    assert len(ctx.prompts) == 1
+    assert "cannot read" in ctx.prompts[0]
+    assert "'Yes'" in ctx.prompts[0] and "Exit Editor" in ctx.prompts[0]
+    assert result["confirmed_by_user"] is True
+    assert tools.session.log == ["press wnd[1]/usr/btnBUTTON_1"]
+
+
+def test_press_button_asks_before_unread_answer(tools):
+    _open(tools, UNREAD)
+    ctx = FakeCtx("accept", True)
+    result = _run(server.sap_press_button("wnd[1]/usr/btnBUTTON_1", ctx))
+    assert len(ctx.prompts) == 1 and "cannot read" in ctx.prompts[0]
+    assert result["status"] == "pressed"
+    assert result["confirmed_by_user"] is True
+    assert tools.session.log == ["press wnd[1]/usr/btnBUTTON_1"]
+
+
+def test_press_button_decline_presses_nothing(tools):
+    _open(tools, UNREAD)
+    ctx = FakeCtx("decline", None)
+    result = _run(server.sap_press_button("wnd[1]/usr/btnBUTTON_2", ctx))
+    assert result["status"] == "cancelled"
+    assert result["buttons"]  # still there for the next step
+    assert tools.session.log == []
+
+
+def test_press_button_cancel_on_unread_popup_does_not_ask(tools):
+    _open(tools, UNREAD)
+    ctx = FakeCtx()
+    result = _run(server.sap_press_button("wnd[1]/usr/btnBUTTON_3", ctx))
+    assert ctx.prompts == []
+    assert "confirmed_by_user" not in result
+    assert tools.session.log == ["press wnd[1]/usr/btnBUTTON_3"]
+
+
+def test_press_button_refuses_when_the_popup_changed(tools):
+    _open(tools, UNREAD)
+
+    class NewPopupCtx(FakeCtx):
+        async def elicit(self, message, response_type=None):
+            tools.session.add("wnd[2]", text="Something else")  # opened meanwhile
+            return await super().elicit(message, response_type)
+
+    result = _run(server.sap_press_button("wnd[1]/usr/btnBUTTON_1", NewPopupCtx()))
+    assert "changed" in result["error"]
+    assert tools.session.log == []
+
+
+def test_popup_confirmation_is_audited_under_its_tool(tools, caplog):
+    import json
+    import logging
+
+    _open(tools, UNREAD)
+    with caplog.at_level(logging.INFO, logger="mcp_sap_gui.audit"):
+        _run(server.sap_press_button("wnd[1]/usr/btnBUTTON_1", FakeCtx("decline", None)))
+    events = [json.loads(r.getMessage()) for r in caplog.records
+              if '"confirmation"' in r.getMessage()]
+    assert [(e["tool"], e["outcome"]) for e in events] == [("sap_press_button", "declined")]
