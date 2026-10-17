@@ -55,6 +55,14 @@ jobs:
           print(f"Verified tag {actual} matches package and server.json versions.")
           PY
 
+      # Outside the checkout: hatchling puts every file git does not ignore
+      # into the sdist, and dist/ is published, uploaded and checksummed.
+      - name: Extract release notes from CHANGELOG.md
+        run: >-
+          python scripts/release_notes.py "${GITHUB_REF_NAME#v}"
+          --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}"
+          --output "${RUNNER_TEMP}/release-notes/release-notes.md"
+
       - name: Build distribution artifacts
         run: uv build
 
@@ -87,6 +95,13 @@ jobs:
           name: release-dist
           path: dist/*
 
+      - name: Upload release notes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes/release-notes.md
+          if-no-files-found: error
+
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -100,9 +115,22 @@ jobs:
           name: release-dist
           path: dist
 
+      - name: Download release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-notes
+          path: notes
+
+      # The action only warns when body_path cannot be read and publishes
+      # the generated notes alone, so check the file first.
+      - name: Check release notes
+        run: test -s notes/release-notes.md
+
+      # body_path comes first, then GitHub's generated list of merged PRs.
       - name: Publish GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
+          body_path: notes/release-notes.md
           generate_release_notes: true
           prerelease: ${{ contains(needs.build.outputs.tag_name, '-') }}
           files: |
