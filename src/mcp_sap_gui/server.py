@@ -83,6 +83,7 @@ from .prompts import (
 )
 from .sap_controller import VKey
 from .session_manager import SessionManager
+from .strict import STRICT_ERRORS_ENV, StrictErrorMiddleware, strict_errors_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,9 @@ class ServerConfig:
     # Server-level confirmation points (--confirm). Always active, never
     # removable by sap_set_confirmation_points.
     confirmation_floor: List[str] = field(default_factory=list)
+    # --strict-errors / MCP_SAP_GUI_STRICT_ERRORS: return a failed result
+    # (strict.result_error) as an MCP error (isError true). Off by default.
+    strict_errors: bool = False
 
     # Behavior settings
     auto_connect_existing: bool = True
@@ -546,6 +550,11 @@ activated elsewhere, leave it (`/n`) and start it again before testing.
 
 mcp = FastMCP("mcp-sap-gui", instructions=_INSTRUCTIONS, lifespan=_lifespan)
 mcp.add_middleware(AuditMiddleware())
+# Next to audit, outside the confirmation gate: audit sees what it returns,
+# and the gate's confirmed_by_user (added only to a result that is not an
+# error) is already in the result it flags. The lambda reads the running
+# module's config at call time, because main() rebinds it.
+mcp.add_middleware(StrictErrorMiddleware(enabled=lambda: config.strict_errors))
 # ConfirmationMiddleware is registered further down, after its injected
 # helpers are defined. add_middleware is outermost-first, so audit (added
 # here) stays outside the confirmation gate and blocked calls keep their
@@ -899,6 +908,9 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
         "action": action,
         "key": key,
         "reason": f"User did not confirm save ({action})",
+        # Same wording as a decline at a confirmation point, which the
+        # instructions tell agents to stop on.
+        "error": f"Save declined by user ({action}). Nothing was sent.",
     }
 
 
@@ -940,6 +952,7 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
         "action": "none",
         "button": label,
         "reason": f"User did not confirm {what} ({action})",
+        "error": f"Popup answer declined by user ({action}). Nothing was pressed.",
     })
     return popup
 
@@ -1063,7 +1076,8 @@ async def sap_send_key(
     error and available_keys, the keys this screen accepts.
 
     F11 / Save requires user confirmation via elicitation before proceeding;
-    the response then has confirmed_by_user: true."""
+    the response then has confirmed_by_user: true. A declined save
+    returns status 'cancelled' with an error."""
     _check_write(ctx)
     vkey = _parse_key(key)
     c = _ctrl(ctx)
@@ -1136,7 +1150,11 @@ async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
     its text, and the response reports the key and text selected. For
     filling in multiple fields of a form at once, use sap_set_batch_fields
     instead. After setting a field, you may need to press Enter to trigger
-    validation."""
+    validation.
+
+    A value longer than the field (MaxLength) or a field that is not
+    changeable is refused before writing: status 'rejected' and an error
+    that says which, and the field keeps its content."""
     _check_write(ctx)
     _check_okcode_bypass(field_id, value)
     c = _ctrl(ctx)
@@ -1271,7 +1289,9 @@ async def sap_set_batch_fields(
     takes an entry's key or text, as in sap_set_field.
 
     The result gives counts; `results` lists only the fields that did NOT
-    succeed (all of them with verbose=true).
+    succeed (all of them with verbose=true). Check failed == 0: a field
+    that was not set does not stop the others. With --strict-errors such a
+    batch is returned as an error.
 
     Args:
         fields: Dict mapping field_id -> value.
@@ -2431,6 +2451,12 @@ def main():
                              "operation categories in every session "
                              f"(choices: {', '.join(SETTABLE_POINTS)}). "
                              "Sessions can add points but never remove these")
+    parser.add_argument("--strict-errors", action="store_true",
+                        help="Return a failed tool result (an 'error' key, "
+                             "or a batch with fields that were not set) as "
+                             "an MCP error (isError true), keeping its "
+                             "structured content. Also enabled by "
+                             f"${STRICT_ERRORS_ENV}=1")
     parser.add_argument("--audit-log", metavar="FILE",
                         help="Write audit log to FILE (JSON lines)")
     parser.add_argument("--code-mode", action="store_true",
@@ -2484,7 +2510,10 @@ def main():
         policy_file_sha256=policy.file_sha256,
         profile=args.profile,
         confirmation_floor=list(args.confirm or []),
+        strict_errors=args.strict_errors or strict_errors_from_env(os.environ),
     )
+    if config.strict_errors:
+        logger.info("Strict errors: failed results are returned with isError")
 
     # The effective policy goes to the log and, as its own event, to the audit
     # log: a changed policy file is then visible after the fact.
