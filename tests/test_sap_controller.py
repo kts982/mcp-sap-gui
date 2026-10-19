@@ -1129,6 +1129,75 @@ class TestALVToolbarButtonType:
         assert result["buttons"][0]["type"] == "99"
 
 
+class TestPressAlvToolbarButton:
+    """The toolbar type picks the press. On SAP GUI 8.10 (live, BCALV_GRID_DEMO)
+    PressToolbarContextButton on a plain button does not fail: &FIND opened
+    its Find popup and the press was reported as menu_opened."""
+
+    def _controller(self, buttons):
+        from mcp_sap_gui.sap_controller import SAPGUIController
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[1]"})
+        grid = MagicMock()
+        grid.ToolbarButtonCount = len(buttons)
+        grid.GetToolbarButtonId.side_effect = lambda i: buttons[i][0]
+        grid.GetToolbarButtonType.side_effect = lambda i: buttons[i][1]
+        controller._session.findById.return_value = grid
+        return controller, grid
+
+    TOOLBAR = [("&DETAIL", "Button"), ("", "Separator"), ("&FIND", "Button"),
+               ("&MB_FILTER", "ButtonAndMenu"), ("&MB_EXPORT", "Menu"),
+               ("&CHECK", 4)]
+
+    def test_plain_button_is_pressed_not_opened_as_menu(self):
+        controller, grid = self._controller(self.TOOLBAR)
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&FIND")
+
+        assert result["status"] == "pressed"
+        assert "hint" not in result and "menu_items" not in result
+        assert result["screen"]["active_window"] == "wnd[1]"
+        grid.PressToolbarButton.assert_called_once_with("&FIND")
+        grid.PressToolbarContextButton.assert_not_called()
+
+    def test_numeric_checkbox_type_is_pressed(self):
+        controller, grid = self._controller(self.TOOLBAR)
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&CHECK")
+
+        assert result["status"] == "pressed"
+        grid.PressToolbarContextButton.assert_not_called()
+
+    def test_menu_types_open_the_menu(self):
+        for button_id in ("&MB_EXPORT", "&MB_FILTER"):
+            controller, grid = self._controller(self.TOOLBAR)
+
+            result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", button_id)
+
+            assert result["status"] == "menu_opened"
+            grid.PressToolbarContextButton.assert_called_once_with(button_id)
+            grid.PressToolbarButton.assert_not_called()
+
+    def test_id_not_on_toolbar_tries_menu_then_plain_press(self):
+        controller, grid = self._controller(self.TOOLBAR)
+        grid.PressToolbarContextButton.side_effect = Exception("not a menu")
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&OTHER")
+
+        assert result["status"] == "pressed"
+        grid.PressToolbarButton.assert_called_once_with("&OTHER")
+
+    def test_unreadable_toolbar_keeps_the_old_order(self):
+        controller, grid = self._controller(self.TOOLBAR)
+        type(grid).ToolbarButtonCount = PropertyMock(side_effect=Exception("no toolbar"))
+
+        result = controller.press_alv_toolbar_button("wnd[0]/usr/grid", "&MB_EXPORT")
+
+        assert result["status"] == "menu_opened"
+        grid.PressToolbarContextButton.assert_called_once_with("&MB_EXPORT")
+
+
 class TestTreeEnhancements:
     """Tests for tree enhancements and new tree tools (Phase 4)."""
 
@@ -2262,6 +2331,7 @@ class TestGuiTableControl:
         assert result["rows_returned"] == 5  # only rows 95-99 are real
         assert result["data"][0]["COL"] == "v95"
         assert result["data"][4]["COL"] == "v99"
+        assert result["empty_rows_from"] == 100
 
     def test_read_table_control_padding_detection(self):
         """Padding rows (empty rows beyond real data) are excluded from results.
@@ -2290,6 +2360,74 @@ class TestGuiTableControl:
         assert result["rows_returned"] == 6
         assert result["data"][0]["LGNUM"] == "WH051"
         assert result["data"][5]["LGNUM"] == "WH056"
+        assert result["empty_rows_from"] == 57
+
+    def test_read_table_control_reports_where_the_data_ends(self):
+        """SM30 field case: RowCount 51 for a view with 14 entries.
+
+        total_rows stays the control's raw RowCount; empty_rows_from tells
+        the caller the data ended, so "have I read everything" can stop.
+        """
+        controller = self._make_controller_with_session()
+        columns = [{"name": "DEVICE", "title": "Device"}]
+        rows = [[f"D{i:02d}"] for i in range(14)]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=51, visible_rows=37,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["total_rows"] == 51
+        assert result["rows_returned"] == 14
+        assert result["empty_rows_from"] == 14
+
+    def test_read_table_control_empty_rows_from_with_column_filter(self):
+        """A row with data only in unrequested columns is not the end of data."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "KEY", "title": "Key"}, {"name": "TEXT", "title": "Text"}]
+        rows = [["K1", "one"], ["", "only text"], ["K3", "three"]]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=10, visible_rows=10,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table(
+            "wnd[0]/usr/tblTEST", max_rows=100, columns="KEY",
+        )
+
+        assert result["rows_returned"] == 3
+        assert result["empty_rows_from"] == 3
+
+    def test_read_table_control_no_empty_rows_from_while_rows_are_filled(self):
+        """A full visible window says nothing about the rows below it."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL_A", "title": "A"}]
+        rows = [[f"val_{i}"] for i in range(10)]
+        mock_table = self._make_table_control(columns, rows,
+                                               total_rows=10, visible_rows=3)
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["rows_returned"] == 3
+        assert "empty_rows_from" not in result
+
+    def test_read_table_control_columns_only_has_no_empty_rows_from(self):
+        """A schema read reads no rows, so it cannot know where data ends."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "COL", "title": "Col"}]
+        rows = [["v0"]]
+        mock_table = self._make_table_control(
+            columns, rows, total_rows=10, visible_rows=10,
+        )
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table(
+            "wnd[0]/usr/tblTEST", max_rows=100, columns_only=True,
+        )
+
+        assert "empty_rows_from" not in result
 
     def test_read_table_control_max_rows_from_scrolled_position(self):
         """max_rows cap still applies when reading from a scrolled position."""
@@ -2326,6 +2464,21 @@ class TestGuiTableControl:
         assert result["data"][0]["ACTIVE"] is True
         assert result["data"][1]["ACTIVE"] is False
         assert result["data"][0]["NAME"] == "Item1"
+
+    def test_read_table_control_unchecked_checkbox_padding_is_blank(self):
+        """The blank lines of SM30 New Entries hold unchecked checkboxes
+        (False): they still end the data."""
+        controller = self._make_controller_with_session()
+        columns = [{"name": "NAME", "title": "Name"},
+                    {"name": "ACTIVE", "title": "Active"}]
+        rows = [["Item1", True], ["Item2", False]] + [["", False]] * 8
+        mock_table = self._make_table_control(columns, rows)
+        controller._session.findById.return_value = mock_table
+
+        result = controller.read_table("wnd[0]/usr/tblTEST", max_rows=100)
+
+        assert result["rows_returned"] == 2
+        assert result["empty_rows_from"] == 2
 
     def test_read_table_control_combobox_cells(self):
         """Combobox cells return the key value."""
@@ -2532,6 +2685,9 @@ class TestGuiTableControl:
             columns, rows, total_rows=100, visible_rows=10,
             initial_scroll_position=0,
         )
+        fresh = MagicMock(VisibleRowCount=10)
+        fresh.VerticalScrollbar.Position = 50
+        controller._session.findById.return_value = fresh
 
         table, vis_offset = controller._scroll_table_control_to_row(mock_table, 50)
 
@@ -2539,7 +2695,7 @@ class TestGuiTableControl:
         assert mock_table.VerticalScrollbar.Position == 50
         # The scroll invalidates the old reference; a fresh one is re-found
         controller._session.findById.assert_called_once_with(mock_table.Id)
-        assert table is controller._session.findById.return_value
+        assert table is fresh
 
     def test_select_table_row_from_scrolled_position(self):
         """select_table_row scrolls and selects the correct row."""
@@ -3048,6 +3204,8 @@ class TestSetBatchFields:
                 "wnd[0]/usr/txtBAD": "val2",
             },
             validate=True,
+            # A failed field skips Enter unless validate_partial=True.
+            validate_partial=True,
         )
 
         assert result["succeeded"] == 1
@@ -4007,6 +4165,111 @@ class TestScreenInfoActiveWindow:
         assert result["message"] is not None  # got "" from mock, not None
 
 
+def _tree_json(node_id, *children):
+    """A GetObjectTree reply: {"children": [root]} with Id-only nodes."""
+    import json
+
+    def node(spec):
+        if isinstance(spec, str):
+            return {"properties": {"Id": spec}, "children": []}
+        spec_id, *kids = spec
+        return {"properties": {"Id": spec_id}, "children": [node(k) for k in kids]}
+
+    return json.dumps({"children": [node((node_id, *children))]})
+
+
+class TestScreenInfoSubscreensAndCursor:
+    """Sub-screens and the cursor field: where an RF step or a tab page is,
+    which Info.Program / ScreenNumber (the main screen) do not show."""
+
+    _P = "/app/con[0]/ses[0]/"
+
+    def _controller(self, tree=None, focus_id=None, window="wnd[0]"):
+        controller = TestScreenInfoActiveWindow()._make_controller_with_session()
+        TestScreenInfoActiveWindow()._setup_screen(
+            controller, popup_wnd_id=None if window == "wnd[0]" else window,
+        )
+        session = controller._session
+        if tree is None:
+            session.GetObjectTree.side_effect = AttributeError("GetObjectTree")
+        else:
+            session.GetObjectTree.return_value = tree
+        if focus_id is None:
+            type(session.ActiveWindow).SystemFocus = PropertyMock(
+                side_effect=AttributeError("SystemFocus"),
+            )
+        else:
+            session.ActiveWindow.SystemFocus.Id = focus_id
+        return controller
+
+    def test_namespaced_rf_subscreen_and_cursor(self):
+        p = self._P + "wnd[0]/usr"
+        sub = p + "/subX:/SCWM/SAPLRF_ADHOC:0103"
+        controller = self._controller(
+            tree=_tree_json(p, (sub, sub + "/txt/SCWM/S_RF_ADHOC-PROCTY"),
+                            p + "/txt/SCWM/S_RF_SCRELM-SHORTCUT"),
+            focus_id=sub + "/txt/SCWM/S_RF_ADHOC-PROCTY",
+        )
+
+        result = controller.get_screen_info()
+
+        assert result["subscreens"] == ["/SCWM/SAPLRF_ADHOC:0103"]
+        assert result["cursor"] == (
+            "wnd[0]/usr/subX:/SCWM/SAPLRF_ADHOC:0103/txt/SCWM/S_RF_ADHOC-PROCTY"
+        )
+        controller._session.GetObjectTree.assert_called_once_with(
+            "wnd[0]/usr", ["Id"],
+        )
+
+    def test_nested_subscreens_outer_first_tab_strip_ssub(self):
+        p = self._P + "wnd[0]/usr"
+        tab = p + "/tabsTABSTRIP1/tabpADDR"
+        outer = tab + "/ssubMAINAREA:SAPLSUID_MAINTENANCE:1900"
+        inner = outer + "/subADDR:SAPLSZA1:0300"
+        controller = self._controller(tree=_tree_json(
+            p, (p + "/tabsTABSTRIP1", (tab, (outer, (inner, inner + "/txtX")))),
+        ))
+
+        result = controller.get_screen_info()
+
+        assert result["subscreens"] == [
+            "SAPLSUID_MAINTENANCE:1900", "SAPLSZA1:0300",
+        ]
+
+    def test_popup_reads_its_own_user_area(self):
+        p = self._P + "wnd[1]/usr"
+        controller = self._controller(
+            tree=_tree_json(p, p + "/subSUB:SAPLSPO4:0300"), window="wnd[1]",
+        )
+
+        result = controller.get_screen_info(include_popup=False)
+
+        controller._session.GetObjectTree.assert_called_once_with(
+            "wnd[1]/usr", ["Id"],
+        )
+        assert result["subscreens"] == ["SAPLSPO4:0300"]
+
+    def test_plain_screen_has_neither_field(self):
+        """Easy Access: no sub-screen, no system focus -> both left out."""
+        p = self._P + "wnd[0]/usr"
+        controller = self._controller(tree=_tree_json(p, p + "/cntlIMAGE_CONTAINER"))
+
+        result = controller.get_screen_info()
+
+        assert "subscreens" not in result
+        assert "cursor" not in result
+
+    def test_older_sap_gui_without_object_tree_reports_no_subscreens(self):
+        controller = self._controller(
+            tree=None, focus_id=self._P + "wnd[0]/usr/txtBTCH2170-JOBNAME",
+        )
+
+        result = controller.get_screen_info()
+
+        assert "subscreens" not in result
+        assert result["cursor"] == "wnd[0]/usr/txtBTCH2170-JOBNAME"
+
+
 # ===========================================================================
 # Screen Element Filtering Tests (P1)
 # ===========================================================================
@@ -4539,19 +4802,21 @@ class TestHandlePopup:
     def test_confirm_falls_back_to_enter(self):
         """Confirm falls back to Enter VKey when no confirm button found."""
         controller = self._make_controller_with_session()
-        self._setup_popup(controller, buttons=[], texts=["Info message"])
+        popup_wnd = self._setup_popup(controller, buttons=[], texts=["Info message"],
+                                      close_on_action=True)
         controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
 
         result = controller.handle_popup("confirm")
 
         assert result["action"] == "confirmed"
         assert "fallback" in result["button_pressed"]
-        controller._session.findById("wnd[1]").sendVKey.assert_called_with(0)
+        popup_wnd.sendVKey.assert_called_with(0)
 
     def test_cancel_falls_back_to_f12(self):
         """Cancel falls back to F12 when no cancel button found."""
         controller = self._make_controller_with_session()
-        self._setup_popup(controller, buttons=[], texts=["Info"])
+        self._setup_popup(controller, buttons=[], texts=["Info"],
+                          close_on_action=True)
         controller.get_screen_info = MagicMock(return_value={"active_window": "wnd[0]"})
 
         result = controller.handle_popup("cancel")
@@ -4665,7 +4930,7 @@ class _StaleScrollbar:
     def Position(self, value):
         self._ref._check()
         sim = self._ref._sim
-        sim.scroll_position = max(0, min(int(value), self.Maximum))
+        sim.scroll_position = max(0, min(int(value), self.Maximum) - sim.top_shift)
         # The scroll triggers a server round-trip that re-renders the
         # control: every existing COM reference into it goes stale.
         self._ref._stale = True
@@ -4778,10 +5043,13 @@ class _TableControlSim:
     FULL_ID = "/app/con[0]/ses[0]/wnd[0]/usr/tblSIM"
     SHORT_ID = "wnd[0]/usr/tblSIM"
 
-    def __init__(self, total_rows=25, visible_rows=10, col_count=3):
+    def __init__(self, total_rows=25, visible_rows=10, col_count=3, top_shift=0):
         self.total_rows = total_rows
         self.visible_rows = visible_rows
         self.col_count = col_count
+        # Rows the application moves the top up after a scroll, as SE16's
+        # multiple selection did live (row 7 on top after a scroll to 9).
+        self.top_shift = top_shift
         self.scroll_position = 0
         self.written = {}
         self.focused = []
@@ -4896,4 +5164,120 @@ class TestTableControlScrollStaleness:
         assert result["position"] == 15
         assert result["visible_rows"] == 10
         assert result["total_rows"] == 25
+        assert "requested_position" not in result
+        assert "note" not in result
+
+
+class TestTableControlTopRowAfterScroll:
+    """SAP may put another row at the top than the one scrolled to: every
+    visible-row offset must count from the row actually on top."""
+
+    _make_controller_with_sim = TestTableControlScrollStaleness._make_controller_with_sim
+
+    def test_modify_cell_writes_the_asked_row(self):
+        # Asked for 12, the table shows 10..19 (live, SE16's multiple
+        # selection: row 7 on top for 9).
+        controller, sim = self._make_controller_with_sim(top_shift=2)
+
+        result = controller.modify_cell(sim.SHORT_ID, 12, 1, "NEW")
+
+        assert result.get("status") == "success", result
+        assert sim.scroll_position == 10
+        assert sim.written == {(12, 1): "NEW"}
+
+    def test_set_current_cell_and_double_click_use_the_actual_top(self):
+        controller, sim = self._make_controller_with_sim(top_shift=2)
+
+        controller.set_current_cell(sim.SHORT_ID, 12, 1)
+        controller.double_click_table_cell(sim.SHORT_ID, 20, 0)
+
+        assert sim.focused == [(12, 1), (20, 0)]
+        assert sim.selected == [20]
+
+    def test_row_still_hidden_after_scroll_is_refused(self):
+        # Asked for 15, the table shows 3..12: row 20 is not on screen.
+        controller, sim = self._make_controller_with_sim(top_shift=12)
+
+        result = controller.modify_cell(sim.SHORT_ID, 20, 1, "NEW")
+
+        assert "not visible" in result["error"]
+        assert "rows 3 to 12" in result["error"]
+        assert sim.written == {}
+
+    def test_row_beyond_the_table_is_refused(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.set_current_cell(sim.SHORT_ID, 40, 1)
+
+        assert "not visible" in result["error"]
+        assert sim.focused == []
+
+    def test_row_selection_does_not_need_the_row_on_screen(self):
+        controller, sim = self._make_controller_with_sim(top_shift=12)
+
+        assert controller.select_table_row(sim.SHORT_ID, 20)["status"] == "success"
+        assert controller.select_multiple_rows(sim.SHORT_ID, [2, 20])["status"] == "success"
+        assert sim.selected == [20, 2, 20]
+
+    def test_scroll_reports_the_row_on_top(self):
+        controller, sim = self._make_controller_with_sim(top_shift=2)
+
+        result = controller.scroll_table_control(sim.SHORT_ID, 9)
+
+        assert result["position"] == 7
+        assert result["requested_position"] == 9
+        assert "row 7 at the top, not 9" in result["note"]
+
+    def test_scroll_past_the_end_reports_the_clamp_without_a_note(self):
+        controller, sim = self._make_controller_with_sim()
+
+        result = controller.scroll_table_control(sim.SHORT_ID, 99)
+
+        assert result["position"] == 15
+        assert result["requested_position"] == 99
+        assert "note" not in result
+
+
+class TestTableControlStartRow:
+    """start_row=0 reads from the first row; no start_row keeps the scroll."""
+
+    _make_controller_with_sim = TestTableControlScrollStaleness._make_controller_with_sim
+
+    def test_start_row_zero_scrolls_back_to_the_top(self):
+        controller, sim = self._make_controller_with_sim()
+        sim.scroll_position = 7
+
+        result = controller.read_table(sim.SHORT_ID, max_rows=3, start_row=0)
+
+        assert sim.scroll_position == 0
+        assert result["first_visible_row"] == 0
+        assert result["data"][0]["_absolute_row_index"] == 0
+
+    def test_no_start_row_reads_where_the_table_is(self):
+        controller, sim = self._make_controller_with_sim()
+        sim.scroll_position = 7
+
+        result = controller.read_table(sim.SHORT_ID, max_rows=3)
+
+        assert sim.scroll_position == 7
+        assert sim.refs_handed_out == 1  # no scroll, no re-find
+        assert result["first_visible_row"] == 7
+        assert result["data"][0]["COL0"] == "R7C0"
+
+    def test_start_row_at_the_current_top_does_not_scroll(self):
+        controller, sim = self._make_controller_with_sim()
+        sim.scroll_position = 7
+
+        result = controller.read_table(sim.SHORT_ID, max_rows=3, start_row=7)
+
+        assert sim.refs_handed_out == 1
+        assert result["first_visible_row"] == 7
+
+    def test_start_row_reports_the_row_sap_put_on_top(self):
+        controller, sim = self._make_controller_with_sim(top_shift=2)
+
+        result = controller.read_table(sim.SHORT_ID, max_rows=3, start_row=9)
+
+        assert result["first_visible_row"] == 7
+        assert result["data"][0]["_absolute_row_index"] == 7
 

@@ -422,6 +422,7 @@ class TestT12SaveElicitationContract:
         ctx = _make_mock_ctx()
         ctx.elicit = AsyncMock(return_value=_make_elicit_result("decline"))
         mock_ctrl = MagicMock()
+        mock_ctrl.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_ctrl):
             result = await srv.sap_send_key("F11", ctx)
@@ -440,6 +441,7 @@ class TestT12SaveElicitationContract:
         ctx = _make_mock_ctx()
         ctx.elicit = AsyncMock(return_value=_make_elicit_result("decline"))
         mock_ctrl = MagicMock()
+        mock_ctrl.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_ctrl):
             result = await srv.sap_send_key("Save", ctx)

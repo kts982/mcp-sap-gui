@@ -55,6 +55,14 @@ jobs:
           print(f"Verified tag {actual} matches package and server.json versions.")
           PY
 
+      # Outside the checkout: hatchling puts every file git does not ignore
+      # into the sdist, and dist/ is published, uploaded and checksummed.
+      - name: Extract release notes from CHANGELOG.md
+        run: >-
+          python scripts/release_notes.py "${GITHUB_REF_NAME#v}"
+          --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}"
+          --output "${RUNNER_TEMP}/release-notes/release-notes.md"
+
       - name: Build distribution artifacts
         run: uv build
 
@@ -73,17 +81,26 @@ jobs:
 
           dist = Path("dist")
           lines = []
-          for path in sorted(dist.iterdir()):
+          # Skip dotfiles: uv build writes dist/.gitignore, which is not a
+          # release asset (upload-artifact leaves hidden files out).
+          for path in sorted(p for p in dist.iterdir() if not p.name.startswith(".")):
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
               lines.append(f"{digest}  {path.name}")
           (dist / "SHA256SUMS.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-dist
           path: dist/*
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes/release-notes.md
+          if-no-files-found: error
 
   release:
     needs: build
@@ -93,14 +110,27 @@ jobs:
 
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-dist
           path: dist
 
+      - name: Download release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-notes
+          path: notes
+
+      # The action only warns when body_path cannot be read and publishes
+      # the generated notes alone, so check the file first.
+      - name: Check release notes
+        run: test -s notes/release-notes.md
+
+      # body_path comes first, then GitHub's generated list of merged PRs.
       - name: Publish GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
+          body_path: notes/release-notes.md
           generate_release_notes: true
           prerelease: ${{ contains(needs.build.outputs.tag_name, '-') }}
           files: |
@@ -115,7 +145,7 @@ jobs:
 
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-dist
           path: dist
