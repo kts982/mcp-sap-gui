@@ -889,8 +889,10 @@ async def _elicit_save(ctx: Context, message: str,
     Raises ``ValueError`` if the client does not support elicitation.
     """
     try:
+        # Shown as a checkbox (CLI): tick it and Accept to save.
         result, elapsed = await timed_elicit(ctx, message=message,
-                                             response_type=bool)
+                                             response_type=bool,
+                                             response_title="Yes, save")
     except McpError as exc:
         log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
         raise ValueError(
@@ -2444,6 +2446,7 @@ async def sap_set_confirmation_points(
                 ctx,
                 message=build_relax_prompt(removals),
                 response_type=bool,
+                response_title="Yes, turn it off",
             )
         except McpError as exc:
             # Fail closed: the points stay active. Swallowing this would make

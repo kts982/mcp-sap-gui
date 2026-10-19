@@ -421,6 +421,9 @@ class ConfirmationMiddleware(Middleware):
                 ctx,
                 message=build_prompt(tool_name, args, point),
                 response_type=bool,
+                # The CLI shows the answer as a checkbox: without a title it
+                # reads "Value". Only a ticked box with Accept proceeds.
+                response_title="Yes, run it",
             )
         except McpError as exc:
             # Fail closed, matching the existing save gate.

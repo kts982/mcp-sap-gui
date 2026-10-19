@@ -142,3 +142,43 @@ def test_fast_attach_decline_says_so(real_threshold, monkeypatch):
     assert str(exc.value).startswith(
         "Attach declined by user (decline). Nothing was attached. "
         "The client answered in")
+
+
+# --- the yes/no prompts carry a label ----------------------------------------
+
+def test_yes_no_prompts_are_labelled(monkeypatch):
+    # The Claude Code CLI shows a boolean answer as a checkbox; without a
+    # title it reads "Value". Only a ticked box with Accept proceeds.
+    class Ctx:
+        def __init__(self):
+            self.titles = []
+
+        async def elicit(self, message, response_type=None, response_title=None):
+            self.titles.append(response_title)
+            return SimpleNamespace(action="decline", data=None)
+
+    ctx = Ctx()
+    asyncio.run(server._confirm_save(ctx, "F11"))
+    assert ctx.titles == ["Yes, save"]
+
+    class Controller:
+        def set_field(self, field_id, value):
+            return {"status": "ok"}
+
+    monkeypatch.setattr(server, "_ctrl", lambda c: Controller())
+    monkeypatch.setattr(server, "config", server.ServerConfig(
+        confirmation_floor=["field_writes"]))
+    seen = []
+
+    async def decline(message, response_type, params, context):
+        seen.append(params.requestedSchema["properties"]["value"])
+        return ElicitResult(action="decline")
+
+    async def run():
+        async with Client(server.mcp, elicitation_handler=decline) as client:
+            await client.call_tool(
+                "sap_set_field", {"field_id": "wnd[0]/usr/txtX", "value": "1"},
+                raise_on_error=False)
+
+    asyncio.run(run())
+    assert seen == [{"type": "boolean", "title": "Yes, run it"}]

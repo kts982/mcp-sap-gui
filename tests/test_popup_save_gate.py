@@ -292,7 +292,7 @@ class FakeCtx:
         self._answer = answer
         self._data = data
 
-    async def elicit(self, message: str, response_type: Any = None):
+    async def elicit(self, message: str, response_type: Any = None, **_: Any):
         self.prompts.append(message)
         return SimpleNamespace(action=self._answer, data=self._data)
 
@@ -377,7 +377,7 @@ def test_handle_popup_save_without_elicitation_fails_closed(tools):
     from mcp.types import ErrorData
 
     class NoElicitCtx:
-        async def elicit(self, message: str, response_type: Any = None):
+        async def elicit(self, message: str, response_type: Any = None, **_: Any):
             raise McpError(ErrorData(code=-32601, message="elicitation not supported"))
 
     _open(tools, SAVE_FIRST)
@@ -557,7 +557,7 @@ def test_press_button_refuses_when_the_popup_changed(tools):
     _open(tools, UNREAD)
 
     class NewPopupCtx(FakeCtx):
-        async def elicit(self, message, response_type=None):
+        async def elicit(self, message, response_type=None, **_):
             tools.session.add("wnd[2]", text="Something else")  # opened meanwhile
             return await super().elicit(message, response_type)
 
