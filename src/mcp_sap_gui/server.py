@@ -2456,7 +2456,10 @@ def main():
                              "or a batch with fields that were not set) as "
                              "an MCP error (isError true), keeping its "
                              "structured content. Also enabled by "
-                             f"${STRICT_ERRORS_ENV}=1")
+                             f"${STRICT_ERRORS_ENV}=1. Under --code-mode a "
+                             "script's call_tool still returns the result "
+                             "dict and does not raise: scripts check "
+                             "'error' themselves")
     parser.add_argument("--audit-log", metavar="FILE",
                         help="Write audit log to FILE (JSON lines)")
     parser.add_argument("--code-mode", action="store_true",
