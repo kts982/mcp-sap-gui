@@ -6,6 +6,7 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ### Safety
 
+- **The audit log no longer writes a password typed into a field.** `sap_set_field` on a password field (e.g. `pwdRSYST-BCODE`) logged the value in clear text; only `sap_set_batch_fields` masked it. Now, when an argument names a secret-looking target (a field ID, a table column, a text editor), the value written into it is logged as `***`. The target stays visible, so the audit still shows which field was written.
 - **Session commands are blocked, and three ways around the transaction policy are closed** ([#25](https://github.com/kts982/mcp-sap-gui/pull/25), by [@nelz0n](https://github.com/nelz0n)).
   - `/nex` (log off, closing every session of the connection without asking), `/nend` and `/i` (close a session; `/i3` closes session 3) passed the `default` and `abap-dev` presets, through `sap_execute_transaction` and through the command field. They are now refused with their own message; a policy file can still allow one (`"allow": ["EX"]`).
   - `sap_set_textedit` on the command field skipped the transaction check, so `/nSU01` got through. It is now checked like `sap_set_field`.
