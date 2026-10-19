@@ -676,9 +676,16 @@ def _note_cap(result, requested: int, capped: int):
     return result
 
 
-def _session_key(ctx: Context) -> int:
-    """Derive a stable key for the current MCP client session."""
-    return id(ctx.session)
+def _session_key(ctx: Context) -> str:
+    """Derive a stable key for the current MCP client session.
+
+    ``ctx.session_id``, not ``id(ctx.session)``: with the MCP Python SDK v2
+    (FastMCP 4) every request gets a new ServerSession object, so ``id()``
+    changes on every call, and confirmation points and the SAP binding
+    silently vanish between calls. ``session_id`` is the same for all calls
+    of one client on FastMCP 3.x and 4.
+    """
+    return ctx.session_id
 
 
 def _ctrl(ctx: Context):

@@ -9,6 +9,7 @@ For streamable HTTP, each client gets an independent binding.
 
 import logging
 import time
+from collections.abc import Hashable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -39,12 +40,12 @@ class SessionManager:
     """
 
     def __init__(self) -> None:
-        self._sessions: Dict[int, ManagedSession] = {}
+        self._sessions: Dict[Hashable, ManagedSession] = {}
         # Session-added confirmation points, keyed like _sessions but stored
         # separately: the confirmation middleware consults them on *every*
         # tool call, and get_or_create would eagerly build a SAPGUIController
         # for calls that never touch SAP.
-        self._confirmation_points: Dict[int, set] = {}
+        self._confirmation_points: Dict[Hashable, set] = {}
         self._executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
@@ -60,7 +61,7 @@ class SessionManager:
     def active_count(self) -> int:
         return len(self._sessions)
 
-    def get_or_create(self, session_key: int) -> ManagedSession:
+    def get_or_create(self, session_key: Hashable) -> ManagedSession:
         """Get or lazily create a managed session for *session_key*."""
         if session_key not in self._sessions:
             controller = SAPGUIController()
@@ -74,11 +75,11 @@ class SessionManager:
         managed.touch()
         return managed
 
-    def get_existing(self, session_key: int) -> Optional[ManagedSession]:
+    def get_existing(self, session_key: Hashable) -> Optional[ManagedSession]:
         """The binding for *session_key*, or None: never creates one."""
         return self._sessions.get(session_key)
 
-    def get_confirmation_points(self, session_key: int) -> set:
+    def get_confirmation_points(self, session_key: Hashable) -> set:
         """Return the confirmation points this session added.
 
         Read-only lookup: never creates a session binding, so the confirmation
@@ -87,13 +88,13 @@ class SessionManager:
         """
         return set(self._confirmation_points.get(session_key, ()))
 
-    def set_confirmation_points(self, session_key: int, points: Any) -> set:
+    def set_confirmation_points(self, session_key: Hashable, points: Any) -> set:
         """Replace the confirmation points this session added."""
         stored = set(points)
         self._confirmation_points[session_key] = stored
         return set(stored)
 
-    def release(self, session_key: int) -> Dict[str, Any]:
+    def release(self, session_key: Hashable) -> Dict[str, Any]:
         """Release and clean up a managed session.
 
         Owned sessions (opened via ``sap_connect``) are closed.
