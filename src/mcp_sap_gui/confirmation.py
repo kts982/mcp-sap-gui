@@ -57,7 +57,12 @@ SETTABLE_POINTS: tuple[str, ...] = (
     "field_writes",
     "transactions",
     "all_writes",
+    "attach",
 )
+
+#: Not a yes/no gate: ``sap_connect_existing`` asks in its tool body which
+#: session to attach to (a choice dialog), so no tool maps to it here.
+ATTACH_POINT = "attach"
 
 ALL_POINTS: tuple[str, ...] = (SAVE_POINT, *SETTABLE_POINTS)
 
@@ -270,6 +275,23 @@ def log_confirmation_event(point: str, tool: str, outcome: str) -> None:
             "point": point,
             "tool": tool,
             "outcome": outcome,
+        }, default=str),
+    )
+
+
+def log_attach_event(session: Mapping[str, Any], chosen_by: str) -> None:
+    """Record which SAP session the agent was attached to, and how it was
+    chosen: ``named`` (the call named the system), ``dialog`` (the user
+    picked it) or ``index`` (connection and session index)."""
+    audit_logger.info(
+        json.dumps({
+            "event": "attach",
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "system": session.get("system"),
+            "client": session.get("client"),
+            "user": session.get("user"),
+            "session": session.get("id"),
+            "chosen_by": chosen_by,
         }, default=str),
     )
 

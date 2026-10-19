@@ -37,11 +37,13 @@ from mcp.types import ImageContent, TextContent
 
 from .audit import AuditMiddleware
 from .confirmation import (
+    ATTACH_POINT,
     SAVE_POINT,
     SETTABLE_POINTS,
     ConfirmationMiddleware,
     build_relax_prompt,
     effective_points,
+    log_attach_event,
     log_confirmation_event,
     points_with_provenance,
 )
@@ -288,7 +290,8 @@ SAP GUI automation server. Controls SAP GUI for Windows via COM scripting.
 
 ## Getting Started
 
-1. If SAP is already open and logged in, use `sap_connect_existing` (most common). \
+1. If SAP is already open and logged in, use `sap_connect_existing` (most common); \
+pass `system` (e.g. 'A4H') when the user named the system. \
 SAP Business Client sessions are supported too (experimental).
 2. If SAP is not open, use `sap_connect` with the system name from SAP Logon Pad.
 3. After connecting, use `sap_get_session_info` to see the current transaction/screen.
@@ -383,8 +386,9 @@ pending values first — it is read-only and never saves.
 
 Some operations are gated: the server pauses the call and asks the user to \
 approve it. `save` (F11 / Save key, Save toolbar button) is always gated; the \
-user or the deployment can add `transactions`, `batch_fields`, `field_writes` \
-or `all_writes` via `sap_set_confirmation_points`. Expect a prompt on those \
+user or the deployment can add `transactions`, `batch_fields`, `field_writes`, \
+`all_writes` or `attach` (the user picks the session) via \
+`sap_set_confirmation_points`. Expect a prompt on those \
 calls, call `sap_preview` first so the user sees what is pending, and treat a \
 "declined by user" error as a stop signal — do not retry or route around it.
 """
@@ -1001,22 +1005,169 @@ async def sap_connect(
     return _to_dict(await _com(lambda: c.connect(**kwargs)))
 
 
+# "A4H(2)/001 " in front of a window title: the system, session number and
+# client, which the attach dialog shows in their own columns already.
+_TITLE_PREFIX_RE = re.compile(r"^\S+\(\d+\)/\d+\s+")
+_SYSTEM_ID_RE = re.compile(r"^[A-Z0-9]{3}$")
+_CLIENT_RE = re.compile(r"^\d{3}$")
+
+
+def _parse_system(system: str) -> tuple[str, str | None]:
+    """'A4H' or 'A4H/001' -> ('A4H', None) or ('A4H', '001')."""
+    sid, _, client = str(system).strip().upper().partition("/")
+    sid, client = sid.strip(), client.strip()
+    if not _SYSTEM_ID_RE.fullmatch(sid) or (client and not _CLIENT_RE.fullmatch(client)):
+        raise ValueError(
+            f"system={system!r}: expected a system ID such as 'A4H', or "
+            "system and client such as 'A4H/001'"
+        )
+    return sid, client or None
+
+
+def _attach_candidates(connections: list) -> list[dict]:
+    """Every open session that can be attached, with its connection index."""
+    candidates = []
+    for conn in connections:
+        if conn.get("scripting_disabled"):
+            continue
+        for sess in conn.get("sessions", []):
+            if "error" in sess or not sess.get("system"):
+                continue
+            candidates.append({**sess, "connection_index": conn["index"]})
+    return candidates
+
+
+def _attach_label(sess: dict) -> str:
+    """'A4H (2) / 001 / DEVELOPER - SE16 - Data Browser: Initial Screen'."""
+    number = sess.get("session_number")
+    head = f"{sess.get('system', '')}" + (f" ({number})" if number else "")
+    title = _TITLE_PREFIX_RE.sub("", str(sess.get("title") or "")).strip()
+    parts = [f"{head} / {sess.get('client', '')} / {sess.get('user', '')}",
+             str(sess.get("transaction") or ""), title]
+    return " - ".join(part for part in parts if part)
+
+
+def _candidate_summary(candidates: list[dict]) -> str:
+    return "; ".join(
+        f"{_attach_label(s)} (connection_index={s['connection_index']}, "
+        f"session_index={s['index']})"
+        for s in candidates
+    ) or "no session that can be attached"
+
+
+async def _pick_session(ctx: Context, candidates: list[dict],
+                        message: str) -> dict:
+    """Ask the user which session to attach to (the 'attach' point).
+
+    Raises ValueError when the user declines, or when the client cannot show
+    the dialog (fail closed: the agent asks in the chat instead).
+    """
+    labels: list[str] = []
+    for sess in candidates:
+        label = _attach_label(sess)
+        if label in labels:  # same system and number on two connections
+            label += f" [connection {sess['connection_index']}]"
+        labels.append(label)
+    try:
+        result = await ctx.elicit(message=message, response_type=labels,
+                                  response_title="SAP session")
+    except McpError as exc:
+        log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
+                               "unsupported_client")
+        raise ValueError(
+            "The 'attach' confirmation point is on, but this client cannot "
+            "show the session picker. Ask the user in the chat which SAP "
+            "system to use, then call sap_connect_existing(system='SID') "
+            "(or system='SID/client')."
+        ) from exc
+    if result.action != "accept" or result.data not in labels:
+        log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "declined")
+        raise ValueError(
+            f"Attach declined by user ({result.action}). Nothing was attached."
+        )
+    log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "accepted")
+    return candidates[labels.index(result.data)]
+
+
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_connect_existing(
     ctx: Context,
     connection_index: int = 0,
     session_index: int = 0,
+    system: str | None = None,
 ) -> dict:
     """Connect to an already open SAP session. Use this when SAP is already logged in.
 
     This is the most common starting point. connection_index=0 and session_index=0
     connect to the first open session. Also attaches to SAP Business Client /
     embedded SAP GUI sessions. Indexes come from sap_list_connections; a
-    connection with scripting_disabled=true cannot be attached."""
+    connection with scripting_disabled=true cannot be attached.
+
+    system: pass it only when the user named the SAP system, as 'A4H' or
+    'A4H/001' (system/client). One open session on it is attached; several,
+    or none, return an error that lists what is open. The indexes are then
+    ignored.
+
+    With the 'attach' confirmation point on, the user picks the session in a
+    dialog unless `system` names exactly one open session. The response
+    says how it was chosen (`chosen_by`: named, dialog or index)."""
     c = _ctrl(ctx)
-    return _to_dict(await _com(
-        lambda: c.connect_to_existing_session(connection_index, session_index)
+    attach_point = ATTACH_POINT in active_confirmation_points(ctx)
+
+    if system is None and not attach_point:
+        info = _to_dict(await _com(
+            lambda: c.connect_to_existing_session(connection_index, session_index)
+        ))
+        session_id = await _com(lambda: getattr(getattr(c, "_session", None),
+                                                "Id", None))
+        chosen = {"system": info.get("system_name"), "client": info.get("client"),
+                  "user": info.get("user"), "id": session_id}
+        log_attach_event(chosen, "index")
+        return {**info, "chosen_by": "index"}
+
+    candidates = _attach_candidates(await _com(c.list_connections))
+    chosen_by = "dialog"
+    if system is not None:
+        sid, client = _parse_system(system)
+        matches = [s for s in candidates
+                   if str(s.get("system", "")).upper() == sid
+                   and (client is None or str(s.get("client", "")) == client)]
+        if not matches:
+            raise ValueError(
+                f"No open session on {system}. Open sessions: "
+                f"{_candidate_summary(candidates)}"
+            )
+        if len(matches) == 1:
+            pick, chosen_by = matches[0], "named"
+        elif attach_point:
+            pick = await _pick_session(
+                ctx, matches,
+                f"Several sessions are open on {system}. Attach the agent to "
+                "which one?",
+            )
+        else:
+            raise ValueError(
+                f"{len(matches)} sessions are open on {system}: "
+                f"{_candidate_summary(matches)}. Ask the user which one, then "
+                "call sap_connect_existing with its connection_index and "
+                "session_index (without system)."
+            )
+    else:
+        if not candidates:
+            raise ValueError(
+                "No SAP session is open that can be attached (none open, or "
+                "SAP GUI Scripting is disabled on the server)."
+            )
+        pick = await _pick_session(
+            ctx, candidates, "Attach the agent to which SAP session?",
+        )
+
+    info = _to_dict(await _com(
+        lambda: c.connect_to_existing_session(pick["connection_index"],
+                                              pick["index"])
     ))
+    log_attach_event(pick, chosen_by)
+    return {**info, "chosen_by": chosen_by}
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
@@ -1026,7 +1177,9 @@ async def sap_list_connections(ctx: Context) -> dict:
     Covers SAP Logon plus SAP Business Client / embedded SAP GUI sessions
     (`host`: saplogon | sapguiserver). A connection with no sessions and
     `scripting_disabled: true` means the server parameter sapgui/user_scripting
-    is off, so no session can be read."""
+    is off, so no session can be read. Each session has its system, client,
+    user, transaction, `session_number` (the "(2)" in "A4H(2)") and window
+    `title`."""
     c = _ctrl(ctx)
     connections = await _com(c.list_connections)
     return {"connections": connections}
@@ -2190,7 +2343,8 @@ async def sap_set_policy_profile(
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_set_confirmation_points(
-    points: list[Literal["batch_fields", "field_writes", "transactions", "all_writes"]],
+    points: list[Literal["batch_fields", "field_writes", "transactions",
+                         "all_writes", "attach"]],
     ctx: Context,
 ) -> dict:
     """Choose which SAP operations need the user's explicit approval first.
@@ -2209,6 +2363,8 @@ async def sap_set_confirmation_points(
       only select, scroll or navigate, and they will all prompt. Under
       all_writes, sap_send_key("F11") asks twice: once for the category and
       once for the unchanged save gate.
+    - attach: sap_connect_existing lets the user pick the SAP session in a
+      dialog, unless the call names a system with exactly one open session.
 
     'save' (F11 / Save key, Save toolbar button) is always on and cannot be
     turned off. Points set by the server's --confirm flag cannot be removed

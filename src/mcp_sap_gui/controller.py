@@ -878,14 +878,26 @@ class SAPGUIControllerBase:
                 try:
                     sess = conn.Children(j)
                     info = sess.Info
-                    sessions.append({
+                    entry_s: Dict[str, Any] = {
                         "index": j,
                         "id": sess.Id,
                         "user": info.User,
                         "transaction": info.Transaction,
                         "system": info.SystemName,
                         "client": info.Client,
-                    })
+                    }
+                    # The number SAP shows in the title, "A4H(2)", and the
+                    # window title: together they tell several sessions on
+                    # one system apart.
+                    try:
+                        entry_s["session_number"] = int(info.SessionNumber)
+                    except Exception:
+                        pass
+                    try:
+                        entry_s["title"] = str(sess.findById("wnd[0]").Text)
+                    except Exception:
+                        pass
+                    sessions.append(entry_s)
                 except Exception as e:
                     sessions.append(
                         self._error_result(

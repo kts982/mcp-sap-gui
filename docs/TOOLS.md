@@ -37,6 +37,7 @@ A confirmation point is a category of write operations that requires blocking us
 | `batch_fields` | `sap_set_batch_fields` |
 | `field_writes` | `sap_set_field`, `sap_modify_cell`, `sap_set_textedit`, `sap_select_checkbox`, `sap_select_radio_button`, `sap_select_combobox_entry` |
 | `all_writes` | Every `write`-tagged tool. Deliberately strict and noisy: many write tools only select, scroll or navigate. Under `all_writes`, `sap_send_key("F11")` prompts twice — once for the category, once for the unchanged save gate |
+| `attach` | `sap_connect_existing`: the user picks the SAP session in a choice dialog listing every open session (system, session number, client, user, transaction, window title), unless the call names a system with exactly one open session. Declining attaches nothing; a client without dialogs gets an error telling the agent to ask in the chat and pass `system` |
 
 Activate points per session with `sap_set_confirmation_points`, or for every session with `--confirm POINT [POINT ...]`. Adding a point is silent; removing a session point asks the user first and a declined removal keeps it. Points set by `--confirm` and the `save` point can never be removed.
 
@@ -53,8 +54,8 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | Tool | Description |
 |------|-------------|
 | `sap_connect` | Connect to an SAP system by SAP Logon entry name. Credentials resolved from `.env` file — passwords never appear in MCP |
-| `sap_connect_existing` | Attach to an already open SAP session (SAP Logon or SAP Business Client) |
-| `sap_list_connections` | List all currently open SAP connections and sessions, incl. SAP Business Client; reports `host` and `scripting_disabled` |
+| `sap_connect_existing` | Attach to an already open SAP session (SAP Logon or SAP Business Client), by `connection_index` / `session_index` or by `system` (`A4H` or `A4H/001`) when the user named it: one open session on it is attached, several or none return an error listing what is open. The response says how the session was chosen (`chosen_by`), and the audit log records an `attach` event |
+| `sap_list_connections` | List all currently open SAP connections and sessions, incl. SAP Business Client; reports `host` and `scripting_disabled`, and per session its system, client, user, transaction, `session_number` and window `title` |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen, plus the SAP GUI release (`sap_gui_version`, e.g. `8.10 PL0`) and whether the server allows only read-only scripting (`scripting_read_only`) |
 | `sap_disconnect` | Disconnect from the current SAP session (detaches attached sessions, closes owned sessions) |
 | `sap_set_policy_profile` | Switch the active policy profile for this session (exploration, operator, full); capped by the server `--profile` floor |

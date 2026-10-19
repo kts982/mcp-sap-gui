@@ -1772,13 +1772,16 @@ class TestDisconnectOwnership:
         assert controller._application is mock_app
 
 
-def _fake_session(sid, system="DEV", client="100", user="USER1", tcode="SESSION_MANAGER"):
+def _fake_session(sid, system="DEV", client="100", user="USER1", tcode="SESSION_MANAGER",
+                  number=1, title="DEV(1)/100 SAP Easy Access"):
     session = MagicMock(Busy=False)
     session.Id = sid
     session.Info.SystemName = system
     session.Info.Client = client
     session.Info.User = user
     session.Info.Transaction = tcode
+    session.Info.SessionNumber = number
+    session.findById.return_value.Text = title
     return session
 
 
@@ -1868,6 +1871,8 @@ class TestEngineDiscovery:
                 "transaction": "SESSION_MANAGER",
                 "system": "DEV",
                 "client": "100",
+                "session_number": 1,
+                "title": "DEV(1)/100 SAP Easy Access",
             }],
             "host": "saplogon",
             "rot_entry": "SAPGUI",
