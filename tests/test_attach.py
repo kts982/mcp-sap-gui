@@ -68,11 +68,15 @@ class FakeCtx:
         self._unsupported = unsupported
 
     async def elicit(self, message, response_type=None, response_title=None):
-        self.prompts.append({"message": message, "choices": response_type,
+        # Titled options: {"conn/sess": {"title": label}}; the user sees the
+        # titles and the answer is the key.
+        titles = [option["title"] for option in response_type.values()]
+        self.prompts.append({"message": message, "choices": titles,
+                             "keys": list(response_type),
                              "title": response_title})
         if self._unsupported:
             raise McpError(ErrorData(code=-32601, message="Method not found"))
-        data = (response_type[self._pick] if isinstance(self._pick, int)
+        data = (list(response_type)[self._pick] if isinstance(self._pick, int)
                 else self._pick)
         return SimpleNamespace(action=self._answer, data=data)
 
@@ -281,34 +285,65 @@ def test_same_label_on_two_connections_is_told_apart(attach):
     assert choices[1].endswith("[connection 1]")
 
 
-def test_dialog_over_a_real_client(monkeypatch):
-    # The choice list goes over the wire as an enum and comes back as the
-    # chosen label (fastmcp in-memory client, real middleware chain).
+def _real_client_attach(monkeypatch, handler):
     from fastmcp import Client
-    from fastmcp.client.elicitation import ElicitResult
 
     controller = FakeController([_connections(DEV_1, DEV_2)])
     monkeypatch.setattr(server, "_ctrl", lambda ctx: controller)
     monkeypatch.setattr(server, "config",
                         server.ServerConfig(confirmation_floor=["attach"]))
+
+    async def run():
+        async with Client(server.mcp, elicitation_handler=handler) as client:
+            return await client.call_tool("sap_connect_existing", {},
+                                          raise_on_error=False)
+
+    return controller, asyncio.run(run())
+
+
+def test_dialog_over_a_real_client(monkeypatch):
+    # The options go over the wire as titled values (oneOf const/title): the
+    # client shows the titles and answers with the const, the session's
+    # "connection/session" pair (fastmcp in-memory client, real middleware).
+    from fastmcp.client.elicitation import ElicitResult
     seen = []
 
     async def pick_second(message, response_type, params, context):
         seen.append(params.requestedSchema)
-        choice = params.requestedSchema["properties"]["value"]["enum"][1]
+        choice = params.requestedSchema["properties"]["value"]["oneOf"][1]["const"]
         return ElicitResult(action="accept", content=response_type(value=choice))
 
-    async def run():
-        async with Client(server.mcp, elicitation_handler=pick_second) as client:
-            return await client.call_tool("sap_connect_existing", {},
-                                          raise_on_error=False)
-
-    result = asyncio.run(run())
+    controller, result = _real_client_attach(monkeypatch, pick_second)
 
     assert not result.is_error
     assert controller.attached == [(0, 1)]
     assert result.structured_content["chosen_by"] == "dialog"
-    assert seen[0]["properties"]["value"]["title"] == "SAP session"
+    value = seen[0]["properties"]["value"]
+    assert value["title"] == "SAP session"
+    assert value["oneOf"] == [
+        {"const": "0/0",
+         "title": "DEV (1) / 100 / TESTUSER - SE16 - Data Browser: Initial Screen"},
+        {"const": "0/1",
+         "title": "DEV (2) / 100 / TESTUSER - SPRO - Customizing: Execute Project"},
+    ]
+
+
+def test_a_typed_answer_that_is_no_option_attaches_nothing(monkeypatch, caplog):
+    # Live in the Claude Code CLI: the picker came up as a text box and the
+    # answer was "test?". fastmcp rejects it; the tool says so plainly.
+    from fastmcp.client.elicitation import ElicitResult
+    caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")
+
+    async def type_something(message, response_type, params, context):
+        return ElicitResult(action="accept", content={"value": "test?"})
+
+    controller, result = _real_client_attach(monkeypatch, type_something)
+
+    assert result.is_error
+    assert "was not one of the listed sessions. Nothing was attached." in (
+        result.content[0].text)
+    assert controller.attached == []
+    assert "invalid_answer" in [e.get("outcome") for e in _attach_events(caplog)]
 
 
 def test_no_session_to_attach(attach):

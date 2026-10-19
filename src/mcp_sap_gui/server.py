@@ -1062,22 +1062,37 @@ def _candidate_summary(candidates: list[dict]) -> str:
     ) or "no session that can be attached"
 
 
+_NOT_AN_OPTION = (
+    "The answer to the session picker was not one of the listed sessions. "
+    "Nothing was attached. Ask the user which system to use, then call "
+    "sap_connect_existing(system='SID') (or system='SID/client')."
+)
+
+
 async def _pick_session(ctx: Context, candidates: list[dict],
                         message: str) -> dict:
     """Ask the user which session to attach to (the 'attach' point).
 
-    Raises ValueError when the user declines, or when the client cannot show
-    the dialog (fail closed: the agent asks in the chat instead).
+    Raises ValueError when the user declines, gives an answer that is not
+    one of the sessions, or when the client cannot show the dialog (fail
+    closed: the agent asks in the chat instead).
+
+    The options go out as titled values (oneOf const/title): the user sees
+    the label, the answer is the session's "connection/session" index pair.
+    A plain enum of labels was shown as a free-text box by the Claude Code
+    CLI (2.1.302), so only an exact retyped label could match.
     """
-    labels: list[str] = []
+    options: dict[str, dict[str, str]] = {}
+    titles: set[str] = set()
     for sess in candidates:
-        label = _attach_label(sess)
-        if label in labels:  # same system and number on two connections
-            label += f" [connection {sess['connection_index']}]"
-        labels.append(label)
+        title = _attach_label(sess)
+        if title in titles:  # same system and number on two connections
+            title += f" [connection {sess['connection_index']}]"
+        titles.add(title)
+        options[f"{sess['connection_index']}/{sess['index']}"] = {"title": title}
     try:
         result, elapsed = await timed_elicit(
-            ctx, message=message, response_type=labels,
+            ctx, message=message, response_type=options,
             response_title="SAP session",
         )
     except McpError as exc:
@@ -1089,7 +1104,18 @@ async def _pick_session(ctx: Context, candidates: list[dict],
             "system to use, then call sap_connect_existing(system='SID') "
             "(or system='SID/client')."
         ) from exc
-    if result.action != "accept" or result.data not in labels:
+    except Exception as exc:  # an answer the schema rejects (pydantic)
+        log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
+                               "invalid_answer")
+        raise ValueError(_NOT_AN_OPTION) from exc
+    choice = getattr(result, "data", None)
+    if result.action == "accept" and choice not in options:
+        # A client that shows the options as a text box lets the user type
+        # anything; fastmcp passes it through for titled options.
+        log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
+                               "invalid_answer", elapsed)
+        raise ValueError(_NOT_AN_OPTION)
+    if result.action != "accept":
         log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "declined",
                                elapsed)
         raise ValueError(
@@ -1098,7 +1124,7 @@ async def _pick_session(ctx: Context, candidates: list[dict],
         )
     log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "accepted",
                            elapsed)
-    return candidates[labels.index(result.data)]
+    return candidates[list(options).index(choice)]
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
