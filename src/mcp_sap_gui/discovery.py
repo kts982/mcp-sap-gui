@@ -187,26 +187,36 @@ class DiscoveryMixin:
     # changeable inputs already hold values gets the same notice, because a
     # confirm accepts defaults the agent never chose (a transport request
     # prompt pre-filled with another project's request is one such case).
+    # A preselected radio button or checkbox is such a default too: SCAL's
+    # holiday dialog opens with "with fixed date" selected.
     _PREFILL_TYPES = ("GuiTextField", "GuiCTextField", "GuiComboBox")
     _PREFILL_NOTICE = (
-        "This popup has pre-filled input values. Confirming accepts them as "
-        "they are: verify each one is what the user intends, and change it "
-        "first if it is not."
+        "This popup has pre-filled input values or preselected options. "
+        "Confirming accepts them as they are: verify each one is what the "
+        "user intends, and change it first if it is not."
     )
 
     def _prefilled_inputs(self, interactive_elements: list) -> list:
-        """Changeable inputs of a popup that already hold a value."""
-        return [
-            {
-                "id": el["id"],
-                "name": el.get("name", ""),
-                "value": self._mask_field_value(el["id"], el["text"]),
-            }
-            for el in interactive_elements
-            if el.get("type") in self._PREFILL_TYPES
-            and el.get("changeable")
-            and el.get("text")
-        ]
+        """Changeable inputs of a popup that already hold a value, and
+        changeable radio buttons and checkboxes that are selected."""
+        prefilled = []
+        for el in interactive_elements:
+            if not el.get("changeable"):
+                continue
+            if el.get("type") in self._PREFILL_TYPES and el.get("text"):
+                prefilled.append({
+                    "id": el["id"],
+                    "name": el.get("name", ""),
+                    "value": self._mask_field_value(el["id"], el["text"]),
+                })
+            elif el.get("type") in self._SELECTABLE_TYPES and el.get("selected"):
+                prefilled.append({
+                    "id": el["id"],
+                    "name": el.get("name", ""),
+                    "text": el.get("text", ""),
+                    "selected": True,
+                })
+        return prefilled
 
     def _popup_digest(self) -> Dict[str, Any]:
         """Compact summary of the open popup, attached to action responses.
@@ -350,6 +360,7 @@ class DiscoveryMixin:
 
         read(name, default) returns a further property, so the COM path only
         reads Id / SubType / Tooltip / Name / Changeable where they are used.
+        read('Selected', None) goes over COM on both paths (_selected).
         """
         if ctype in ('GuiLabel', 'GuiCheckBox', 'GuiTextField'):
             element_id = self._normalize_element_id(read('Id', ''))
@@ -381,13 +392,18 @@ class DiscoveryMixin:
                 if text:
                     texts.append(text)
                 return
-            interactive_elements.append({
+            element = {
                 "id": self._normalize_element_id(read('Id', '')),
                 "type": ctype,
                 "name": read('Name', ''),
                 "text": text,
                 "changeable": changeable,
-            })
+            }
+            if ctype in self._SELECTABLE_TYPES:
+                selected = read('Selected', None)
+                if selected is not None:
+                    element["selected"] = selected
+            interactive_elements.append(element)
         elif text and ctype in (
             'GuiTextField', 'GuiCTextField', 'GuiLabel',
             'GuiTitlebar', 'GuiStatusbar',
@@ -417,6 +433,8 @@ class DiscoveryMixin:
                 props = child.get("properties") or {}
 
                 def read(name, default, props=props):
+                    if name == "Selected":  # never in the tree
+                        return self._selected(props.get("Id", ""))
                     value = props.get(name, "")
                     if name == "Changeable":
                         return {"true": True, "false": False}.get(value, default)
@@ -498,6 +516,8 @@ class DiscoveryMixin:
                 child = children(i)
 
                 def read(name, default, child=child):
+                    if name == "Selected":
+                        return self._selected(element=child)
                     return getattr(child, name, default)
 
                 self._file_popup_element(
@@ -1237,12 +1257,7 @@ class DiscoveryMixin:
                 def read(name, props=props):
                     value = props.get(name, "")
                     if name == "Selected":
-                        try:
-                            box = self._session.findById(
-                                self._normalize_element_id(props.get("Id", "")))
-                        except Exception:
-                            return False
-                        return bool(self._list_prop(box, "Selected", False))
+                        return bool(self._selected(props.get("Id", "")))
                     if name == "ColorIndex":
                         return int(value) if value.lstrip("-").isdigit() else 0
                     return value
@@ -1404,7 +1419,8 @@ class DiscoveryMixin:
                             expand_tables: bool = False,
                             list_rows: Dict[str, List[int]] | None = None,
                             ) -> List[ScreenElement]:
-        """_enumerate_elements over a GetObjectTree node: same rules, no COM."""
+        """_enumerate_elements over a GetObjectTree node: same rules, no COM
+        but the Selected of each radio button and checkbox listed."""
         elements = []
         if current_depth >= max_depth:
             return elements
@@ -1426,6 +1442,8 @@ class DiscoveryMixin:
                 self._apply_combobox_selection(
                     element, props.get("Key"), props.get("Value"))
             if self._wanted(element, type_filter_set, changeable_only):
+                if element.type in self._SELECTABLE_TYPES:
+                    element.selected = self._selected(child_id)
                 elements.append(element)
             if element.type == "GuiTableControl" and not expand_tables:
                 continue
@@ -1519,6 +1537,8 @@ class DiscoveryMixin:
 
                 # Apply filters — but always recurse into containers
                 if self._wanted(element, type_filter_set, changeable_only):
+                    if element.type in self._SELECTABLE_TYPES:
+                        element.selected = self._selected(element=child)
                     elements.append(element)
 
                 # A table control stays ONE element: its cells are read with

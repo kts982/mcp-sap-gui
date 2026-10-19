@@ -1145,6 +1145,8 @@ async def sap_read_field(field_id: str, ctx: Context) -> dict:
 
     Returns value, type, changeable status, and labels (left/right).
     For a dropdown, value is the selected entry's text and key its key.
+    For a radio button or checkbox, value is its label and selected says
+    whether it is selected.
     Use sap_get_screen_elements to discover field IDs on unknown screens."""
     c = _ctrl(ctx)
     return await _com(lambda: c.read_field(field_id))
@@ -1620,7 +1622,8 @@ async def sap_get_popup_window(ctx: Context) -> dict:
 
     Returns the popup's title, text content, and available buttons so
     you know how to respond. Also classifies the popup and suggests a
-    safe next action. Returns {popup_exists: false} if no popup."""
+    safe next action. Radio buttons and checkboxes in interactive_elements
+    carry selected. Returns {popup_exists: false} if no popup."""
     c = _ctrl(ctx)
     return await _com(c.get_popup_window)
 
@@ -1912,6 +1915,9 @@ async def sap_get_screen_elements(
     layouts (splitter containers, tab strips with sub-containers).
 
     Pass container_id='wnd[0]/mbar' to discover the menu bar structure.
+
+    Radio buttons and checkboxes report selected (true/false); a dropdown
+    reports its selected key.
 
     A table control (SM30-style) is ONE element here, not one per cell: use
     sap_read_table(columns_only=true) for its columns and cell_id templates.

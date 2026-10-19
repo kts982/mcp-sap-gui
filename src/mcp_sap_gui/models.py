@@ -76,6 +76,9 @@ class ScreenElement:
     # Dropdowns (GuiComboBox) only: the selected entry's key; text is then
     # the entry's text. None elsewhere, and left out of tool responses.
     key: str | None = None
+    # Radio buttons and checkboxes only: whether it is selected (read over
+    # COM, never from GetObjectTree). None elsewhere, and left out.
+    selected: bool | None = None
 
 
 class SAPGUIError(Exception):

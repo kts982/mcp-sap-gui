@@ -98,6 +98,11 @@ class FieldsMixin:
                 result["value"] = (self._combobox_text(element)
                                    or str(result["value"]).strip())
                 result["key"] = str(getattr(element, 'Key', '')).strip()
+            elif result["type"] in self._SELECTABLE_TYPES:
+                # Value is only the label text.
+                selected = self._selected(element=element)
+                if selected is not None:
+                    result["selected"] = selected
 
             # Extended metadata for text fields
             for attr, key in [

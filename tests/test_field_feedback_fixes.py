@@ -488,8 +488,10 @@ class TestScreenshotTool:
 # Response size
 # ===========================================================================
 
-def _child(element_id, type_, *, text="", changeable=False, children=()):
-    child = MagicMock(Id=element_id, Type=type_, Text=text, Changeable=changeable)
+def _child(element_id, type_, *, text="", changeable=False, selected=False,
+           children=()):
+    child = MagicMock(Id=element_id, Type=type_, Text=text, Changeable=changeable,
+                      Selected=selected)
     child.Name = element_id.rsplit("/", 1)[-1]
     kids = list(children)
     child.Children.Count = len(kids)
@@ -1943,3 +1945,198 @@ class TestPopupHtmlQuestion:
 
         assert digest["question_readable"] is False
         assert digest["buttons"] == ["Yes", "No", "Cancel"]
+
+
+# ===========================================================================
+# Radio buttons and checkboxes
+# ===========================================================================
+
+class TestRadioAndCheckboxSelection:
+    """No read tool said which radio button or checkbox is selected (live on
+    SCAL's holiday details popup, where "with fixed date" is preselected).
+    Selected is read over COM, one element at a time: asking GetObjectTree
+    for it crashes SAP GUI 8.00 (issue #22)."""
+
+    _WND1 = "/app/con[0]/ses[0]/wnd[1]"
+    _USR = "/app/con[0]/ses[0]/wnd[0]/usr"
+    _KINDS = (("FIX", "Fixed date"), ("WOCHENTAG", "Weekday"),
+              ("OSTERN", "Distance to Easter"))
+
+    def _options(self, prefix, *, changeable=True, checked=False):
+        radios = [
+            _child(f"{prefix}/radTIFAB-{kind}", "GuiRadioButton", text=text,
+                   changeable=changeable, selected=kind == "FIX")
+            for kind, text in self._KINDS
+        ]
+        box = _child(f"{prefix}/chkFLAG", "GuiCheckBox", text="Flag",
+                     changeable=changeable, selected=checked)
+        return [*radios, box]
+
+    def _popup(self, **options):
+        usr = _child(f"{self._WND1}/usr", "GuiUserArea",
+                     children=self._options(f"{self._WND1}/usr", **options))
+        cancel = _child(f"{self._WND1}/tbar[0]/btn[12]", "GuiButton")
+        cancel.Tooltip = "Cancel   (F12)"
+        tbar = _child(f"{self._WND1}/tbar[0]", "GuiToolbar", children=[cancel])
+        return _child(self._WND1, "GuiModalWindow", text="Holiday Details",
+                      children=[usr, tbar])
+
+    @staticmethod
+    def _option_lookups(controller):
+        return [c.args[0] for c in controller._session.findById.call_args_list
+                if "/usr/" in c.args[0]]
+
+    # --- sap_get_popup_window ---------------------------------------------
+
+    def test_popup_reports_the_selection_on_both_paths(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._popup(), discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert [(el["id"], el["selected"]) for el in popup["interactive_elements"]] == [
+            ("wnd[1]/usr/radTIFAB-FIX", True),
+            ("wnd[1]/usr/radTIFAB-WOCHENTAG", False),
+            ("wnd[1]/usr/radTIFAB-OSTERN", False),
+            ("wnd[1]/usr/chkFLAG", False),
+        ]
+
+    def test_popup_tree_never_asks_for_selected(self):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._popup(), "tree")
+
+        controller.get_popup_window()
+
+        assert controller._session.GetObjectTree.call_count == 1
+        assert "Selected" not in controller._session.GetObjectTree.call_args.args[1]
+        assert self._option_lookups(controller) == [
+            "wnd[1]/usr/radTIFAB-FIX", "wnd[1]/usr/radTIFAB-WOCHENTAG",
+            "wnd[1]/usr/radTIFAB-OSTERN", "wnd[1]/usr/chkFLAG",
+        ]
+
+    def test_a_preselected_option_gets_the_prefill_notice(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._popup(checked=True), discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert popup["prefilled_inputs"] == [
+            {"id": "wnd[1]/usr/radTIFAB-FIX", "name": "radTIFAB-FIX",
+             "text": "Fixed date", "selected": True},
+            {"id": "wnd[1]/usr/chkFLAG", "name": "chkFLAG",
+             "text": "Flag", "selected": True},
+        ]
+        assert "preselected options" in popup["notice"]
+        digest = controller._popup_digest()
+        assert digest["prefilled_inputs"] == popup["prefilled_inputs"]
+
+    def test_display_only_options_get_no_notice(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._popup(changeable=False, checked=True),
+                      discovery_path)
+
+        popup = controller.get_popup_window()
+
+        assert popup["interactive_elements"][0]["selected"] is True
+        assert "prefilled_inputs" not in popup
+        assert "notice" not in popup
+
+    def test_an_unreadable_option_is_left_unmarked_and_keeps_its_siblings(self):
+        box = _child(f"{self._WND1}/usr/chkFLAG", "GuiCheckBox", changeable=True)
+        type(box).Selected = PropertyMock(side_effect=IndexError("Selected"))
+        field = _child(f"{self._WND1}/usr/txtNAME", "GuiTextField", changeable=True)
+        usr = _child(f"{self._WND1}/usr", "GuiUserArea", children=[box, field])
+        controller = _make_controller_with_session()
+        _serve_window(controller, _child(self._WND1, "GuiModalWindow",
+                                         children=[usr]), "walk")
+
+        popup = controller.get_popup_window()
+
+        assert [el["id"] for el in popup["interactive_elements"]] == [
+            "wnd[1]/usr/chkFLAG", "wnd[1]/usr/txtNAME",
+        ]
+        assert "selected" not in popup["interactive_elements"][0]
+
+    # --- sap_get_screen_elements ------------------------------------------
+
+    def _screen(self):
+        field = _child(f"{self._USR}/ctxtP_DATE", "GuiCTextField", changeable=True)
+        return _child(self._USR, "GuiUserArea",
+                      children=[*self._options(self._USR, checked=True), field])
+
+    def test_screen_elements_report_the_selection_on_both_paths(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._screen(), discovery_path)
+
+        elements = controller.get_screen_elements("wnd[0]/usr")
+
+        assert [(e.id, e.selected) for e in elements] == [
+            ("wnd[0]/usr/radTIFAB-FIX", True),
+            ("wnd[0]/usr/radTIFAB-WOCHENTAG", False),
+            ("wnd[0]/usr/radTIFAB-OSTERN", False),
+            ("wnd[0]/usr/chkFLAG", True),
+            ("wnd[0]/usr/ctxtP_DATE", None),
+        ]
+
+    def test_tree_discovery_looks_up_only_the_options_it_lists(self):
+        controller = _make_controller_with_session()
+        _serve_window(controller, self._screen(), "tree")
+
+        controller.get_screen_elements("wnd[0]/usr", type_filter="GuiCTextField")
+        assert self._option_lookups(controller) == []
+
+        controller.get_screen_elements("wnd[0]/usr", type_filter="GuiCheckBox")
+        assert self._option_lookups(controller) == ["wnd[0]/usr/chkFLAG"]
+        assert all("Selected" not in c.args[1]
+                   for c in controller._session.GetObjectTree.call_args_list)
+
+    async def test_tool_reports_selected_only_on_options(self, srv):
+        from mcp_sap_gui.models import ScreenElement
+        mock_ctrl = MagicMock()
+        mock_ctrl.get_screen_elements.return_value = [
+            ScreenElement("wnd[0]/usr/radTIFAB-FIX", "GuiRadioButton", "TIFAB-FIX",
+                          "Fixed date", True, selected=True),
+            ScreenElement("wnd[0]/usr/chkFLAG", "GuiCheckBox", "FLAG", "Flag", True,
+                          selected=False),
+            ScreenElement("wnd[0]/usr/txtF", "GuiTextField", "F", "", True),
+        ]
+        mock_ctrl.get_docking_containers.return_value = []
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            result = await srv.sap_get_screen_elements(_make_mock_ctx())
+
+        radio, box, field = result["elements"]
+        assert (radio["selected"], box["selected"]) == (True, False)
+        assert "selected" not in field
+
+    # --- sap_read_field ---------------------------------------------------
+
+    @pytest.mark.parametrize("type_", ["GuiRadioButton", "GuiCheckBox"])
+    @pytest.mark.parametrize("selected", [True, False])
+    def test_read_field_reports_selected(self, type_, selected):
+        element = _child("/app/con[0]/ses[0]/wnd[1]/usr/radTIFAB-FIX", type_,
+                         text="Fixed date", changeable=True, selected=selected)
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = element
+
+        result = controller.read_field("wnd[1]/usr/radTIFAB-FIX")
+
+        assert result["selected"] is selected
+        assert result["value"] == "Fixed date"
+
+    def test_read_field_gives_no_selected_for_other_fields(self):
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = _child(
+            "/app/con[0]/ses[0]/wnd[0]/usr/txtNAME", "GuiTextField", text="X")
+
+        assert "selected" not in controller.read_field("wnd[0]/usr/txtNAME")
+
+    def test_read_field_leaves_out_an_unreadable_selected(self):
+        box = _child("/app/con[0]/ses[0]/wnd[0]/usr/chkFLAG", "GuiCheckBox")
+        type(box).Selected = PropertyMock(side_effect=IndexError("Selected"))
+        controller = _make_controller_with_session()
+        controller._session.findById.return_value = box
+
+        result = controller.read_field("wnd[0]/usr/chkFLAG")
+
+        assert "selected" not in result
+        assert "error" not in result
