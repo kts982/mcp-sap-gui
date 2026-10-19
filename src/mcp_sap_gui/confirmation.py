@@ -80,6 +80,12 @@ POINT_BY_TOOL: dict[str, str] = {
 #: (System -> Save) and ALV/app-toolbar Save buttons remain a documented gap:
 #: their IDs are positional and locale-dependent, so there is no reliable
 #: static ID to match.
+#: Popups: sap_handle_popup and sap_press_button (on a button outside wnd[0])
+#: ask in their tool bodies before a press that may save (a Save button, or
+#: Yes/OK on a popup about saving) and before any answer but Cancel to a popup
+#: question the tool cannot read, using the sap_send_key Save prompt.
+#: sap_send_key always targets wnd[0]: live on SAP GUI 8.10, Enter there left
+#: an open confirmation popup untouched.
 #: Matched by suffix, so a popup's own tbar[0]/btn[11] (e.g. wnd[1]) also hits
 #: the gate. Intentional: over-prompting on a dialog errs on the safe side.
 _SAVE_BUTTON_SUFFIX = "tbar[0]/btn[11]"
@@ -254,8 +260,8 @@ def build_relax_prompt(points: Iterable[str]) -> str:
 def log_confirmation_event(point: str, tool: str, outcome: str) -> None:
     """Emit a confirmation outcome to the audit log.
 
-    AuditMiddleware never inspects results, so it cannot tell an accepted
-    confirmation from a declined one — this is the only record of the outcome.
+    AuditMiddleware records only whether the call failed, not which point
+    prompted or what the user answered — this is the only record of that.
     """
     audit_logger.info(
         json.dumps({
@@ -271,6 +277,25 @@ def log_confirmation_event(point: str, tool: str, outcome: str) -> None:
 # ---------------------------------------------------------------------------
 # Middleware
 # ---------------------------------------------------------------------------
+
+def _mark_confirmed(result: ToolResult) -> ToolResult:
+    """Add ``confirmed_by_user: true`` to an accepted call's result.
+
+    The prompt goes to the user, not the agent: without the flag the agent
+    cannot tell an approved write from an ungated one.  Only a plain dict
+    result (one JSON text block) is rewritten; anything else passes as is.
+    """
+    data = result.structured_content
+    if (
+        result.is_error
+        or not isinstance(data, dict)
+        or len(result.content) != 1
+        or not isinstance(result.content[0], mcp.types.TextContent)
+    ):
+        return result
+    marked = {**data, "confirmed_by_user": True}
+    return ToolResult(content=marked, structured_content=marked, meta=result.meta)
+
 
 async def _tool_tags(ctx: Any, tool_name: str) -> set[str]:
     """Look up a tool's tags through the live server.
@@ -347,7 +372,7 @@ class ConfirmationMiddleware(Middleware):
 
         if result.action == "accept" and getattr(result, "data", None) is True:
             log_confirmation_event(point, tool_name, "accepted")
-            return await call_next(context)
+            return _mark_confirmed(await call_next(context))
 
         log_confirmation_event(point, tool_name, "declined")
         raise ToolError(

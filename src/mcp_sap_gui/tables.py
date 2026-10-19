@@ -15,6 +15,21 @@ from .models import _TOOLBAR_BUTTON_TYPES, VKey
 logger = logging.getLogger(__name__)
 
 
+def _is_blank_cell(value: Any) -> bool:
+    """True for a table-control cell with nothing in it.
+
+    An unchecked checkbox reads False and counts as blank. Padding rows in
+    display / change mode have no cells at all, but the blank lines of SM30
+    New Entries do, unchecked checkboxes included (seen live, V_TTZZ): with
+    False as data every blank line read as an entry. A whitespace-only value
+    counts too: the empty entry of a dropdown reads as its key, a single
+    space (see _apply_combobox_selection).
+    """
+    if value is None or value is False:
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
 class TablesMixin:
     """Mixin for table/grid operations on SAP GUI screens."""
 
@@ -99,11 +114,13 @@ class TablesMixin:
 
         A cell's ID ends in [column,visible_row], the indexes GetCell takes;
         values follow _read_cell_value. Reading cell by cell costs about
-        three COM calls each instead.
+        three COM calls each instead. A checkbox is still read over COM: the
+        tree must not carry Selected (_OBJECT_TREE_UNSAFE_PROPS).
         """
         tree = self._object_tree(
             self._validate_element_id(table_id),
-            ["Id", "Type", "Text", "Selected", "Key"],
+            ["Id", "Type", "Text", "Key"],
+            site="table",
         )
         if tree is None:
             return None
@@ -115,7 +132,12 @@ class TablesMixin:
                 continue
             cell_type = props.get("Type", "")
             if cell_type == "GuiCheckBox":
-                value = props.get("Selected") == "true"
+                try:
+                    value = self._read_cell_value(
+                        self._session.findById(self._normalize_element_id(props["Id"]))
+                    )
+                except Exception:
+                    value = None  # as _read_cell_value gives for an unreadable cell
             elif cell_type == "GuiComboBox":
                 value = props.get("Key", "")
             else:
@@ -136,7 +158,8 @@ class TablesMixin:
         except Exception:
             return None
 
-    def _scroll_table_control_to_row(self, table, abs_row: int) -> tuple:
+    def _scroll_table_control_to_row(self, table, abs_row: int, *,
+                                     need_visible: bool = True) -> tuple:
         """Scroll a GuiTableControl so *abs_row* is visible.
 
         Returns a ``(table, visible_row_offset)`` tuple.  Pass the offset
@@ -146,6 +169,13 @@ class TablesMixin:
         Changing ``VerticalScrollbar.Position`` triggers a server
         round-trip that re-renders the control and invalidates existing
         references into it.
+
+        The offset counts from the row SAP actually put at the top, which
+        the application may choose differently: live, SE16's multiple
+        selection showed row 7 on top after a scroll to 9, and an offset
+        from the requested position wrote into the wrong row.  With
+        *need_visible*, a row that is still not visible raises ValueError,
+        so a caller never sets or focuses another row's cell.
         """
         visible = table.VisibleRowCount
         scrollbar = table.VerticalScrollbar
@@ -157,7 +187,15 @@ class TablesMixin:
         full_id = table.Id  # capture before the reference goes stale
         new_pos = max(scrollbar.Minimum, min(abs_row, scrollbar.Maximum))
         scrollbar.Position = new_pos
-        return self._session.findById(full_id), abs_row - new_pos
+        table = self._session.findById(full_id)
+        top = table.VerticalScrollbar.Position
+        visible = table.VisibleRowCount
+        if need_visible and not top <= abs_row < top + visible:
+            raise ValueError(
+                f"Row {abs_row} is not visible after scrolling: the table "
+                f"shows rows {top} to {top + visible - 1}. Nothing was changed."
+            )
+        return table, abs_row - top
 
     def _resolve_table_control_column(self, table, column) -> int:
         """Resolve a column name/index to a numeric column index for GuiTableControl."""
@@ -189,7 +227,7 @@ class TablesMixin:
 
     def read_table(self, table_id: str, max_rows: int = 100,
                    columns: str = "", columns_only: bool = False,
-                   start_row: int = 0) -> Dict[str, Any]:
+                   start_row: Optional[int] = None) -> Dict[str, Any]:
         """
         Read data from an ALV grid or table control.
 
@@ -203,9 +241,12 @@ class TablesMixin:
                 Reduces response size when only a few columns are needed.
             columns_only: If True, return only column metadata with empty
                 data (schema discovery mode — very small response).
-            start_row: Row index to start reading from (default 0).
-                For ALV: skips first N rows. For TableControl: scrolls to
-                that position before reading.
+            start_row: Row index to start reading from. For ALV: skips
+                the first N rows (None = 0). For TableControl: scrolls to
+                that row first, 0 included; None reads from the current
+                scroll position (e.g. after "Position..."). The result's
+                ``first_visible_row`` is where the read really started, and
+                ``next_start_row`` / ``has_more`` say how to read on.
 
         Returns:
             Dict with table data and metadata
@@ -223,7 +264,8 @@ class TablesMixin:
                     table, table_id, max_rows, col_filter, columns_only, start_row,
                 )
             return self._read_alv_grid(
-                table, table_id, max_rows, col_filter, columns_only, start_row,
+                table, table_id, max_rows, col_filter, columns_only,
+                start_row or 0,
             )
         except Exception as e:
             return self._error_result(
@@ -340,14 +382,39 @@ class TablesMixin:
             )
         return result
 
+    @staticmethod
+    def _start_row_note(start_row: Optional[int], start_position: int,
+                        scroll_maximum: Optional[int],
+                        scroll_error: Optional[str]) -> Optional[str]:
+        """Why a table-control read did not start at the requested row."""
+        if start_row is None or start_position == start_row:
+            return None
+        if scroll_error is not None:
+            return (
+                f"start_row {start_row} was not reached: the scroll failed "
+                f"({scroll_error}), so the rows are read from row "
+                f"{start_position}. Read-only scripting allows no scrolling."
+            )
+        if scroll_maximum is not None and start_row > scroll_maximum:
+            return (
+                f"start_row {start_row} is past the scrollbar maximum "
+                f"{scroll_maximum}, so the rows are read from row "
+                f"{start_position} and can repeat rows of the previous page "
+                "(compare _absolute_row_index)."
+            )
+        return (
+            f"start_row {start_row} was not reached: the table scrolled to "
+            f"row {start_position}."
+        )
+
     def _read_table_control(self, table, table_id: str, max_rows: int,
                             col_filter: List[str] = None,
                             columns_only: bool = False,
-                            start_row: int = 0) -> Dict[str, Any]:
+                            start_row: Optional[int] = None) -> Dict[str, Any]:
         """Read visible rows from a GuiTableControl.
 
         Reads from the current scroll position without changing it (unless
-        start_row is explicitly provided).  This preserves the user's
+        start_row is given, 0 included).  This preserves the user's
         navigated position (e.g. after "Position..." in SPRO/SM30) and
         avoids crashing SAP GUI's COM server -- programmatic
         scrollbar.Position changes can destabilize certain table views.
@@ -355,7 +422,14 @@ class TablesMixin:
         The read is capped at VisibleRowCount.  GuiTableControl.RowCount often
         includes padding rows (empty rows that fill the visible area beyond
         the actual data), so reading stops early when an all-empty row is
-        encountered.
+        encountered.  Its absolute index is returned as ``empty_rows_from``:
+        the data ends there, whatever RowCount says (SM30: 51 vs 14 entries).
+
+        Paging: ``first_visible_row`` is where the read started,
+        ``next_start_row`` the start_row of the next page, and ``has_more``
+        whether one may exist. One read returns at most VisibleRowCount
+        rows, so ``start_row += max_rows`` skips rows. ``start_row_note``
+        explains a read that did not start at the requested row.
         """
         all_columns_info = self._get_table_control_columns(
             table, with_cell_ids=columns_only,
@@ -380,24 +454,35 @@ class TablesMixin:
         visible_rows = table.VisibleRowCount
 
         data = []
+        empty_rows_from = None
+        scroll_maximum = None
+        scroll_error = None
+        rows_to_read = 0
         if total_rows > 0 and all_col_count > 0:
             scrollbar = table.VerticalScrollbar
+            try:
+                scroll_maximum = int(scrollbar.Maximum)
+            except Exception:
+                scroll_maximum = None
 
-            # Scroll to start_row if explicitly requested
-            if start_row > 0:
-                full_id = table.Id  # capture before the reference goes stale
+            # Scroll to start_row if one was given: 0 means the first row,
+            # not "wherever the table is" (that is start_row=None).
+            if start_row is not None:
                 new_pos = max(scrollbar.Minimum, min(start_row, scrollbar.Maximum))
-                try:
-                    scrollbar.Position = new_pos
-                    # The scroll round-trip re-renders the control and
-                    # invalidates existing references — re-acquire.
-                    table = self._session.findById(full_id)
-                    scrollbar = table.VerticalScrollbar
-                except Exception:
-                    pass  # best-effort scroll
-                start_position = scrollbar.Position
-            else:
-                start_position = scrollbar.Position
+                if new_pos != scrollbar.Position:
+                    full_id = table.Id  # capture before the reference goes stale
+                    try:
+                        scrollbar.Position = new_pos
+                        # The scroll round-trip re-renders the control and
+                        # invalidates existing references — re-acquire.
+                        table = self._session.findById(full_id)
+                        scrollbar = table.VerticalScrollbar
+                    except Exception as e:
+                        # Best-effort scroll; reported in start_row_note.
+                        scroll_error = self._sanitize_error_message(
+                            e, "Could not scroll the table control",
+                        )
+            start_position = scrollbar.Position
 
             if not columns_only:
                 values = self._table_control_values(table_id)
@@ -418,8 +503,7 @@ class TablesMixin:
                     all_empty = True
                     if col_filter:
                         for ci in range(all_col_count):
-                            val = cell_value(vis_idx, ci)
-                            if val is not None and val != "":
+                            if not _is_blank_cell(cell_value(vis_idx, ci)):
                                 all_empty = False
                                 break
                     row_data = {}
@@ -427,10 +511,10 @@ class TablesMixin:
                         value = cell_value(vis_idx, col_idx)
                         col_name = all_column_names[col_idx]
                         row_data[col_name] = value
-                        if not col_filter:
-                            if value is not None and value != "":
-                                all_empty = False
+                        if not col_filter and not _is_blank_cell(value):
+                            all_empty = False
                     if all_empty:
+                        empty_rows_from = start_position + vis_idx
                         break
                     row_data["_absolute_row_index"] = start_position + vis_idx
                     data.append(row_data)
@@ -449,8 +533,30 @@ class TablesMixin:
             "column_info": columns_info,
             "data": data,
         }
+        if start_row is not None:
+            result["start_row"] = start_row
+        if empty_rows_from is not None:
+            result["empty_rows_from"] = empty_rows_from
         if columns_only:
             result["columns_only"] = True
+        else:
+            result["next_start_row"] = start_position + len(data)
+            # Not derived from total_rows: RowCount counts padding rows.
+            result["has_more"] = bool(
+                rows_to_read > 0
+                and empty_rows_from is None
+                and len(data) == rows_to_read
+                and (
+                    rows_to_read < visible_rows
+                    or scroll_maximum is None
+                    or start_position < scroll_maximum
+                )
+            )
+        start_row_note = self._start_row_note(
+            start_row, start_position, scroll_maximum, scroll_error,
+        )
+        if start_row_note:
+            result["start_row_note"] = start_row_note
         if any(c.get("name_is_title") for c in columns_info):
             result["note"] = (
                 "The table has no rows, so technical column names are not "
@@ -518,10 +624,12 @@ class TablesMixin:
         """
         Press a toolbar button on an ALV grid.
 
-        Automatically detects Menu/ButtonAndMenu types and uses
-        PressToolbarContextButton instead of PressToolbarButton.
-        For menu types, this opens the context menu -- use
-        select_alv_context_menu_item() to pick an item.
+        The button's type on the toolbar decides: Menu/ButtonAndMenu use
+        PressToolbarContextButton, which opens the menu -- use
+        select_alv_context_menu_item() to pick an item. Other buttons use
+        PressToolbarButton. Asking the type first matters: on SAP GUI 8.10
+        PressToolbarContextButton on a plain button does not fail, it runs
+        the button (&FIND opened its popup and was reported as a menu).
 
         Args:
             grid_id: SAP GUI grid ID
@@ -535,15 +643,22 @@ class TablesMixin:
         try:
             grid = self._find_element(grid_id)
 
-            # Try PressToolbarContextButton first (works for Menu/ButtonAndMenu)
-            # Fall back to PressToolbarButton for regular buttons
-            menu_opened = False
-            try:
+            btn_type = self._alv_toolbar_button_type(grid, button_id)
+            if btn_type in ("Menu", "ButtonAndMenu"):
                 grid.PressToolbarContextButton(button_id)
                 menu_opened = True
-            except Exception:
-                # Not a menu button, use regular press
+            elif btn_type is not None:
                 grid.PressToolbarButton(button_id)
+                menu_opened = False
+            else:
+                # Type unknown (ID not listed on the toolbar): try the menu
+                # press first and fall back to a regular press
+                menu_opened = False
+                try:
+                    grid.PressToolbarContextButton(button_id)
+                    menu_opened = True
+                except Exception:
+                    grid.PressToolbarButton(button_id)
 
             if menu_opened:
                 result = {
@@ -573,6 +688,20 @@ class TablesMixin:
                 e,
                 "Could not press ALV toolbar button",
             )
+
+    @staticmethod
+    def _alv_toolbar_button_type(grid, button_id: str) -> Optional[str]:
+        """Type of the toolbar button with this ID ("Button", "Menu", ...).
+
+        None when the toolbar does not list the ID or cannot be read.
+        """
+        try:
+            for i in range(grid.ToolbarButtonCount):
+                if grid.GetToolbarButtonId(i) == button_id:
+                    return _TOOLBAR_BUTTON_TYPES.get(grid.GetToolbarButtonType(i))
+        except Exception:
+            pass
+        return None
 
     def _open_context_menu_items(self, shell, depth: int = 0) -> list:
         """Items of the context menu open on *shell*: text and function code.
@@ -708,7 +837,9 @@ class TablesMixin:
                 # indexing and works regardless of scroll position.
                 # Some popup tables throw COM errors on scroll.
                 try:
-                    table, _ = self._scroll_table_control_to_row(table, row)
+                    table, _ = self._scroll_table_control_to_row(
+                        table, row, need_visible=False,
+                    )
                 except Exception:
                     pass
                 table.GetAbsoluteRow(row).Selected = True
@@ -918,9 +1049,10 @@ class TablesMixin:
         """
         Scroll a GuiTableControl to a specific row position.
 
-        Since read_table does not scroll (it reads only visible rows),
-        use this tool to navigate to a different section of the table
-        before reading.
+        The application may put another row at the top than the one asked
+        for (SE16's multiple selection: 7 for 9), so ``position`` in the
+        result is read back from the table: cell IDs count visible rows
+        from there.  ``requested_position`` appears when the two differ.
 
         Args:
             table_id: SAP GUI table control ID
@@ -969,14 +1101,23 @@ class TablesMixin:
             except Exception:
                 pass
 
-            return {
+            top = table.VerticalScrollbar.Position
+            result = {
                 "table_id": table_id,
                 "status": "success",
-                "position": new_pos,
+                "position": top,
                 "visible_rows": table.VisibleRowCount,
                 "total_rows": table.RowCount,
                 "scroll_max": scroll_max,
             }
+            if top != position:
+                result["requested_position"] = position
+            if top != new_pos:
+                result["note"] = (
+                    f"SAP put row {top} at the top, not {new_pos}: visible "
+                    f"row 0 in cell IDs is absolute row {top}."
+                )
+            return result
         except Exception as e:
             return self._error_result(
                 {"table_id": table_id},
@@ -1266,7 +1407,9 @@ class TablesMixin:
 
             if getattr(table, 'Type', '') == "GuiTableControl":
                 for row in rows:
-                    table, _ = self._scroll_table_control_to_row(table, row)
+                    table, _ = self._scroll_table_control_to_row(
+                        table, row, need_visible=False,
+                    )
                     table.GetAbsoluteRow(row).Selected = True
             else:
                 # ALV: comma-separated row list

@@ -289,6 +289,7 @@ class TestOkCodeBypassPrevention:
             )
         mock_ctrl.set_batch_fields.assert_called_once_with(
             {"f": "v"}, skip_readonly=False, validate=True, verbose=False,
+            validate_partial=False,
         )
         assert result["validation"]["performed"] is True
 
@@ -307,6 +308,7 @@ class TestOkCodeBypassPrevention:
             )
         mock_ctrl.set_batch_fields.assert_called_once_with(
             {"f": "v"}, skip_readonly=True, validate=False, verbose=False,
+            validate_partial=False,
         )
         assert result["skipped"] == 1
 
@@ -1392,12 +1394,12 @@ class TestCOMRetry:
     def test_is_transient_com_error_by_hresult(self, srv):
         """Recognizes transient error by hresult attribute."""
         exc = Exception("COM error")
-        exc.hresult = -2147417851  # RPC_E_CALL_REJECTED
+        exc.hresult = -2147418111  # 0x80010001 RPC_E_CALL_REJECTED
         assert srv._is_transient_com_error(exc) is True
 
     def test_is_transient_com_error_by_args(self, srv):
         """Recognizes transient error by args[0] (pywintypes.com_error style)."""
-        exc = Exception(-2147417851, "Call was rejected", None, None)
+        exc = Exception(-2147418111, "Call was rejected by callee.", None, None)
         assert srv._is_transient_com_error(exc) is True
 
     def test_is_not_transient_for_unknown_hresult(self, srv):
@@ -1427,7 +1429,7 @@ class TestCOMRetry:
             call_count += 1
             if call_count < 3:
                 exc = Exception("COM error")
-                exc.hresult = -2147417851
+                exc.hresult = -2147418111  # RPC_E_CALL_REJECTED
                 raise exc
             return "recovered"
 
@@ -1441,7 +1443,7 @@ class TestCOMRetry:
         """Raises after exhausting all retries."""
         def always_fail():
             exc = Exception("COM error")
-            exc.hresult = -2147417851
+            exc.hresult = -2147417846  # RPC_E_SERVERCALL_RETRYLATER
             raise exc
 
         with pytest.raises(Exception, match="COM error"):
@@ -1470,7 +1472,7 @@ class TestCOMRetry:
             call_count += 1
             if call_count <= 2:
                 exc = Exception("COM error")
-                exc.hresult = -2147417851
+                exc.hresult = -2147418111  # RPC_E_CALL_REJECTED
                 raise exc
             return "ok"
 
@@ -1483,7 +1485,8 @@ class TestCOMRetry:
 
     def test_transient_hresults_cover_known_codes(self, srv):
         """All documented transient hresults are in the set."""
-        expected = {-2147417851, -2147418111, -2147417848}
+        # 0x80010001 RPC_E_CALL_REJECTED, 0x8001010A RPC_E_SERVERCALL_RETRYLATER
+        expected = {-2147418111, -2147417846}
         assert srv._TRANSIENT_COM_HRESULTS == expected
 
 
@@ -1895,6 +1898,7 @@ class TestSaveConfirmation:
         """When user accepts save confirmation, send_vkey is called."""
         ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("accept", data=True))
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
         mock_controller.send_vkey.return_value = {"screen": {"transaction": "VA01"}}
 
         with patch.object(srv, "_ctrl", return_value=mock_controller), \
@@ -1904,12 +1908,14 @@ class TestSaveConfirmation:
         ctx.elicit.assert_called_once()
         mock_controller.send_vkey.assert_called_once()
         assert result.get("screen", {}).get("transaction") == "VA01"
+        assert result["confirmed_by_user"] is True
 
     @pytest.mark.asyncio
     async def test_save_alias_accepted(self, srv):
         """'Save' key also triggers confirmation and proceeds on accept."""
         ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("accept", data=True))
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
         mock_controller.send_vkey.return_value = {"screen": {"transaction": "MM02"}}
 
         with patch.object(srv, "_ctrl", return_value=mock_controller), \
@@ -1924,6 +1930,7 @@ class TestSaveConfirmation:
         """When user declines save, send_vkey is NOT called."""
         ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("decline"))
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             result = await srv.sap_send_key("F11", ctx)
@@ -1937,6 +1944,7 @@ class TestSaveConfirmation:
         """When user cancels save confirmation, send_vkey is NOT called."""
         ctx = _make_elicit_ctx(elicit_return=_make_elicit_result("cancel"))
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             result = await srv.sap_send_key("F11", ctx)
@@ -1952,6 +1960,7 @@ class TestSaveConfirmation:
             elicit_return=_make_elicit_result("accept", data=False),
         )
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             result = await srv.sap_send_key("Save", ctx)
@@ -1975,6 +1984,7 @@ class TestSaveConfirmation:
             ),
         )
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             with pytest.raises(ValueError, match="does not support elicitation"):
@@ -1989,6 +1999,7 @@ class TestSaveConfirmation:
             elicit_side_effect=RuntimeError("COM connection lost"),
         )
         mock_controller = MagicMock()
+        mock_controller.check_vkey.return_value = None  # F11 is active
 
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             with pytest.raises(RuntimeError, match="COM connection lost"):
@@ -2006,9 +2017,10 @@ class TestSaveConfirmation:
 
         with patch.object(srv, "_ctrl", return_value=mock_controller), \
              patch.object(srv, "_com", new_callable=lambda: lambda fn: _async_wrap(fn)):
-            await srv.sap_send_key("Enter", ctx)
+            result = await srv.sap_send_key("Enter", ctx)
 
         ctx.elicit.assert_not_called()
+        assert "confirmed_by_user" not in result
         mock_controller.send_vkey.assert_called_once()
 
 
