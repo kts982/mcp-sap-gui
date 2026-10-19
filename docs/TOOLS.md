@@ -32,7 +32,7 @@ A confirmation point is a category of write operations that requires blocking us
 
 | Point | Gated tools |
 |---|---|
-| `save` | `sap_send_key("F11")` / `sap_send_key("Save")` and `sap_press_button` on the Save toolbar button (`wnd[0]/tbar[0]/btn[11]`). Always on, cannot be turned off |
+| `save` | `sap_send_key("F11")` / `sap_send_key("Save")` and `sap_press_button` on the Save toolbar button (`wnd[0]/tbar[0]/btn[11]`). On popups (`sap_handle_popup`, or `sap_press_button` on a popup button): a Save button, Yes/OK on a popup about saving, and any answer but Cancel to a popup question the server cannot read. Always on, cannot be turned off |
 | `transactions` | `sap_execute_transaction` |
 | `batch_fields` | `sap_set_batch_fields` |
 | `field_writes` | `sap_set_field`, `sap_modify_cell`, `sap_set_textedit`, `sap_select_checkbox`, `sap_select_radio_button`, `sap_select_combobox_entry` |
@@ -40,7 +40,7 @@ A confirmation point is a category of write operations that requires blocking us
 
 Activate points per session with `sap_set_confirmation_points`, or for every session with `--confirm POINT [POINT ...]`. Adding a point is silent; removing a session point asks the user first and a declined removal keeps it. Points set by `--confirm` and the `save` point can never be removed.
 
-Declining a confirmation returns an error and nothing is executed. Clients without elicitation support fail closed — the gated call errors rather than running unconfirmed, matching the save gate. Removal fails closed on those clients too, so a point activated there cannot be turned off again and blocks that whole category for the rest of the session. Confirmation outcomes (`accepted`, `declined`, `unsupported_client`) are written to the audit log.
+An accepted call's result carries `confirmed_by_user: true`, so the agent, which never sees the prompt, can tell an approved write from an ungated one. Declining a confirmation returns an error and nothing is executed. Clients without elicitation support fail closed — the gated call errors rather than running unconfirmed, matching the save gate. Removal fails closed on those clients too, so a point activated there cannot be turned off again and blocks that whole category for the rest of the session. Confirmation outcomes (`accepted`, `declined`, `unsupported_client`) are written to the audit log.
 
 Points are scoped to the MCP session, not the SAP connection: they survive `sap_disconnect` and a later reconnect.
 
@@ -66,7 +66,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active transaction policy (presets and policy file: see the README's Security Considerations). A bare `/n` leaves the current transaction |
 | `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, `Save`, or `Ctrl+F` / `Ctrl+G` / `Ctrl+P`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients. A key the screen does not accept is not sent: the response lists `available_keys` |
-| `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window. `message_has_long_text` / `message_as_popup` appear when set |
+| `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window. `message_has_long_text` / `message_as_popup` appear when set, and so do `subscreens` (the sub-screens on the window as `program:dynnr`, outer first: an RF step, a tab page or a detail area, which `program` / `screen_number` do not show) and `cursor` (the ID of the field the cursor is in; a redisplay without a message, e.g. for an empty required field, moves it). Every action response carries the same screen info |
 
 ## Fields And UI Elements
 
@@ -97,10 +97,10 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_read_table` | Read rows and columns from a table or grid. With `columns_only=true` a TableControl also reports each column's `cell_type` and a `cell_id` template (`{row}` = zero-based visible row). Columns of a table without rows are flagged `name_is_title`: no cell exists yet to read the technical name from. An ALV read that cannot scroll (read-only scripting) stops at the rows on screen and reports `unread_from_row` |
+| `sap_read_table` | Read rows and columns from a table or grid. With `columns_only=true` a TableControl also reports each column's `cell_type` and a `cell_id` template (`{row}` = zero-based visible row). Columns of a table without rows are flagged `name_is_title`: no cell exists yet to read the technical name from. A TableControl's `total_rows` counts its empty lines too (SM30 pads the view): the read stops at the first empty row and reports its index as `empty_rows_from`, where the data ends. On a TableControl, `start_row` (0 included) scrolls there first; without it the read starts where the table is scrolled now, e.g. after "Position...". An ALV read that cannot scroll (read-only scripting) stops at the rows on screen and reports `unread_from_row` |
 | `sap_select_table_row` | Select a row |
 | `sap_double_click_cell` | Double-click a cell |
-| `sap_modify_cell` | Modify an editable cell |
+| `sap_modify_cell` | Modify an editable cell. On a TableControl it scrolls to the row first and refuses if the row is still not visible afterwards, instead of writing another row |
 | `sap_set_current_cell` | Set the focused cell |
 | `sap_get_column_info` | Get column names, titles, and metadata (ALV: data type and key flag; table control: cell type and cell ID template) |
 | `sap_get_current_cell` | Get the current focused cell |
@@ -121,7 +121,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_scroll_table_control` | Scroll a classic table control to a row position |
+| `sap_scroll_table_control` | Scroll a classic table control to a row position. `position` is the row SAP actually put at the top, which can differ from the one asked for (`requested_position` and a `note` then say so); cell IDs count visible rows from there |
 | `sap_get_table_control_row_info` | Read row metadata from a classic table control |
 | `sap_select_all_table_control_columns` | Select or clear all column headers in a classic table control |
 
@@ -129,8 +129,8 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`, the F4 time picker `time_picker` (with its dropdown IDs and the time shown); none is ever auto-handled. SAP's message popup is only auto-confirmed when its icon shows an information message, so a warning in any logon language is not. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are |
-| `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification. After an action the result keeps the popup's title, texts and entered values and drops its now-dead element IDs |
+| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`, the F4 time picker `time_picker` (with its dropdown IDs and the time shown); none is ever auto-handled. SAP's message popup is only auto-confirmed when its icon shows an information message, so a warning in any logon language is not. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are. SAP's confirmation popup draws its question in an HTML viewer: with the Internet Explorer browser control its text is in `texts`; with Edge (the default) the popup says `question_readable: false`, and `sap_screenshot` shows the question |
+| `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification. `cancel` presses a Cancel button or F12, never No (on a save prompt No drops the changes). When the Enter or F12 fallback leaves the popup as it was, the result is `action: "no_effect"`. After an action the result keeps the popup's title, texts and entered values and drops its now-dead element IDs |
 | `sap_get_toolbar_buttons` | List standard SAP toolbar buttons |
 | `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers (page text only with the Internet Explorer browser control; the Edge control, e.g. the F1 Performance Assistant, is reported as not readable) |
 | `sap_read_list` | Read a classic ABAP list (`WRITE` output, F4 hit lists) as lines of text, with list colours and paging. One page is ~500 label elements to discovery; this returns the lines |

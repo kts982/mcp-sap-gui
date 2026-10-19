@@ -22,8 +22,8 @@ Steps:
   a. Collect the current page of data
   b. Use `sap_scroll_table_control` to scroll to the next page (`position` = current `first_visible_row` + `rows_returned`)
   c. Read again with `sap_read_table`
-  d. Repeat until you've collected all rows or reached `total_rows`
-- Watch for padding rows (all-empty values) at the end of a page — stop collecting when you see them
+  d. Repeat until the response has `empty_rows_from` (the data ends at that row) or you reached `total_rows`
+- `total_rows` counts empty padding rows too, so it is usually more than the real entries
 
 After collecting all data:
 - Present the data as a well-formatted markdown table

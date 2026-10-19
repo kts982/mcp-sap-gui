@@ -7,12 +7,14 @@ on:
       - master
     paths:
       - "README.md"
+      - "CHANGELOG.md"
       - "docs/**"
       - "scripts/check_docs.py"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "README.md"
+      - "CHANGELOG.md"
       - "docs/**"
       - "scripts/check_docs.py"
       - ".github/workflows/docs.yml"
