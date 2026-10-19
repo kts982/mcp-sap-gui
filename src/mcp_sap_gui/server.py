@@ -289,109 +289,69 @@ async def _lifespan(server: FastMCP):
 _INSTRUCTIONS = """\
 SAP GUI automation server. Controls SAP GUI for Windows via COM scripting.
 
+## Rules (read first)
+
+- **Never guess element IDs.** Discover them on every new screen \
+(`sap_get_screen_elements`, `sap_get_toolbar_buttons`): IDs differ between \
+systems and customizations.
+- **Check `screen.active_window` after every action.** `wnd[1]` or higher is a \
+popup: read it with `sap_get_popup_window` before you go on.
+- **Confirmations.** F11 / Save always asks the user first; \
+`sap_set_confirmation_points` can add `transactions`, `batch_fields`, \
+`field_writes`, `all_writes` and `attach`. A "declined" error is a stop: do not \
+retry or route around it, tell the user. Offer `sap_preview` before significant \
+writes (batch fills, Save) so the user sees the screen and the pending values.
+
 ## Getting Started
 
-1. If SAP is already open and logged in, use `sap_connect_existing` (most common); \
-pass `system` (e.g. 'A4H') when the user named the system. \
-SAP Business Client sessions are supported too (experimental).
-2. If SAP is not open, use `sap_connect` with the system name from SAP Logon Pad.
-3. After connecting, use `sap_get_session_info` to see the current transaction/screen.
+1. SAP already logged on: `sap_connect_existing`; pass `system` (e.g. 'DEV') \
+when the user named the system. SAP Business Client sessions work too \
+(experimental).
+2. SAP not open: `sap_connect` with the SAP Logon entry.
+3. `sap_get_session_info` shows the current transaction and screen.
 
-## Screen Discovery (use this workflow on every new screen)
+## Screen Discovery
 
-1. `sap_get_screen_elements` — discovers all element IDs on the current screen. \
-Use `type_filter` (e.g. "GuiTextField,GuiCTextField") and `changeable_only=true` \
-to reduce output on complex screens.
-2. `sap_get_toolbar_buttons` — lists toolbar button IDs (system bar + app bar).
-3. `sap_read_field` — reads a specific field's value and labels.
-
-A tree docked beside the screen (view clusters in SM34 / IMG activities) is NOT \
-under `wnd[0]/usr`: step 1 reports it as `docking_containers` (e.g. `wnd[0]/shellcont`).
-
-**CRITICAL: Never guess or hallucinate element IDs.** Always discover them first \
-with the tools above. SAP field IDs vary across systems and customizations.
+`sap_get_screen_elements` with `type_filter` (e.g. "GuiTextField,GuiCTextField") \
+and `changeable_only=true` keeps the output small; `sap_read_field` reads one \
+field. A tree docked beside the screen (SM34 view clusters, IMG activities) is \
+not under `wnd[0]/usr`: discovery lists it under `docking_containers` \
+(e.g. `wnd[0]/shellcont`).
 
 ## Popup Handling
 
-Every action tool returns `screen.active_window`. If it is `wnd[1]` or higher, \
-a popup appeared. Call `sap_get_popup_window` to read popup text and buttons. \
-Always check for popups after actions that may trigger them (button presses, \
-Enter key, transaction execution, double-clicks).
+Popups often follow button presses, Enter, F8 and double-clicks. \
+`sap_get_popup_window` gives the text, the buttons, a classification and a safe \
+next step; `sap_handle_popup` acts on it.
 
-## Tables: ALV Grid vs TableControl
+## Tables
 
-`sap_read_table` auto-detects the type. The response includes `table_type`:
-- **GuiGridView (ALV)**: Standard for reports. All rows accessible via `start_row`. \
-Use `sap_get_alv_toolbar` for toolbar actions.
-- **GuiTableControl**: Standard for customizing (SPRO, SM30). Visible rows only.
+`sap_read_table` detects the type (`table_type`). Start with \
+`columns_only=true`, then fetch only `columns="COL_A,COL_B"`.
+- ALV grid (reports): page with `start_row` until `total_rows`; its toolbar is \
+`sap_get_alv_toolbar`.
+- Table control (SM30, SPRO): one read returns the visible rows; page with \
+`start_row=next_start_row` while `has_more` is true. `total_rows` counts empty \
+lines; `empty_rows_from` is where the data ends. To jump to an entry use the \
+"Position..." toolbar button, not manual scrolling.
 
-**Pagination**: Use `start_row` parameter to paginate through large tables. \
-For an ALV grid, check `total_rows` in the response to know when you've read \
-everything. A TableControl's `total_rows` counts empty lines too, and one read \
-returns at most its visible rows: page with `start_row=next_start_row` while \
-`has_more` is true. `empty_rows_from` in the response means the data ended there.
+## SPRO and Trees
 
-**Schema first**: Use `columns_only=true` to see column names before reading data. \
-Then use `columns="COL_A,COL_B"` to fetch only what you need.
+Never `sap_read_tree` SPRO (1000+ nodes). `sap_search_tree_nodes` searches \
+expanded nodes only: expand parents with \
+`sap_get_tree_node_children(expand=true)`. Run an activity with \
+`sap_click_tree_link(tree_id, node_key, "2")`; a double-click opens its \
+documentation. In a view cluster (SM34) use `double_click_tree_item` with the \
+column name (usually "Column1").
 
-**Table maintenance views (SM30-style)**: These use GuiTableControl. If you need \
-to jump to a specific entry, look for a "Position..." button in the toolbar \
-(`sap_get_toolbar_buttons`) — it opens a search dialog. Don't manually scroll.
+## Keys and Common Mistakes
 
-## SPRO / Customizing Tree Navigation
-
-SPRO uses a deep tree (1000+ nodes). **Do NOT use `sap_read_tree`** — it's too slow.
-
-1. `sap_search_tree_nodes` — find nodes by text (e.g. "Storage Type"). \
-**Note**: only searches already-expanded nodes. If you don't find a match, \
-expand parent nodes first with `sap_get_tree_node_children(expand=true)`, \
-then search again.
-2. `sap_get_tree_node_children` with `expand=true` — step through the hierarchy.
-3. **To execute an activity**: use `sap_click_tree_link(tree_id, node_key, "2")` \
-(column "2" is the execute icon). Do NOT use `sap_double_click_tree_node` — that \
-opens documentation, not the activity.
-4. After clicking, check for popups (selection screens often appear as dialogs).
-
-## Key Reference
-
-- **Enter**: Confirm / continue
-- **F3 / Back**: Go back one screen
-- **F4**: Value help on the focused field (`sap_set_focus` first). The popup's \
-classification says what opened: `list` (hit list), `date_picker`, `time_picker`, \
-or `input_required` (restriction dialog); `sap_get_workflow_guide("search_help", \
-field_id)` covers each. Dropdowns (`cmb`) have no F4: `sap_set_field` takes an \
-entry's key or text.
-- **F5 / Refresh**: Context-dependent — in table maintenance views this means \
-"New Entries", NOT refresh. Check toolbar button tooltips first.
-- **F8 / Execute**: Run report / execute selection
-- **F11 / Save**: Save (Ctrl+S equivalent)
-- **F12 / Cancel**: Cancel / close dialog
-
-## Common Mistakes to Avoid
-
-- **Guessing IDs**: Always use `sap_get_screen_elements` or `sap_get_toolbar_buttons` first.
-- **Ignoring popups**: Check `active_window` in every action response.
-- **F5 in table maintenance**: F5 means "New Entries", not refresh.
-- **double_click_tree_node in SPRO**: Opens docs, not activities. Use `click_tree_link`.
-- **double_click_tree_node in a view cluster (SM34)**: Does nothing. Use \
-`double_click_tree_item` with the tree's column name (usually "Column1").
-- **Scrolling TableControls manually**: Use `start_row` in `sap_read_table` or \
-the "Position..." button instead.
-- **Reading huge trees**: Use `search_tree_nodes` + `get_tree_node_children`, \
-not `read_tree` on large trees like SPRO.
-- **Writing without showing the user**: Offer `sap_preview` before significant \
-writes (batch field fills, F11 / Save) so the user can see the screen and the \
-pending values first — it is read-only and never saves.
-
-## Confirmation Points
-
-Some operations are gated: the server pauses the call and asks the user to \
-approve it. `save` (F11 / Save key, Save toolbar button) is always gated; the \
-user or the deployment can add `transactions`, `batch_fields`, `field_writes`, \
-`all_writes` or `attach` (the user picks the session) via \
-`sap_set_confirmation_points`. Expect a prompt on those \
-calls, call `sap_preview` first so the user sees what is pending, and treat a \
-"declined by user" error as a stop signal — do not retry or route around it.
+Enter confirms, F3 goes back, F8 executes, F11 saves, F12 cancels. F4 is value \
+help on the focused field (`sap_set_focus` first): the popup's classification \
+says what opened (`list`, `date_picker`, `time_picker`, `input_required`), and \
+`sap_get_workflow_guide("search_help", field_id)` covers each. Dropdowns (`cmb`) \
+have no F4: `sap_set_field` takes the entry's key or text. In table maintenance \
+F5 means "New Entries", not refresh: check the toolbar tooltips first.
 """
 
 
@@ -1016,7 +976,7 @@ async def sap_connect(
     return _to_dict(await _com(lambda: c.connect(**kwargs)))
 
 
-# "A4H(2)/001 " in front of a window title: the system, session number and
+# "DEV(2)/100 " in front of a window title: the system, session number and
 # client, which the attach dialog shows in their own columns already.
 _TITLE_PREFIX_RE = re.compile(r"^\S+\(\d+\)/\d+\s+")
 _SYSTEM_ID_RE = re.compile(r"^[A-Z0-9]{3}$")
@@ -1024,13 +984,13 @@ _CLIENT_RE = re.compile(r"^\d{3}$")
 
 
 def _parse_system(system: str) -> tuple[str, str | None]:
-    """'A4H' or 'A4H/001' -> ('A4H', None) or ('A4H', '001')."""
+    """'DEV' or 'DEV/100' -> ('DEV', None) or ('DEV', '100')."""
     sid, _, client = str(system).strip().upper().partition("/")
     sid, client = sid.strip(), client.strip()
     if not _SYSTEM_ID_RE.fullmatch(sid) or (client and not _CLIENT_RE.fullmatch(client)):
         raise ValueError(
-            f"system={system!r}: expected a system ID such as 'A4H', or "
-            "system and client such as 'A4H/001'"
+            f"system={system!r}: expected a system ID such as 'DEV', or "
+            "system and client such as 'DEV/100'"
         )
     return sid, client or None
 
@@ -1049,7 +1009,7 @@ def _attach_candidates(connections: list) -> list[dict]:
 
 
 def _attach_label(sess: dict) -> str:
-    """'A4H (2) / 001 / DEVELOPER - SE16 - Data Browser: Initial Screen'."""
+    """'DEV (2) / 100 / TESTUSER - SE16 - Data Browser: Initial Screen'."""
     number = sess.get("session_number")
     head = f"{sess.get('system', '')}" + (f" ({number})" if number else "")
     title = _TITLE_PREFIX_RE.sub("", str(sess.get("title") or "")).strip()
@@ -1143,8 +1103,8 @@ async def sap_connect_existing(
     embedded SAP GUI sessions. Indexes come from sap_list_connections; a
     connection with scripting_disabled=true cannot be attached.
 
-    system: pass it only when the user named the SAP system, as 'A4H' or
-    'A4H/001' (system/client). One open session on it is attached; several,
+    system: pass it only when the user named the SAP system, as 'DEV' or
+    'DEV/100' (system/client). One open session on it is attached; several,
     or none, return an error that lists what is open. The indexes are then
     ignored.
 
@@ -1218,7 +1178,7 @@ async def sap_list_connections(ctx: Context) -> dict:
     (`host`: saplogon | sapguiserver). A connection with no sessions and
     `scripting_disabled: true` means the server parameter sapgui/user_scripting
     is off, so no session can be read. Each session has its system, client,
-    user, transaction, `session_number` (the "(2)" in "A4H(2)") and window
+    user, transaction, `session_number` (the "(2)" in "DEV(2)") and window
     `title`."""
     c = _ctrl(ctx)
     connections = await _com(c.list_connections)

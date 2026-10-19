@@ -1006,6 +1006,18 @@ class TestInstructionsAndResource:
         """Instructions explicitly warn against guessing element IDs."""
         assert "Never guess" in srv.mcp.instructions
 
+    def test_safety_rules_come_first_and_the_text_stays_short(self, srv):
+        """Clients cut long server instructions (Claude Code at about 4,100
+        characters in 2026-10): the confirmation rule used to start at 4,989
+        and never reached agents. The rules must come first, and the whole
+        text must stay well under the cut."""
+        instructions = srv.mcp.instructions
+        assert len(instructions) < 3500
+        rules = instructions.split("## Getting Started")[0]
+        assert "Never guess" in rules
+        assert "active_window" in rules
+        assert '"declined" error is a stop' in rules
+
     def test_resource_registered(self, srv):
         """The docs://sap-gui-guide resource is registered."""
         import asyncio

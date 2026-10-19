@@ -886,7 +886,7 @@ class SAPGUIControllerBase:
                         "system": info.SystemName,
                         "client": info.Client,
                     }
-                    # The number SAP shows in the title, "A4H(2)", and the
+                    # The number SAP shows in the title, "DEV(2)", and the
                     # window title: together they tell several sessions on
                     # one system apart.
                     try:

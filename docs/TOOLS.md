@@ -56,7 +56,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | Tool | Description |
 |------|-------------|
 | `sap_connect` | Connect to an SAP system by SAP Logon entry name. Credentials resolved from `.env` file — passwords never appear in MCP |
-| `sap_connect_existing` | Attach to an already open SAP session (SAP Logon or SAP Business Client), by `connection_index` / `session_index` or by `system` (`A4H` or `A4H/001`) when the user named it: one open session on it is attached, several or none return an error listing what is open. The response says how the session was chosen (`chosen_by`), and the audit log records an `attach` event |
+| `sap_connect_existing` | Attach to an already open SAP session (SAP Logon or SAP Business Client), by `connection_index` / `session_index` or by `system` (`DEV` or `DEV/100`) when the user named it: one open session on it is attached, several or none return an error listing what is open. The response says how the session was chosen (`chosen_by`), and the audit log records an `attach` event |
 | `sap_list_connections` | List all currently open SAP connections and sessions, incl. SAP Business Client; reports `host` and `scripting_disabled`, and per session its system, client, user, transaction, `session_number` and window `title` |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen, plus the SAP GUI release (`sap_gui_version`, e.g. `8.10 PL0`) and whether the server allows only read-only scripting (`scripting_read_only`) |
 | `sap_disconnect` | Disconnect from the current SAP session (detaches attached sessions, closes owned sessions) |

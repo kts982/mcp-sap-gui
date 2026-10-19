@@ -184,7 +184,7 @@ def test_a_disabled_connection_is_not_a_candidate(attach):
     assert controller.attached == []
 
 
-@pytest.mark.parametrize("bad", ["", "A4", "A4H/1", "A4H/0010", "A 4H"])
+@pytest.mark.parametrize("bad", ["", "DE", "DEV/1", "DEV/0010", "D EV"])
 def test_system_must_look_like_a_system_id(attach, bad):
     attach([_connections(DEV_1)])
     with pytest.raises(ValueError, match="expected a system ID"):
