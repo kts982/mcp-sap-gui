@@ -7,6 +7,21 @@ Every release and what changed for someone running the server. The [GitHub relea
 ### Added
 
 - **Which radio button or checkbox is selected.** `sap_read_field`, `sap_get_popup_window` (`interactive_elements`) and `sap_get_screen_elements` report `selected` for radio buttons and checkboxes. It is read over COM for each of them, never through GetObjectTree, which crashes SAP GUI 8.00 when asked for it. A changeable radio button or checkbox that is selected in a popup is listed in `prefilled_inputs` with the notice, like a pre-filled field: a popup can open with an option already chosen (SCAL's holiday dialog: "with fixed date").
+- **`--strict-errors`** ([#28](https://github.com/kts982/mcp-sap-gui/pull/28), by [@nelz0n](https://github.com/nelz0n)). Most SAP failures come back as a normal result with an `error` key, so a client that checks only `isError` treats a refused write as done. With `--strict-errors` (or `MCP_SAP_GUI_STRICT_ERRORS=1`) such a result, and a `sap_set_batch_fields` call with a field that was not set, is returned with `isError: true` and its structured content unchanged. Off by default. Inside a `--code-mode` script `call_tool` still returns the result, so scripts check `error` themselves.
+- **Read results say when they are incomplete** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29), by [@nelz0n](https://github.com/nelz0n)). A table-control read adds `next_start_row` and `has_more`, echoes `start_row`, and adds a `start_row_note` when the table could not be scrolled to the requested row. `sap_read_tree` adds `available_nodes` and `truncated`, `sap_search_tree_nodes` adds `searched_nodes` and `stopped_early`, and `sap_read_table`, `sap_read_tree` and `sap_search_tree_nodes` add `capped_to` when the server lowered the limit you asked for.
+
+### Changed
+
+- **`sap_set_field` refuses a value that does not fit before writing** ([#28](https://github.com/kts982/mcp-sap-gui/pull/28)). A value longer than the field (`MaxLength`) or a field that is not changeable gives `status: "rejected"` with the reason, and `max_length` / `value_length` for a value that is too long; the field keeps its content. Before, both came back as "Could not set field". `sap_set_batch_fields` explains a refused field the same way.
+- **The audit log marks failed results as errors** ([#28](https://github.com/kts982/mcp-sap-gui/pull/28)). A result with an `error` key, or a batch with a field that was not set, is logged with `status: "error"` and an `error_msg`, at WARNING, in every mode. Before, only an exception was. Counts of errors in existing audit logs go up.
+- **A declined save or popup answer carries `error`** ([#28](https://github.com/kts982/mcp-sap-gui/pull/28)): "Save declined by user (…). Nothing was sent." / "Popup answer declined by user (…). Nothing was pressed.", next to the unchanged `status: "cancelled"`.
+- **`sap_set_batch_fields(validate=true)` no longer presses Enter when a field failed** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)): Enter on a half-filled screen checks only what was set. `validation` then says `performed: false` with the reason. `validate_partial=true` keeps the old behaviour.
+
+### Fixed
+
+- **Table-control paging skipped rows** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)). One read returns at most the visible rows, but the guidance stepped `start_row` by `max_rows`, so every row between the visible ones and the next step was missed. Page with `start_row=next_start_row` while `has_more` is true. Checked live: an SM30 view with 137 entries reads every entry once.
+- **A blank New Entries line with a dropdown read as an entry** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)). The dropdown's empty entry reads as a single space; a whitespace-only cell now counts as blank, so `empty_rows_from` marks where the data ends.
+- **`validation.performed` was true when Enter was refused or failed** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)). It is now false, with the error.
 
 ## 0.5.2 — 2026-10-18
 
