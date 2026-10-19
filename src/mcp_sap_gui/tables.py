@@ -21,9 +21,13 @@ def _is_blank_cell(value: Any) -> bool:
     An unchecked checkbox reads False and counts as blank. Padding rows in
     display / change mode have no cells at all, but the blank lines of SM30
     New Entries do, unchecked checkboxes included (seen live, V_TTZZ): with
-    False as data every blank line read as an entry.
+    False as data every blank line read as an entry. A whitespace-only value
+    counts too: the empty entry of a dropdown reads as its key, a single
+    space (see _apply_combobox_selection).
     """
-    return value is None or value == "" or value is False
+    if value is None or value is False:
+        return True
+    return isinstance(value, str) and not value.strip()
 
 
 class TablesMixin:
@@ -240,7 +244,9 @@ class TablesMixin:
             start_row: Row index to start reading from. For ALV: skips
                 the first N rows (None = 0). For TableControl: scrolls to
                 that row first, 0 included; None reads from the current
-                scroll position (e.g. after "Position...").
+                scroll position (e.g. after "Position..."). The result's
+                ``first_visible_row`` is where the read really started, and
+                ``next_start_row`` / ``has_more`` say how to read on.
 
         Returns:
             Dict with table data and metadata
@@ -376,6 +382,31 @@ class TablesMixin:
             )
         return result
 
+    @staticmethod
+    def _start_row_note(start_row: Optional[int], start_position: int,
+                        scroll_maximum: Optional[int],
+                        scroll_error: Optional[str]) -> Optional[str]:
+        """Why a table-control read did not start at the requested row."""
+        if start_row is None or start_position == start_row:
+            return None
+        if scroll_error is not None:
+            return (
+                f"start_row {start_row} was not reached: the scroll failed "
+                f"({scroll_error}), so the rows are read from row "
+                f"{start_position}. Read-only scripting allows no scrolling."
+            )
+        if scroll_maximum is not None and start_row > scroll_maximum:
+            return (
+                f"start_row {start_row} is past the scrollbar maximum "
+                f"{scroll_maximum}, so the rows are read from row "
+                f"{start_position} and can repeat rows of the previous page "
+                "(compare _absolute_row_index)."
+            )
+        return (
+            f"start_row {start_row} was not reached: the table scrolled to "
+            f"row {start_position}."
+        )
+
     def _read_table_control(self, table, table_id: str, max_rows: int,
                             col_filter: List[str] = None,
                             columns_only: bool = False,
@@ -393,6 +424,12 @@ class TablesMixin:
         the actual data), so reading stops early when an all-empty row is
         encountered.  Its absolute index is returned as ``empty_rows_from``:
         the data ends there, whatever RowCount says (SM30: 51 vs 14 entries).
+
+        Paging: ``first_visible_row`` is where the read started,
+        ``next_start_row`` the start_row of the next page, and ``has_more``
+        whether one may exist. One read returns at most VisibleRowCount
+        rows, so ``start_row += max_rows`` skips rows. ``start_row_note``
+        explains a read that did not start at the requested row.
         """
         all_columns_info = self._get_table_control_columns(
             table, with_cell_ids=columns_only,
@@ -418,8 +455,15 @@ class TablesMixin:
 
         data = []
         empty_rows_from = None
+        scroll_maximum = None
+        scroll_error = None
+        rows_to_read = 0
         if total_rows > 0 and all_col_count > 0:
             scrollbar = table.VerticalScrollbar
+            try:
+                scroll_maximum = int(scrollbar.Maximum)
+            except Exception:
+                scroll_maximum = None
 
             # Scroll to start_row if one was given: 0 means the first row,
             # not "wherever the table is" (that is start_row=None).
@@ -433,8 +477,11 @@ class TablesMixin:
                         # invalidates existing references — re-acquire.
                         table = self._session.findById(full_id)
                         scrollbar = table.VerticalScrollbar
-                    except Exception:
-                        pass  # best-effort scroll
+                    except Exception as e:
+                        # Best-effort scroll; reported in start_row_note.
+                        scroll_error = self._sanitize_error_message(
+                            e, "Could not scroll the table control",
+                        )
             start_position = scrollbar.Position
 
             if not columns_only:
@@ -486,10 +533,30 @@ class TablesMixin:
             "column_info": columns_info,
             "data": data,
         }
+        if start_row is not None:
+            result["start_row"] = start_row
         if empty_rows_from is not None:
             result["empty_rows_from"] = empty_rows_from
         if columns_only:
             result["columns_only"] = True
+        else:
+            result["next_start_row"] = start_position + len(data)
+            # Not derived from total_rows: RowCount counts padding rows.
+            result["has_more"] = bool(
+                rows_to_read > 0
+                and empty_rows_from is None
+                and len(data) == rows_to_read
+                and (
+                    rows_to_read < visible_rows
+                    or scroll_maximum is None
+                    or start_position < scroll_maximum
+                )
+            )
+        start_row_note = self._start_row_note(
+            start_row, start_position, scroll_maximum, scroll_error,
+        )
+        if start_row_note:
+            result["start_row_note"] = start_row_note
         if any(c.get("name_is_title") for c in columns_info):
             result["note"] = (
                 "The table has no rows, so technical column names are not "

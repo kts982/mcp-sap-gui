@@ -187,6 +187,11 @@ sap_read_table("{table_id}", columns="COL_A,COL_B,COL_C", start_row=200, max_row
 Stop when `start_row >= total_rows` from step 1, when `rows_returned` is 0, or \
 when the response has `empty_rows_from` (GuiTableControl: the data ends there).
 
+For a **GuiTableControl** page differently: one call returns at most the visible
+rows, so pass the previous response's `next_start_row` as `start_row` and stop when
+`has_more` is false. `first_visible_row` is where each page really started, and
+`start_row_note` says why when it is not the row asked for.
+
 ## Step 4 — Verify completeness
 Compare the total rows read against `total_rows` from step 1 (GuiTableControl: \
 against `empty_rows_from`). If they don't match, you may have missed rows — check \
@@ -448,7 +453,8 @@ sap_read_table("<table_id>", max_rows=50)
 has `empty_rows_from`: the entries end at that row. The position text under the \
 table ("Entry 1 of 210") gives the count too.
 - To jump to an entry use the **Position...** button (a popup asks for the key), \
-not manual scrolling. For everything else page with `start_row`.
+not manual scrolling. For everything else page with `start_row`: pass the previous \
+`next_start_row` and stop when `has_more` is false.
 - An EMPTY view in display mode has no cells, so technical column names do not exist \
 yet: columns are flagged `name_is_title`. Read the schema again once a row exists.
 
@@ -486,8 +492,9 @@ sap_set_batch_fields({{"<cell_id row 0>": "...", "<cell_id row 1>": "..."}}, val
 ```
 - Only VISIBLE rows can be filled. When the visible rows are used up, scroll with \
 `sap_scroll_table_control` and read the schema again (row 0 is then the first visible row).
-- `validate=true` presses Enter: check `message_type` (E = the row was rejected) before \
-filling more rows. Offer `sap_preview` before saving a larger batch.
+- `validate=true` presses Enter: check `failed == 0`, `validation.performed` and \
+`message_type` (E = the row was rejected) before filling more rows. When a cell \
+failed, Enter is not pressed. Offer `sap_preview` before saving a larger batch.
 
 ## Step 5 — Save
 - `F11` / Save asks the user for confirmation first.
