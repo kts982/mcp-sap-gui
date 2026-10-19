@@ -41,13 +41,12 @@ from .confirmation import (
     SAVE_POINT,
     SETTABLE_POINTS,
     ConfirmationMiddleware,
+    ask_user,
     build_relax_prompt,
     effective_points,
     log_attach_event,
     log_confirmation_event,
-    no_dialog_note,
     points_with_provenance,
-    timed_elicit,
 )
 from .controller import (
     _DEAD_SESSION_HRESULTS,
@@ -890,16 +889,15 @@ async def _elicit_save(ctx: Context, message: str,
                        tool: str = "sap_send_key") -> tuple[str, str] | None:
     """Ask the user to confirm a save.
 
-    Returns ``None`` if the user accepted (caller should proceed), else the
-    elicitation action (``decline`` / ``cancel``) and a note that is empty
-    unless the client answered without showing a dialog (no_dialog_note).
+    Returns ``None`` if a person accepted (caller should proceed), else the
+    action (``decline`` / ``cancel``) and a note that is empty unless the
+    client answered without showing a dialog (confirmation.ask_user).
     Raises ``ValueError`` if the client does not support elicitation.
     """
     try:
         # Shown as a checkbox (CLI): tick it and Accept to save.
-        result, elapsed = await timed_elicit(ctx, message=message,
-                                             response_type=bool,
-                                             response_title="Yes, save")
+        answer = await ask_user(ctx, points=SAVE_POINT, tool=tool,
+                                message=message, response_title="Yes, save")
     except McpError as exc:
         log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
         raise ValueError(
@@ -907,12 +905,9 @@ async def _elicit_save(ctx: Context, message: str,
             f"support elicitation: {exc}"
         ) from exc
 
-    if result.action == "accept" and result.data is True:
-        log_confirmation_event(SAVE_POINT, tool, "accepted", elapsed)
+    if answer.yes:
         return None  # proceed
-
-    log_confirmation_event(SAVE_POINT, tool, "declined", elapsed)
-    return result.action, no_dialog_note(elapsed)
+    return answer.action, answer.note
 
 
 async def _confirm_save(ctx: Context, key: str) -> dict | None:
@@ -1099,10 +1094,17 @@ async def _pick_session(ctx: Context, candidates: list[dict],
             title += f" [connection {sess['connection_index']}]"
         titles.add(title)
         options[f"{sess['connection_index']}/{sess['index']}"] = {"title": title}
+    def is_option(choice) -> bool:
+        return choice in options
+
     try:
-        result, elapsed = await timed_elicit(
-            ctx, message=message, response_type=options,
-            response_title="SAP session",
+        # A client that shows the options as a text box lets the user type
+        # anything, and fastmcp passes it through for titled options: an
+        # accepted answer that is no option is refused, not taken as a no.
+        answer = await ask_user(
+            ctx, points=ATTACH_POINT, tool="sap_connect_existing",
+            message=message, response_type=options,
+            response_title="SAP session", is_yes=is_option, is_valid=is_option,
         )
     except McpError as exc:
         log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
@@ -1117,23 +1119,14 @@ async def _pick_session(ctx: Context, candidates: list[dict],
         log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
                                "invalid_answer")
         raise ValueError(_NOT_AN_OPTION) from exc
-    choice = getattr(result, "data", None)
-    if result.action == "accept" and choice not in options:
-        # A client that shows the options as a text box lets the user type
-        # anything; fastmcp passes it through for titled options.
-        log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
-                               "invalid_answer", elapsed)
+    if answer.action == "invalid":
         raise ValueError(_NOT_AN_OPTION)
-    if result.action != "accept":
-        log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "declined",
-                               elapsed)
+    if not answer.yes:
         raise ValueError(
-            f"Attach declined by user ({result.action}). Nothing was "
-            f"attached.{no_dialog_note(elapsed)}"
+            f"Attach declined by user ({answer.action}). Nothing was "
+            f"attached.{answer.note}"
         )
-    log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "accepted",
-                           elapsed)
-    return candidates[list(options).index(choice)]
+    return candidates[list(options).index(answer.data)]
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
@@ -2449,10 +2442,11 @@ async def sap_set_confirmation_points(
     note = ""
     if removals:
         try:
-            result, elapsed = await timed_elicit(
+            answer = await ask_user(
                 ctx,
+                points=removals,
+                tool="sap_set_confirmation_points",
                 message=build_relax_prompt(removals),
-                response_type=bool,
                 response_title="Yes, turn it off",
             )
         except McpError as exc:
@@ -2466,15 +2460,9 @@ async def sap_set_confirmation_points(
                 f"client does not support elicitation: {exc}"
             ) from exc
 
-        accepted = result.action == "accept" and getattr(result, "data", None) is True
-        for point in removals:
-            log_confirmation_event(
-                point, "sap_set_confirmation_points",
-                "accepted" if accepted else "declined", elapsed,
-            )
-        if not accepted:
+        if not answer.yes:
             declined = removals
-            note = no_dialog_note(elapsed)
+            note = answer.note
 
     stored = (requested | set(declined)) - floor
     _session_mgr.set_confirmation_points(key, stored)

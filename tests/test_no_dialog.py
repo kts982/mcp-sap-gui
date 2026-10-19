@@ -31,16 +31,18 @@ def real_threshold(monkeypatch):
 class FakeCtx:
     """Answers at once, like the desktop app did, or after *delay* seconds."""
 
-    def __init__(self, action: str = "decline", delay: float = 0.0) -> None:
+    def __init__(self, action: str = "decline", delay: float = 0.0,
+                 data: Any = None) -> None:
         self.action = action
         self.delay = delay
+        self.data = data
         self.prompts: List[str] = []
 
     async def elicit(self, message: str, response_type: Any = None, **_: Any):
         self.prompts.append(message)
         if self.delay:
             await asyncio.sleep(self.delay)
-        return SimpleNamespace(action=self.action, data=None)
+        return SimpleNamespace(action=self.action, data=self.data)
 
 
 def _confirmations(caplog):
@@ -182,3 +184,93 @@ def test_yes_no_prompts_are_labelled(monkeypatch):
 
     asyncio.run(run())
     assert seen == [{"type": "boolean", "title": "Yes, run it"}]
+
+
+# --- a yes that no person gave is refused ----------------------------------
+
+def test_fast_yes_to_a_save_is_refused(real_threshold, caplog):
+    caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")
+
+    declined = asyncio.run(
+        server._confirm_save(FakeCtx("accept", data=True), "F11"))
+
+    assert declined is not None, "a yes in 0 ms must not save"
+    assert declined["status"] == "cancelled"
+    assert "answered yes in" in declined["error"]
+    assert "no person approved this" in declined["error"]
+    [event] = _confirmations(caplog)
+    assert event["outcome"] == "declined"
+    assert event["client_answer"] == "accept"
+    assert event["no_dialog"] is True
+
+
+def test_slow_yes_to_a_save_goes_through(monkeypatch, caplog):
+    monkeypatch.setattr(confirmation, "NO_DIALOG_MS", 30.0)
+    caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")
+
+    accepted = asyncio.run(server._confirm_save(
+        FakeCtx("accept", delay=0.05, data=True), "F11"))
+
+    assert accepted is None
+    [event] = _confirmations(caplog)
+    assert event["outcome"] == "accepted"
+    assert "client_answer" not in event
+
+
+def test_fast_yes_at_a_confirmation_point_runs_nothing(real_threshold, monkeypatch):
+    calls = []
+
+    class Controller:
+        def set_field(self, field_id, value):
+            calls.append((field_id, value))
+            return {"status": "ok"}
+
+    monkeypatch.setattr(server, "_ctrl", lambda ctx: Controller())
+    monkeypatch.setattr(server, "config", server.ServerConfig(
+        confirmation_floor=["field_writes"]))
+
+    async def accept_now(message, response_type, params, context):
+        return ElicitResult(action="accept", content=response_type(value=True))
+
+    async def run():
+        async with Client(server.mcp, elicitation_handler=accept_now) as client:
+            return await client.call_tool(
+                "sap_set_field", {"field_id": "wnd[0]/usr/txtX", "value": "1"},
+                raise_on_error=False)
+
+    result = asyncio.run(run())
+
+    assert result.is_error
+    assert "answered yes in" in result.content[0].text
+    assert calls == []
+
+
+def test_fast_yes_to_removing_a_point_keeps_it(real_threshold, monkeypatch):
+    from mcp_sap_gui.session_manager import SessionManager
+
+    mgr = SessionManager()
+    monkeypatch.setattr(server, "_session_mgr", mgr)
+    monkeypatch.setattr(server, "config", server.ServerConfig())
+    ctx = SimpleNamespace(session_id="chat-1", session=object(),
+                          elicit=FakeCtx("accept", data=True).elicit)
+    mgr.set_confirmation_points("chat-1", {"field_writes"})
+
+    result = asyncio.run(server.sap_set_confirmation_points([], ctx))
+
+    assert result["removal_declined"] == ["field_writes"]
+    assert "field_writes" in result["active"]
+    assert "answered yes in" in result["message"]
+
+
+def test_fast_pick_in_the_attach_picker_is_refused(real_threshold):
+    candidates = [{"index": 0, "id": "/app/con[0]/ses[0]", "system": "DEV",
+                   "client": "100", "user": "TESTUSER", "transaction": "SE16",
+                   "session_number": 1, "title": "DEV(1)/100 Data Browser",
+                   "connection_index": 0}]
+
+    with pytest.raises(ValueError) as exc:
+        asyncio.run(server._pick_session(
+            FakeCtx("accept", data="0/0"), candidates, "Which?"))
+
+    assert "answered yes in" in str(exc.value)
+    assert "Nothing was attached" in str(exc.value)

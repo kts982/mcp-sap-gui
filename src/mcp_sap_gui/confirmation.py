@@ -29,8 +29,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import mcp.types
 from fastmcp.exceptions import ToolError
@@ -293,14 +294,30 @@ def no_dialog_note(elapsed_ms: float) -> str:
     )
 
 
+def fast_yes_note(elapsed_ms: float) -> str:
+    """The sentence for a yes that came back too fast for a person.
+
+    No person can read a dialog, tick its box and press Accept this fast, so
+    the yes came from the client (or something answering for it) and is
+    refused: a gate exists so that a person approves.
+    """
+    return (
+        f" The client answered yes in {elapsed_ms:.0f} ms without showing a "
+        "dialog, so no person approved this, and it counts as declined. Tell "
+        "the user, and use a client that shows MCP confirmation dialogs."
+    )
+
+
 def log_confirmation_event(point: str, tool: str, outcome: str,
-                           elapsed_ms: float | None = None) -> None:
+                           elapsed_ms: float | None = None,
+                           client_answer: str | None = None) -> None:
     """Emit a confirmation outcome to the audit log.
 
     AuditMiddleware records only whether the call failed, not which point
     prompted or what the user answered — this is the only record of that.
     ``elapsed_ms`` is how long the answer took; ``no_dialog`` marks one that
-    came back faster than a person can answer (``NO_DIALOG_MS``).
+    came back faster than a person can answer (``NO_DIALOG_MS``), and
+    ``client_answer`` what the client said when that answer was overruled.
     """
     line: dict[str, Any] = {
         "event": "confirmation",
@@ -313,7 +330,79 @@ def log_confirmation_event(point: str, tool: str, outcome: str,
         line["elapsed_ms"] = round(elapsed_ms, 1)
         if elapsed_ms < NO_DIALOG_MS:
             line["no_dialog"] = True
+    if client_answer is not None:
+        line["client_answer"] = client_answer
     audit_logger.info(json.dumps(line, default=str))
+
+
+@dataclass
+class Answer:
+    """What ask_user found out.
+
+    ``yes`` is true only when a person approved (or picked a valid option).
+    ``action`` is the client's action, ``decline`` for an overruled fast yes,
+    or ``invalid`` for an accepted answer that is not one of the options.
+    ``note`` is empty when a person answered; otherwise it explains why no
+    person did, for the caller to append to its error.
+    """
+
+    yes: bool
+    action: str
+    data: Any
+    elapsed_ms: float
+    note: str
+
+
+def _is_true(data: Any) -> bool:
+    return data is True
+
+
+async def ask_user(
+    ctx: Any,
+    *,
+    points: str | Iterable[str],
+    tool: str,
+    message: str,
+    response_type: Any = bool,
+    response_title: str | None = None,
+    is_yes: Callable[[Any], bool] = _is_true,
+    is_valid: Callable[[Any], bool] | None = None,
+) -> Answer:
+    """Ask the user one question; the same rules for every gate.
+
+    - The answer is timed (``timed_elicit``). An answer faster than
+      ``NO_DIALOG_MS`` came from the client, not a person: a decline gets
+      ``no_dialog_note``, and a yes is refused with ``fast_yes_note``.
+    - ``is_yes(data)`` decides what an accepted answer means (a ticked box
+      by default). ``is_valid(data)``, when given, separates a wrong answer
+      (``action: invalid``) from a no.
+    - Every outcome is written to the audit log, one line per point.
+    - ``McpError`` (a client without elicitation) is not caught: each gate
+      fails closed with its own message.
+    """
+    point_list = [points] if isinstance(points, str) else list(points)
+    kwargs: dict[str, Any] = {"message": message, "response_type": response_type}
+    if response_title is not None:
+        kwargs["response_title"] = response_title
+    result, elapsed = await timed_elicit(ctx, **kwargs)
+    data = getattr(result, "data", None)
+    accepted = result.action == "accept"
+
+    def log(outcome: str, client_answer: str | None = None) -> None:
+        for point in point_list:
+            log_confirmation_event(point, tool, outcome, elapsed, client_answer)
+
+    if accepted and is_valid is not None and not is_valid(data):
+        log("invalid_answer")
+        return Answer(False, "invalid", data, elapsed, "")
+    if accepted and is_yes(data):
+        if elapsed < NO_DIALOG_MS:
+            log("declined", client_answer="accept")
+            return Answer(False, "decline", data, elapsed, fast_yes_note(elapsed))
+        log("accepted")
+        return Answer(True, "accept", data, elapsed, "")
+    log("declined")
+    return Answer(False, result.action, data, elapsed, no_dialog_note(elapsed))
 
 
 def log_attach_event(session: Mapping[str, Any], chosen_by: str) -> None:
@@ -417,10 +506,11 @@ class ConfirmationMiddleware(Middleware):
         self._precheck(tool_name, args, ctx)
 
         try:
-            result, elapsed = await timed_elicit(
+            answer = await ask_user(
                 ctx,
+                points=point,
+                tool=tool_name,
                 message=build_prompt(tool_name, args, point),
-                response_type=bool,
                 # The CLI shows the answer as a checkbox: without a title it
                 # reads "Value". Only a ticked box with Accept proceeds.
                 response_title="Yes, run it",
@@ -433,12 +523,9 @@ class ConfirmationMiddleware(Middleware):
                 f"client does not support elicitation: {exc}"
             ) from exc
 
-        if result.action == "accept" and getattr(result, "data", None) is True:
-            log_confirmation_event(point, tool_name, "accepted", elapsed)
+        if answer.yes:
             return _mark_confirmed(await call_next(context))
-
-        log_confirmation_event(point, tool_name, "declined", elapsed)
         raise ToolError(
             f"{tool_name} declined by user at confirmation point '{point}' "
-            f"({result.action}). Nothing was executed.{no_dialog_note(elapsed)}"
+            f"({answer.action}). Nothing was executed.{answer.note}"
         )
