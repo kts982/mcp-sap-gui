@@ -46,7 +46,7 @@ SESSION_COMMANDS: Dict[str, str] = {
           "without asking",
     "END": "/nend logs off and closes every session of the connection, "
            "after one confirmation popup",
-    "/I": "/i closes the current session",
+    "/I": "/i closes the current session, /i<n> the session with that number",
 }
 
 # Shared by every preset except "strict" (which blocks everything anyway).

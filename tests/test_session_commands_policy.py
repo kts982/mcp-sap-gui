@@ -48,9 +48,19 @@ def default_policy(monkeypatch):
 
 @pytest.mark.parametrize("raw, canonical", [
     ("/nex", "EX"), ("/NEX", "EX"), ("/nend", "END"), ("/i", "/I"),
+    # /i with a session number: /i3 closes session 3 (live, 8.10), and
+    # "/i 2" closes the current session.
+    ("/i3", "/I"), ("/I12", "/I"), ("/i 2", "/I"), ("/i  12", "/I"),
+    ("=/i3", "/I"),
 ])
 def test_normalizer_gives_session_command_forms(raw, canonical):
     assert _normalize_transaction_code(raw) == canonical
+
+
+def test_namespaced_codes_are_not_session_commands():
+    assert _normalize_transaction_code("/IWFND/MAINT_SERVICE") == (
+        "/IWFND/MAINT_SERVICE"
+    )
 
 
 # --- presets -----------------------------------------------------------------
@@ -77,13 +87,13 @@ def test_policy_file_can_allow_a_session_command(monkeypatch, tmp_path):
 
 # --- both routes refuse them --------------------------------------------------
 
-@pytest.mark.parametrize("raw", ["/nex", "/nend", "/i", "EX", "/n END"])
+@pytest.mark.parametrize("raw", ["/nex", "/nend", "/i", "EX", "/n END", "/i3"])
 def test_execute_transaction_route_refuses(default_policy, raw):
     with pytest.raises(ValueError, match="is a session command, not a transaction"):
         _enforce_transaction_policy(raw)
 
 
-@pytest.mark.parametrize("raw", ["/nex", "/nend", "/i"])
+@pytest.mark.parametrize("raw", ["/nex", "/nend", "/i", "/i3", "/i 2", "=/i3"])
 def test_command_field_route_refuses(default_policy, raw):
     with pytest.raises(ValueError, match=r"session command.*attempted via command field"):
         _check_okcode_bypass(OKCD, raw)

@@ -94,6 +94,11 @@ _DEFAULT_BLOCKED_TRANSACTIONS = list(PRESETS[DEFAULT_PRESET]["block"])
 
 _TRANSACTION_PREFIX_RE = re.compile(r"^(?:/(?:N|O|\*)\s*)+", re.IGNORECASE)
 _TRANSACTION_CODE_RE = re.compile(r"^/?[A-Z0-9_]+(?:/[A-Z0-9_]+)*$")
+# /i with an optional session number. Live (SAP GUI 8.10): /i3 closed session
+# 3 from session 4, and "/i 2" closed the current session (the number after a
+# space is ignored). No transaction code has this shape: a namespaced code
+# always has a second slash.
+_SESSION_CLOSE_RE = re.compile(r"/I(?:\s*\d+)?")
 # Command-field prefixes that start a transaction: /n, /o, /* and a bare *.
 # A value without one of them is a function code (%PC, &ALL, BACK) or a code.
 _OKCODE_START_PREFIX_RE = re.compile(r"^(?:(?:/(?:N|O|\*)|\*)\s*)+", re.IGNORECASE)
@@ -140,6 +145,8 @@ def _normalize_transaction_code(raw: str, *, strict: bool = True) -> str | None:
             raise ValueError("Transaction code cannot be empty")
         return None
 
+    if _SESSION_CLOSE_RE.fullmatch(value):
+        return "/I"
     if not _TRANSACTION_CODE_RE.fullmatch(value):
         if strict:
             raise ValueError(
