@@ -240,12 +240,15 @@ class DiscoveryMixin:
     _POPUP_LIST_TEXT_LINES = 20
 
     def _popup_offers_cancel(self, buttons: List[Dict[str, Any]]) -> bool:
-        """True when a popup button cancels: F12 (``tbar[0]/btn[12]``, in
-        any logon language) or a button the classifier reads as Cancel."""
-        if any(str(b.get("id", "")).endswith("tbar[0]/btn[12]")
-               for b in buttons):
-            return True
-        return self._match_button(buttons, self._CANCEL_PATTERNS) is not None
+        """True when the popup offers Cancel next to another answer: F12
+        (``tbar[0]/btn[12]``, in any logon language) or a Cancel-type
+        button, matched as a whole word (_is_cancel_button: "Note" or
+        "Background" is no Cancel). A popup with one button can only be
+        acknowledged, whatever that button is called."""
+        if len(buttons) < 2:
+            return False
+        return any(str(b.get("id", "")).endswith("tbar[0]/btn[12]")
+                   or self._is_cancel_button(b) for b in buttons)
 
     @staticmethod
     def _popup_list_lines(cells: List[tuple]) -> List[str]:

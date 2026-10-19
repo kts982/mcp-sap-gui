@@ -182,6 +182,43 @@ def test_cancel_is_recognised_by_f12_in_any_language():
     assert set(popup["list"]) == HIT_LIST_KEYS
 
 
+def test_cancel_button_is_recognised_without_f12():
+    # A Cancel-type word at another position (French logon).
+    window = _window("Compagnie aérienne 1 entrée", [
+        _list_cell(1, 1, "LH"),
+    ], buttons=((0, "", "Valider   (Entrée)"), (5, "Annuler", "")))
+
+    popup = _popup(window).get_popup_window()
+
+    assert "texts" not in popup
+    assert set(popup["list"]) == HIT_LIST_KEYS
+
+
+def test_a_word_containing_no_or_back_is_not_cancel():
+    # Substring matching read "Display Note" (no) and "Background" (back)
+    # as Cancel, and the note's text was left out again.
+    window = _window("Transport link note", [
+        _list_cell(1, 1, "Changes are not transported."),
+    ], buttons=((0, "", "Continue   (Enter)"), (5, "Display Note", ""),
+                (6, "Background", "")))
+
+    popup = _popup(window).get_popup_window()
+
+    assert popup["texts"] == ["Changes are not transported."]
+    assert popup["list"]["lines_in_texts"] == 1
+
+
+def test_a_single_button_only_acknowledges():
+    # One button, even one called Close or Cancel: nothing to choose.
+    window = _window("Note", [
+        _list_cell(1, 1, "Read me."),
+    ], buttons=((12, "", "Close   (F12)"),))
+
+    popup = _popup(window).get_popup_window()
+
+    assert popup["texts"] == ["Read me."]
+
+
 def test_other_texts_come_before_the_list_lines():
     window = _window("Note", [
         _node("wnd[1]/usr/lblHEADER", "GuiLabel", "Read this first"),
