@@ -72,7 +72,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_read_field` | Read a field value with metadata. For a dropdown, `value` is the selected entry's text and `key` its key |
+| `sap_read_field` | Read a field value with metadata. For a dropdown, `value` is the selected entry's text and `key` its key; for a radio button or checkbox, `selected` says whether it is selected |
 | `sap_set_field` | Set a field value. On a dropdown (`cmb`) the value selects the entry by its key or its text |
 | `sap_press_button` | Press a button. On the status bar (`wnd[0]/sbar`) it opens the message's long text, which shows as a list popup (`sap_read_list(window_id="wnd[1]")`) |
 | `sap_select_menu` | Select a menu item or submenu |
@@ -129,7 +129,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`, the F4 time picker `time_picker` (with its dropdown IDs and the time shown); none is ever auto-handled. SAP's message popup is only auto-confirmed when its icon shows an information message, so a warning in any logon language is not. Changeable inputs that already hold a value are listed as `prefilled_inputs` with a notice: confirming accepts them as they are. SAP's confirmation popup draws its question in an HTML viewer: with the Internet Explorer browser control its text is in `texts`; with Edge (the default) the popup says `question_readable: false`, and `sap_screenshot` shows the question |
+| `sap_get_popup_window` | Read popup title, text, buttons, and classification so the agent can tell confirmation from information, warning, error or input-required dialogs. An F4 hit list is classified `list` (read it with `sap_read_list`), the F4 calendar `date_picker`, the F4 time picker `time_picker` (with its dropdown IDs and the time shown); none is ever auto-handled. SAP's message popup is only auto-confirmed when its icon shows an information message, so a warning in any logon language is not. Radio buttons and checkboxes in `interactive_elements` carry `selected`. Changeable inputs that already hold a value, and changeable radio buttons and checkboxes that are selected, are listed as `prefilled_inputs` with a notice: confirming accepts them as they are. SAP's confirmation popup draws its question in an HTML viewer: with the Internet Explorer browser control its text is in `texts`; with Edge (the default) the popup says `question_readable: false`, and `sap_screenshot` shows the question |
 | `sap_handle_popup` | Read and act on popups in one call, including `confirm`, `cancel`, `press`, and safe `auto` handling with post-action verification. `cancel` presses a Cancel button or F12, never No (on a save prompt No drops the changes). When the Enter or F12 fallback leaves the popup as it was, the result is `action: "no_effect"`. After an action the result keeps the popup's title, texts and entered values and drops its now-dead element IDs |
 | `sap_get_toolbar_buttons` | List standard SAP toolbar buttons |
 | `sap_read_shell_content` | Read content from shell-based controls such as HTML viewers (page text only with the Internet Explorer browser control; the Edge control, e.g. the F1 Performance Assistant, is reported as not readable) |
@@ -156,7 +156,7 @@ Every action tool also reports a popup that it opened: `screen.popup` carries th
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any. A table control is one element, and a classic list is reported under `lists` without its cells (`expand_tables=true` lists the cells of both); a dropdown reports its selected `key` and the entry's text; IDs are returned in the short `wnd[0]/...` form |
+| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any. A table control is one element, and a classic list is reported under `lists` without its cells (`expand_tables=true` lists the cells of both); a dropdown reports its selected `key` and the entry's text, a radio button or checkbox `selected`; IDs are returned in the short `wnd[0]/...` form |
 | `sap_screenshot` | Capture a screenshot of the active SAP window. `save_path` also writes a full-resolution PNG (never overwrites an existing file) and returns its path and pixel size; `inline=false` skips the image when only the file is needed |
 
 ## Preview

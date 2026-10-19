@@ -83,6 +83,7 @@ from .prompts import (
 )
 from .sap_controller import VKey
 from .session_manager import SessionManager
+from .strict import STRICT_ERRORS_ENV, StrictErrorMiddleware, strict_errors_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,9 @@ class ServerConfig:
     # Server-level confirmation points (--confirm). Always active, never
     # removable by sap_set_confirmation_points.
     confirmation_floor: List[str] = field(default_factory=list)
+    # --strict-errors / MCP_SAP_GUI_STRICT_ERRORS: return a failed result
+    # (strict.result_error) as an MCP error (isError true). Off by default.
+    strict_errors: bool = False
 
     # Behavior settings
     auto_connect_existing: bool = True
@@ -318,9 +322,10 @@ Use `sap_get_alv_toolbar` for toolbar actions.
 - **GuiTableControl**: Standard for customizing (SPRO, SM30). Visible rows only.
 
 **Pagination**: Use `start_row` parameter to paginate through large tables. \
-Check `total_rows` in the response to know when you've read everything. \
-A TableControl's `total_rows` counts empty lines too: `empty_rows_from` in the \
-response means the data ended there.
+For an ALV grid, check `total_rows` in the response to know when you've read \
+everything. A TableControl's `total_rows` counts empty lines too, and one read \
+returns at most its visible rows: page with `start_row=next_start_row` while \
+`has_more` is true. `empty_rows_from` in the response means the data ended there.
 
 **Schema first**: Use `columns_only=true` to see column names before reading data. \
 Then use `columns="COL_A,COL_B"` to fetch only what you need.
@@ -484,7 +489,8 @@ These appear when you execute SPRO activities or use SM30:
 2. After execution, shows a GuiTableControl with configuration entries
 3. Toolbar has: "New Entries", "Position...", "Delete", "Save"
 4. To find specific entries, use "Position..." button (opens search dialog)
-5. To read all entries, use `sap_read_table` with `start_row` pagination
+5. To read all entries, use `sap_read_table` with `start_row` pagination: \
+pass the previous page's `next_start_row` and stop when `has_more` is false
 6. `total_rows` counts empty lines too, so it is not the entry count: the data \
 ends at `empty_rows_from` when the response has it
 
@@ -546,6 +552,11 @@ activated elsewhere, leave it (`/n`) and start it again before testing.
 
 mcp = FastMCP("mcp-sap-gui", instructions=_INSTRUCTIONS, lifespan=_lifespan)
 mcp.add_middleware(AuditMiddleware())
+# Next to audit, outside the confirmation gate: audit sees what it returns,
+# and the gate's confirmed_by_user (added only to a result that is not an
+# error) is already in the result it flags. The lambda reads the running
+# module's config at call time, because main() rebinds it.
+mcp.add_middleware(StrictErrorMiddleware(enabled=lambda: config.strict_errors))
 # ConfirmationMiddleware is registered further down, after its injected
 # helpers are defined. add_middleware is outermost-first, so audit (added
 # here) stays outside the confirmation gate and blocked calls keep their
@@ -650,6 +661,13 @@ async def _com(fn):
     return await asyncio.get_running_loop().run_in_executor(
         _session_mgr.executor, lambda: _com_with_retry(fn)
     )
+
+
+def _note_cap(result, requested: int, capped: int):
+    """Say so when a tool lowered a row/node limit to config.max_table_rows."""
+    if isinstance(result, dict) and capped < requested:
+        result["capped_to"] = capped
+    return result
 
 
 def _session_key(ctx: Context) -> int:
@@ -899,6 +917,9 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
         "action": action,
         "key": key,
         "reason": f"User did not confirm save ({action})",
+        # Same wording as a decline at a confirmation point, which the
+        # instructions tell agents to stop on.
+        "error": f"Save declined by user ({action}). Nothing was sent.",
     }
 
 
@@ -940,6 +961,7 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
         "action": "none",
         "button": label,
         "reason": f"User did not confirm {what} ({action})",
+        "error": f"Popup answer declined by user ({action}). Nothing was pressed.",
     })
     return popup
 
@@ -1063,7 +1085,8 @@ async def sap_send_key(
     error and available_keys, the keys this screen accepts.
 
     F11 / Save requires user confirmation via elicitation before proceeding;
-    the response then has confirmed_by_user: true."""
+    the response then has confirmed_by_user: true. A declined save
+    returns status 'cancelled' with an error."""
     _check_write(ctx)
     vkey = _parse_key(key)
     c = _ctrl(ctx)
@@ -1122,6 +1145,8 @@ async def sap_read_field(field_id: str, ctx: Context) -> dict:
 
     Returns value, type, changeable status, and labels (left/right).
     For a dropdown, value is the selected entry's text and key its key.
+    For a radio button or checkbox, value is its label and selected says
+    whether it is selected.
     Use sap_get_screen_elements to discover field IDs on unknown screens."""
     c = _ctrl(ctx)
     return await _com(lambda: c.read_field(field_id))
@@ -1136,7 +1161,11 @@ async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
     its text, and the response reports the key and text selected. For
     filling in multiple fields of a form at once, use sap_set_batch_fields
     instead. After setting a field, you may need to press Enter to trigger
-    validation."""
+    validation.
+
+    A value longer than the field (MaxLength) or a field that is not
+    changeable is refused before writing: status 'rejected' and an error
+    that says which, and the field keeps its content."""
     _check_write(ctx)
     _check_okcode_bypass(field_id, value)
     c = _ctrl(ctx)
@@ -1261,6 +1290,7 @@ async def sap_set_batch_fields(
     validate: bool = False,
     skip_readonly: bool = False,
     verbose: bool = False,
+    validate_partial: bool = False,
 ) -> dict:
     """Fill in multiple input fields at once (dict of field_id to value).
 
@@ -1271,15 +1301,22 @@ async def sap_set_batch_fields(
     takes an entry's key or text, as in sap_set_field.
 
     The result gives counts; `results` lists only the fields that did NOT
-    succeed (all of them with verbose=true).
+    succeed (all of them with verbose=true). Check failed == 0: a field
+    that was not set does not stop the others. With --strict-errors such a
+    batch is returned as an error.
 
     Args:
         fields: Dict mapping field_id -> value.
         validate: Press Enter after setting fields and return status-bar
-            feedback. Skipped when no fields were actually set.
+            feedback. Skipped when no fields were actually set, and when
+            any field failed (`failed` > 0) unless validate_partial=true.
+            `validation.performed` is false when Enter was not pressed or
+            SAP refused it (then with `error`).
         skip_readonly: Silently skip fields whose element reports
             Changeable == False instead of counting them as failures.
         verbose: List every field in `results`, not only the failures.
+        validate_partial: With validate=true, press Enter even when some
+            fields failed.
     """
     _check_write(ctx)
     for fid, val in fields.items():
@@ -1288,7 +1325,7 @@ async def sap_set_batch_fields(
     return await _com(
         lambda: c.set_batch_fields(
             fields, skip_readonly=skip_readonly, validate=validate,
-            verbose=verbose,
+            verbose=verbose, validate_partial=validate_partial,
         )
     )
 
@@ -1355,15 +1392,18 @@ async def sap_read_table(
     where the table is scrolled now (e.g. after Position...).
     first_visible_row says which row is on top.
 
-    A TableControl's total_rows counts its empty lines too (SM30 pads the
-    view). When the read reaches the first empty row, the response has
-    empty_rows_from, that row's absolute index: the data ends there."""
+    A TableControl read returns at most the visible rows: page with
+    start_row=next_start_row while has_more is true. start_row_note
+    explains a clamped or failed scroll. total_rows counts its empty lines
+    too (SM30 pads the view). When the read reaches the first empty row,
+    the response has empty_rows_from, that row's absolute index: the data
+    ends there."""
     c = _ctrl(ctx)
     capped = min(max_rows, config.max_table_rows)
-    return await _com(lambda: c.read_table(
+    return _note_cap(await _com(lambda: c.read_table(
         table_id, capped, columns=columns,
         columns_only=columns_only, start_row=start_row,
-    ))
+    )), max_rows, capped)
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
@@ -1582,16 +1622,8 @@ async def sap_get_popup_window(ctx: Context) -> dict:
 
     Returns the popup's title, text content, and available buttons so
     you know how to respond. Also classifies the popup and suggests a
-    safe next action. Returns {popup_exists: false} if no popup.
-
-    The popup's text is in `texts`: labels, display-only fields (a
-    message popup's lines) and, when the body is a classic list in a
-    popup without Cancel (a note shown as a list), its first 20
-    non-empty lines (`list.lines_in_texts`, `list.truncated`). Every
-    list-shaped popup has `list` (`rows`, `hint`); sap_read_list reads
-    all of it. An F4 hit list's lines are never in `texts`. List cells
-    never appear in `interactive_elements`. `texts`, `buttons` and
-    `interactive_elements` are omitted when empty."""
+    safe next action. Radio buttons and checkboxes in interactive_elements
+    carry selected. Returns {popup_exists: false} if no popup."""
     c = _ctrl(ctx)
     return await _com(c.get_popup_window)
 
@@ -1716,10 +1748,15 @@ async def sap_read_tree(tree_id: str, ctx: Context, max_nodes: int = 200) -> dic
     Returns node hierarchy with texts and column values. For large trees
     (e.g., SPRO with 1000+ nodes), use sap_get_tree_node_children for
     step-by-step navigation instead. Use sap_search_tree_nodes to find
-    specific nodes by text."""
+    specific nodes by text.
+
+    total_nodes is the number of nodes read; truncated=true means the tree
+    has more loaded nodes (available_nodes) than max_nodes allowed."""
     c = _ctrl(ctx)
     capped = min(max_nodes, config.max_table_rows)
-    return await _com(lambda: c.read_tree(tree_id, capped))
+    return _note_cap(
+        await _com(lambda: c.read_tree(tree_id, capped)), max_nodes, capped,
+    )
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
@@ -1814,12 +1851,16 @@ async def sap_search_tree_nodes(tree_id: str, search_text: str, ctx: Context,
     **Important limitation**: Only searches nodes that are already loaded
     (expanded) in the tree. Collapsed subtrees are not searched. If you
     don't find what you expect, expand parent nodes first using
-    sap_get_tree_node_children with expand=true, then search again."""
+    sap_get_tree_node_children with expand=true, then search again.
+
+    total_matches counts the matches returned. stopped_early=true means the
+    search reached max_results before the last loaded node, so more
+    matches are possible."""
     c = _ctrl(ctx)
     capped = min(max_results, config.max_table_rows)
-    return await _com(lambda: c.search_tree_nodes(
+    return _note_cap(await _com(lambda: c.search_tree_nodes(
         tree_id, search_text, column, capped
-    ))
+    )), max_results, capped)
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
@@ -1874,6 +1915,9 @@ async def sap_get_screen_elements(
     layouts (splitter containers, tab strips with sub-containers).
 
     Pass container_id='wnd[0]/mbar' to discover the menu bar structure.
+
+    Radio buttons and checkboxes report selected (true/false); a dropdown
+    reports its selected key.
 
     A table control (SM30-style) is ONE element here, not one per cell: use
     sap_read_table(columns_only=true) for its columns and cell_id templates.
@@ -2340,7 +2384,8 @@ SAP-specific rules:
   screen.active_window: if it is not "wnd[0]", a popup appeared — call
   sap_get_popup_window and handle it before continuing.
 - Read large tables in pages: loop sap_read_table with start_row until
-  total_rows is reached; aggregate locally and return only the aggregate.
+  total_rows is reached (ALV) or has_more is false (TableControl, with
+  start_row=next_start_row); aggregate locally and return only the aggregate.
 - Never call sap_screenshot inside a script (image results are unusable in the
   sandbox) — call it directly as a normal tool instead.
 - Sandbox limits: plain async code only; no classes; imports restricted to
@@ -2440,6 +2485,15 @@ def main():
                              "operation categories in every session "
                              f"(choices: {', '.join(SETTABLE_POINTS)}). "
                              "Sessions can add points but never remove these")
+    parser.add_argument("--strict-errors", action="store_true",
+                        help="Return a failed tool result (an 'error' key, "
+                             "or a batch with fields that were not set) as "
+                             "an MCP error (isError true), keeping its "
+                             "structured content. Also enabled by "
+                             f"${STRICT_ERRORS_ENV}=1. Under --code-mode a "
+                             "script's call_tool still returns the result "
+                             "dict and does not raise: scripts check "
+                             "'error' themselves")
     parser.add_argument("--audit-log", metavar="FILE",
                         help="Write audit log to FILE (JSON lines)")
     parser.add_argument("--code-mode", action="store_true",
@@ -2493,7 +2547,10 @@ def main():
         policy_file_sha256=policy.file_sha256,
         profile=args.profile,
         confirmation_floor=list(args.confirm or []),
+        strict_errors=args.strict_errors or strict_errors_from_env(os.environ),
     )
+    if config.strict_errors:
+        logger.info("Strict errors: failed results are returned with isError")
 
     # The effective policy goes to the log and, as its own event, to the audit
     # log: a changed policy file is then visible after the fact.

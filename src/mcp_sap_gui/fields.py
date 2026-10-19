@@ -98,6 +98,11 @@ class FieldsMixin:
                 result["value"] = (self._combobox_text(element)
                                    or str(result["value"]).strip())
                 result["key"] = str(getattr(element, 'Key', '')).strip()
+            elif result["type"] in self._SELECTABLE_TYPES:
+                # Value is only the label text.
+                selected = self._selected(element=element)
+                if selected is not None:
+                    result["selected"] = selected
 
             # Extended metadata for text fields
             for attr, key in [
@@ -154,6 +159,10 @@ class FieldsMixin:
             if self._COMBOBOX_ID_RE.search(field_id):
                 return self._select_entry_result({"field_id": field_id},
                                                  element, value)
+            refusal = self._write_refusal(element, field_id, value)
+            if refusal is not None:
+                # Not written: the field keeps what it had. Never truncate.
+                return {"field_id": field_id, **refusal, "status": "rejected"}
             element.text = value
 
             logger.debug("Set %s = %s", field_id, self._mask_field_value(field_id, value))
@@ -168,6 +177,42 @@ class FieldsMixin:
                 e,
                 "Could not set field",
             )
+
+    def _write_refusal(self, element, field_id: str,
+                       value: Any) -> Optional[Dict[str, Any]]:
+        """Why writing *value* into *element* would fail, or None.
+
+        The GUI refuses a value longer than the field's MaxLength, and any
+        write to a field that is not Changeable. pywin32 replaces SAP's
+        reason with "Property '<unknown>.text' can not be set.", which the
+        sanitizer reduces to "Could not set field", so the reason is read
+        from the element instead. Each property is read on its own and only
+        what could be read is enforced: True or None ("cannot tell") never
+        refuses a write.
+        """
+        try:
+            changeable = element.Changeable
+        except Exception:
+            changeable = None
+        if changeable is False:
+            return {"error": "field is not changeable"}
+
+        try:
+            max_length = element.MaxLength
+        except Exception:
+            max_length = None
+        length = len(str(value))
+        if (isinstance(max_length, int) and not isinstance(max_length, bool)
+                and 0 < max_length < length):
+            if self._is_sensitive_field_id(field_id):
+                # Do not echo the length of a password.
+                return {"error": f"value is longer than the field takes "
+                                 f"({max_length} characters)",
+                        "max_length": max_length}
+            return {"error": f"value is {length} characters, field takes "
+                             f"{max_length}",
+                    "max_length": max_length, "value_length": length}
+        return None
 
     def press_button(self, button_id: str) -> Dict[str, Any]:
         """
@@ -400,6 +445,7 @@ class FieldsMixin:
         skip_readonly: bool = False,
         validate: bool = False,
         verbose: bool = False,
+        validate_partial: bool = False,
     ) -> Dict[str, Any]:
         """
         Set multiple field values at once.
@@ -414,11 +460,17 @@ class FieldsMixin:
                 as failures.
             validate: When True, press Enter after setting fields and
                 include validation feedback (status bar, highlighted
-                fields) in the result.
+                fields) in the result. Enter is not pressed when no field
+                was set, nor when any field failed (unless
+                *validate_partial*): Enter would check a half-filled screen.
+                ``validation.performed`` is False when Enter was not
+                pressed or SAP refused it (then with ``error``).
             verbose: When True, ``results`` lists every field. By default it
                 lists only the fields that did NOT succeed: echoing 71 table
                 cells back costs ~9k characters and says nothing the counts
                 do not.
+            validate_partial: With *validate*, press Enter even when some
+                fields failed (the behaviour before this option existed).
 
         Returns:
             Dict with counts, per-field results and optional validation info
@@ -428,6 +480,9 @@ class FieldsMixin:
         results: Dict[str, str] = {}
         skipped = 0
         for field_id, value in fields.items():
+            # Reset per field: a failed lookup must not leave the previous
+            # field's element behind for the explanation below.
+            element = None
             try:
                 element = self._find_element(field_id)
                 if skip_readonly and not getattr(element, "Changeable", True):
@@ -445,10 +500,19 @@ class FieldsMixin:
                     element.text = value
                 results[field_id] = "success"
             except Exception as e:
-                results[field_id] = (
-                    "error: "
-                    + self._sanitize_error_message(e, "Could not set field")
-                )
+                # Explain a refused write only after it failed: the success
+                # path stays free of extra COM calls.
+                refusal = None
+                if (element is not None
+                        and not self._COMBOBOX_ID_RE.search(field_id)):
+                    refusal = self._write_refusal(element, field_id, value)
+                if refusal is not None:
+                    results[field_id] = "error: " + refusal["error"]
+                else:
+                    results[field_id] = (
+                        "error: "
+                        + self._sanitize_error_message(e, "Could not set field")
+                    )
 
         succeeded = sum(1 for v in results.values() if v == "success")
         failed = len(fields) - succeeded - skipped
@@ -467,7 +531,10 @@ class FieldsMixin:
             succeeded_ids = [
                 fid for fid, status in results.items() if status == "success"
             ]
-            result["validation"] = self._validate_batch(succeeded_ids, succeeded)
+            result["validation"] = self._validate_batch(
+                succeeded_ids, succeeded,
+                failed=0 if validate_partial else failed,
+            )
 
         return result
 
@@ -475,12 +542,34 @@ class FieldsMixin:
         self,
         succeeded_ids: List[str],
         succeeded: int,
+        failed: int = 0,
     ) -> Dict[str, Any]:
-        """Press Enter and gather validation feedback for a batch-set operation."""
+        """Press Enter and gather validation feedback for a batch-set operation.
+
+        *failed* > 0 skips Enter. A refused Enter (send_vkey's ``error``,
+        or a COM failure that returns no screen) is reported as not
+        performed, with the error, instead of as a clean validation.
+        """
         if succeeded == 0:
             return {"performed": False, "reason": "no fields were set"}
+        if failed > 0:
+            return {
+                "performed": False,
+                "reason": f"{failed} field(s) were not set; Enter not pressed",
+            }
 
         enter_result = self.press_enter()
+        if enter_result.get("error") or "screen" not in enter_result:
+            refused: Dict[str, Any] = {
+                "performed": False,
+                "error": enter_result.get("error")
+                or "Enter returned no screen",
+            }
+            if "available_keys" in enter_result:
+                refused["available_keys"] = enter_result["available_keys"]
+            if "screen" in enter_result:
+                refused["screen"] = enter_result["screen"]
+            return refused
         screen_info = enter_result.get("screen", {})
 
         # Check highlighted fields only among those actually set successfully

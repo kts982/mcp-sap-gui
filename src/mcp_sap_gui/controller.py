@@ -474,6 +474,23 @@ class SAPGUIControllerBase:
                 )
             return None
 
+    # The elements whose Selected state the read tools report.
+    _SELECTABLE_TYPES = ("GuiRadioButton", "GuiCheckBox")
+
+    def _selected(self, element_id: str = "", element=None) -> Optional[bool]:
+        """Selected of one radio button or checkbox over COM, or None.
+
+        GetObjectTree must not be asked for it (_OBJECT_TREE_UNSAFE_PROPS),
+        so a tree read looks the element up by *element_id*; a walk passes
+        the *element* it holds. None when it cannot be read.
+        """
+        try:
+            if element is None:
+                element = self._session.findById(self._normalize_element_id(element_id))
+            return bool(element.Selected)
+        except Exception:
+            return None
+
     def _is_sensitive_field_id(self, field_id: str) -> bool:
         """Return True when a field ID likely refers to a secret input."""
         normalized = (field_id or "").upper()

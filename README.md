@@ -428,7 +428,7 @@ The most important patterns:
 - `sap_get_screen_elements` to discover IDs instead of guessing
 - `sap_read_table` to start with any SAP table/grid
 - `sap_read_list` when a report prints a plain list instead of an ALV grid
-- Every action response carries a short `popup` digest when a popup opened (classification, texts, button labels, and `prefilled_inputs` with a notice when inputs already hold values); `sap_get_popup_window` gives the full details and suggests a safe next step
+- Every action response carries a short `popup` digest when a popup opened (classification, texts, button labels, and `prefilled_inputs` with a notice when inputs already hold values or options are preselected); `sap_get_popup_window` gives the full details and suggests a safe next step
 - `sap_handle_popup(action="auto")` when you want the server to dismiss only clearly safe informational popups and otherwise leave the dialog untouched
 - `sap_preview` before significant writes (batch field fills, `F11` / Save) so the user sees the screen and the pending values first
 - `sap_set_confirmation_points` to make categories of writes ask the user for approval before they run
