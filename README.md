@@ -492,6 +492,8 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
    The gate is enforced server-side by middleware, so it applies no matter what the agent does — including inside the experimental `--code-mode` sandbox. Adding a point is silent; *removing* a session point asks the user first, and points set by `--confirm` cannot be removed at all. Declining returns an error and nothing is executed, and clients without elicitation support fail closed (the gated call errors instead of running unconfirmed). Every confirmation is written to the audit log with its outcome (`accepted`, `declined`, `unsupported_client`).
 
+   The client has to show these prompts. The Claude Code CLI does; the Claude Code desktop app (tested 2026-10-19) declined every one within milliseconds without showing it, so saves through the server cannot be approved there. The server then says that no dialog was shown, instead of reporting that you declined. See [Confirmation Points](docs/TOOLS.md#confirmation-points).
+
    On a client without elicitation support, removal fails closed too: a point activated there cannot be turned off again, so it blocks that whole category for the rest of the session. Points survive `sap_disconnect` — their lifetime is the MCP session, not the SAP connection.
 
    `all_writes` covers every write-tagged tool, including selection, scrolling and navigation helpers that change no business data — it is deliberately strict and noisy, and under it `sap_send_key("F11")` prompts twice (once for the category, once for the unchanged save gate).

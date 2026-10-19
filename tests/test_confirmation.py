@@ -902,7 +902,9 @@ class TestConfirmationAudit:
             "point": "field_writes",
             "tool": "sap_set_field",
             "outcome": "accepted",
+            "elapsed_ms": events[0]["elapsed_ms"],
         }]
+        assert isinstance(events[0]["elapsed_ms"], float)
 
     async def test_declined_confirmation_is_logged(self, srv, caplog):
         _, patcher = _patched_controller(set_field={"status": "ok"})

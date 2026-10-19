@@ -1,0 +1,144 @@
+"""A dialog answered faster than a person can answer one.
+
+Live on 2026-10-19 the Claude Code desktop app answered every elicitation
+with "decline" in 7-13 ms and showed nothing. The decline still counts (fail
+closed), but the error says that no person saw the request, and the audit
+line has elapsed_ms and no_dialog. conftest sets the threshold to 0 for every
+other test; these tests use the real one.
+"""
+
+import asyncio
+import json
+import logging
+from types import SimpleNamespace
+from typing import Any, List
+
+import pytest
+from fastmcp import Client
+from fastmcp.client.elicitation import ElicitResult
+
+from mcp_sap_gui import confirmation, server
+from mcp_sap_gui.confirmation import no_dialog_note
+
+REAL_THRESHOLD = 250.0
+
+
+@pytest.fixture
+def real_threshold(monkeypatch):
+    monkeypatch.setattr(confirmation, "NO_DIALOG_MS", REAL_THRESHOLD)
+
+
+class FakeCtx:
+    """Answers at once, like the desktop app did, or after *delay* seconds."""
+
+    def __init__(self, action: str = "decline", delay: float = 0.0) -> None:
+        self.action = action
+        self.delay = delay
+        self.prompts: List[str] = []
+
+    async def elicit(self, message: str, response_type: Any = None, **_: Any):
+        self.prompts.append(message)
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        return SimpleNamespace(action=self.action, data=None)
+
+
+def _confirmations(caplog):
+    out = []
+    for record in caplog.records:
+        try:
+            data = json.loads(record.getMessage())
+        except ValueError:
+            continue
+        if data.get("event") == "confirmation":
+            out.append(data)
+    return out
+
+
+def test_note_only_below_the_threshold(real_threshold):
+    assert no_dialog_note(REAL_THRESHOLD) == ""
+    assert no_dialog_note(5000.0) == ""
+    note = no_dialog_note(8.4)
+    assert "answered in 8 ms without showing a dialog" in note
+    assert "no person saw this request" in note
+
+
+def test_fast_save_decline_says_no_person_saw_it(real_threshold, caplog):
+    caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")
+
+    declined = asyncio.run(server._confirm_save(FakeCtx("decline"), "F11"))
+
+    assert declined["status"] == "cancelled"
+    assert declined["error"].startswith(
+        "Save declined by user (decline). Nothing was sent. The client answered in"
+    )
+    assert "without showing a dialog" in declined["error"]
+    [event] = _confirmations(caplog)
+    assert event["outcome"] == "declined"
+    assert event["no_dialog"] is True
+    assert event["elapsed_ms"] < REAL_THRESHOLD
+
+
+def test_slow_save_decline_keeps_the_old_wording(monkeypatch, caplog):
+    # A person who takes their time: a 30 ms threshold and a 50 ms answer.
+    monkeypatch.setattr(confirmation, "NO_DIALOG_MS", 30.0)
+    caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")
+
+    declined = asyncio.run(
+        server._confirm_save(FakeCtx("decline", delay=0.05), "F11"))
+
+    assert declined["error"] == "Save declined by user (decline). Nothing was sent."
+    [event] = _confirmations(caplog)
+    assert "no_dialog" not in event
+    assert event["elapsed_ms"] >= 30.0
+
+
+def test_fast_popup_decline_says_so(real_threshold):
+    plan = {"popup": {"title": "Exit Editor", "texts": ["Save changes?"]},
+            "button": {"text": "Yes"}}
+
+    declined = asyncio.run(server._confirm_popup_save(FakeCtx("decline"), plan))
+
+    assert declined["error"].startswith(
+        "Popup answer declined by user (decline). Nothing was pressed. "
+        "The client answered in")
+
+
+def test_fast_decline_at_a_confirmation_point(real_threshold, monkeypatch):
+    class Controller:
+        def set_field(self, field_id, value):
+            return {"status": "ok"}
+
+    monkeypatch.setattr(server, "_ctrl", lambda ctx: Controller())
+    monkeypatch.setattr(server, "config", server.ServerConfig(
+        confirmation_floor=["field_writes"]))
+
+    async def decline_now(message, response_type, params, context):
+        return ElicitResult(action="decline")
+
+    async def run():
+        async with Client(server.mcp, elicitation_handler=decline_now) as client:
+            return await client.call_tool(
+                "sap_set_field", {"field_id": "wnd[0]/usr/txtX", "value": "1"},
+                raise_on_error=False)
+
+    result = asyncio.run(run())
+
+    assert result.is_error
+    text = result.content[0].text
+    assert "declined by user at confirmation point 'field_writes'" in text
+    assert "without showing a dialog" in text
+
+
+def test_fast_attach_decline_says_so(real_threshold, monkeypatch):
+    candidates = [{"index": 0, "id": "/app/con[0]/ses[0]", "system": "DEV",
+                   "client": "100", "user": "TESTUSER", "transaction": "SE16",
+                   "session_number": 1, "title": "DEV(1)/100 Data Browser",
+                   "connection_index": 0}]
+
+    with pytest.raises(ValueError) as exc:
+        asyncio.run(server._pick_session(FakeCtx("decline"), candidates, "Which?"))
+
+    assert str(exc.value).startswith(
+        "Attach declined by user (decline). Nothing was attached. "
+        "The client answered in")

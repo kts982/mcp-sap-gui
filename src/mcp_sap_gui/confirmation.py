@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
@@ -262,21 +263,57 @@ def build_relax_prompt(points: Iterable[str]) -> str:
 # Audit
 # ---------------------------------------------------------------------------
 
-def log_confirmation_event(point: str, tool: str, outcome: str) -> None:
+#: Nobody reads a dialog and answers it this fast: an answer quicker than
+#: this came from the client, which showed no dialog. Live on 2026-10-19 the
+#: Claude Code desktop app answered "decline" in 7-13 ms, in auto and in
+#: manual mode, while the Claude Code CLI showed the dialog.
+NO_DIALOG_MS = 250.0
+
+
+async def timed_elicit(ctx: Any, **kwargs: Any) -> tuple[Any, float]:
+    """``ctx.elicit(**kwargs)`` and how long the answer took, in ms."""
+    start = time.perf_counter()
+    result = await ctx.elicit(**kwargs)
+    return result, (time.perf_counter() - start) * 1000
+
+
+def no_dialog_note(elapsed_ms: float) -> str:
+    """A sentence for a decline that came back too fast for a person, else ''.
+
+    The decline still counts (fail closed); the note keeps the error from
+    claiming that the user declined, and tells the agent what to do.
+    """
+    if elapsed_ms >= NO_DIALOG_MS:
+        return ""
+    return (
+        f" The client answered in {elapsed_ms:.0f} ms without showing a "
+        "dialog, so no person saw this request. It cannot be approved in "
+        "this client: tell the user, and use a client that shows MCP "
+        "confirmation dialogs."
+    )
+
+
+def log_confirmation_event(point: str, tool: str, outcome: str,
+                           elapsed_ms: float | None = None) -> None:
     """Emit a confirmation outcome to the audit log.
 
     AuditMiddleware records only whether the call failed, not which point
     prompted or what the user answered — this is the only record of that.
+    ``elapsed_ms`` is how long the answer took; ``no_dialog`` marks one that
+    came back faster than a person can answer (``NO_DIALOG_MS``).
     """
-    audit_logger.info(
-        json.dumps({
-            "event": "confirmation",
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "point": point,
-            "tool": tool,
-            "outcome": outcome,
-        }, default=str),
-    )
+    line: dict[str, Any] = {
+        "event": "confirmation",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "point": point,
+        "tool": tool,
+        "outcome": outcome,
+    }
+    if elapsed_ms is not None:
+        line["elapsed_ms"] = round(elapsed_ms, 1)
+        if elapsed_ms < NO_DIALOG_MS:
+            line["no_dialog"] = True
+    audit_logger.info(json.dumps(line, default=str))
 
 
 def log_attach_event(session: Mapping[str, Any], chosen_by: str) -> None:
@@ -380,7 +417,8 @@ class ConfirmationMiddleware(Middleware):
         self._precheck(tool_name, args, ctx)
 
         try:
-            result = await ctx.elicit(
+            result, elapsed = await timed_elicit(
+                ctx,
                 message=build_prompt(tool_name, args, point),
                 response_type=bool,
             )
@@ -393,11 +431,11 @@ class ConfirmationMiddleware(Middleware):
             ) from exc
 
         if result.action == "accept" and getattr(result, "data", None) is True:
-            log_confirmation_event(point, tool_name, "accepted")
+            log_confirmation_event(point, tool_name, "accepted", elapsed)
             return _mark_confirmed(await call_next(context))
 
-        log_confirmation_event(point, tool_name, "declined")
+        log_confirmation_event(point, tool_name, "declined", elapsed)
         raise ToolError(
             f"{tool_name} declined by user at confirmation point '{point}' "
-            f"({result.action}). Nothing was executed."
+            f"({result.action}). Nothing was executed.{no_dialog_note(elapsed)}"
         )

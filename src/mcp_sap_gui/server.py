@@ -45,7 +45,9 @@ from .confirmation import (
     effective_points,
     log_attach_event,
     log_confirmation_event,
+    no_dialog_note,
     points_with_provenance,
+    timed_elicit,
 )
 from .controller import (
     _DEAD_SESSION_HRESULTS,
@@ -878,15 +880,17 @@ _SAVE_KEYS = {"F11", "Save"}
 
 
 async def _elicit_save(ctx: Context, message: str,
-                       tool: str = "sap_send_key") -> str | None:
+                       tool: str = "sap_send_key") -> tuple[str, str] | None:
     """Ask the user to confirm a save.
 
     Returns ``None`` if the user accepted (caller should proceed), else the
-    elicitation action (``decline`` / ``cancel``).
+    elicitation action (``decline`` / ``cancel``) and a note that is empty
+    unless the client answered without showing a dialog (no_dialog_note).
     Raises ``ValueError`` if the client does not support elicitation.
     """
     try:
-        result = await ctx.elicit(message=message, response_type=bool)
+        result, elapsed = await timed_elicit(ctx, message=message,
+                                             response_type=bool)
     except McpError as exc:
         log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
         raise ValueError(
@@ -895,11 +899,11 @@ async def _elicit_save(ctx: Context, message: str,
         ) from exc
 
     if result.action == "accept" and result.data is True:
-        log_confirmation_event(SAVE_POINT, tool, "accepted")
+        log_confirmation_event(SAVE_POINT, tool, "accepted", elapsed)
         return None  # proceed
 
-    log_confirmation_event(SAVE_POINT, tool, "declined")
-    return result.action
+    log_confirmation_event(SAVE_POINT, tool, "declined", elapsed)
+    return result.action, no_dialog_note(elapsed)
 
 
 async def _confirm_save(ctx: Context, key: str) -> dict | None:
@@ -909,13 +913,14 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
     Returns a cancellation dict if declined/cancelled.
     Raises ``ValueError`` if the client does not support elicitation.
     """
-    action = await _elicit_save(ctx, (
+    declined = await _elicit_save(ctx, (
         f"You are about to send '{key}' which triggers Save (F11) "
         "in SAP. This can persist changes to the database. "
         "Do you want to proceed?"
     ))
-    if action is None:
+    if declined is None:
         return None
+    action, note = declined
     return {
         "status": "cancelled",
         "action": action,
@@ -923,7 +928,7 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
         "reason": f"User did not confirm save ({action})",
         # Same wording as a decline at a confirmation point, which the
         # instructions tell agents to stop on.
-        "error": f"Save declined by user ({action}). Nothing was sent.",
+        "error": f"Save declined by user ({action}). Nothing was sent.{note}",
     }
 
 
@@ -954,9 +959,10 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
             + ", which may save changes to the database. "
             "Do you want to proceed?"
         )
-    action = await _elicit_save(ctx, message, tool)
-    if action is None:
+    declined = await _elicit_save(ctx, message, tool)
+    if declined is None:
         return None
+    action, note = declined
     # The popup is still open and unchanged: keep its buttons for the next
     # step (e.g. press "No").
     what = "the answer" if plan.get("unread_question") else "save"
@@ -965,7 +971,8 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
         "action": "none",
         "button": label,
         "reason": f"User did not confirm {what} ({action})",
-        "error": f"Popup answer declined by user ({action}). Nothing was pressed.",
+        "error": (f"Popup answer declined by user ({action}). "
+                  f"Nothing was pressed.{note}"),
     })
     return popup
 
@@ -1069,8 +1076,10 @@ async def _pick_session(ctx: Context, candidates: list[dict],
             label += f" [connection {sess['connection_index']}]"
         labels.append(label)
     try:
-        result = await ctx.elicit(message=message, response_type=labels,
-                                  response_title="SAP session")
+        result, elapsed = await timed_elicit(
+            ctx, message=message, response_type=labels,
+            response_title="SAP session",
+        )
     except McpError as exc:
         log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
                                "unsupported_client")
@@ -1081,11 +1090,14 @@ async def _pick_session(ctx: Context, candidates: list[dict],
             "(or system='SID/client')."
         ) from exc
     if result.action != "accept" or result.data not in labels:
-        log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "declined")
+        log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "declined",
+                               elapsed)
         raise ValueError(
-            f"Attach declined by user ({result.action}). Nothing was attached."
+            f"Attach declined by user ({result.action}). Nothing was "
+            f"attached.{no_dialog_note(elapsed)}"
         )
-    log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "accepted")
+    log_confirmation_event(ATTACH_POINT, "sap_connect_existing", "accepted",
+                           elapsed)
     return candidates[labels.index(result.data)]
 
 
@@ -2399,9 +2411,11 @@ async def sap_set_confirmation_points(
     removals = sorted((current - requested) - floor)
 
     declined: list[str] = []
+    note = ""
     if removals:
         try:
-            result = await ctx.elicit(
+            result, elapsed = await timed_elicit(
+                ctx,
                 message=build_relax_prompt(removals),
                 response_type=bool,
             )
@@ -2420,10 +2434,11 @@ async def sap_set_confirmation_points(
         for point in removals:
             log_confirmation_event(
                 point, "sap_set_confirmation_points",
-                "accepted" if accepted else "declined",
+                "accepted" if accepted else "declined", elapsed,
             )
         if not accepted:
             declined = removals
+            note = no_dialog_note(elapsed)
 
     stored = (requested | set(declined)) - floor
     _session_mgr.set_confirmation_points(key, stored)
@@ -2433,6 +2448,7 @@ async def sap_set_confirmation_points(
         message = (
             f"User declined to disable: {', '.join(declined)}. "
             f"Active confirmation points: {', '.join(active)}"
+            + (f".{note}" if note else "")
         )
     else:
         message = f"Active confirmation points: {', '.join(active)}"
