@@ -1166,7 +1166,30 @@ async def sap_connect_existing(
         lambda: c.connect_to_existing_session(pick["connection_index"],
                                               pick["index"])
     ))
-    log_attach_event(pick, chosen_by)
+    # The pick is a position from the listing made before the dialog (or the
+    # name lookup). If sessions opened or closed meanwhile, that position can
+    # now hold another session: check what was attached before using it.
+    attached = {
+        "id": await _com(lambda: getattr(getattr(c, "_session", None), "Id", None)),
+        "system": info.get("system_name"),
+        "client": info.get("client"),
+        "user": info.get("user"),
+        "session_number": info.get("session_number"),
+    }
+    changed = [
+        key for key in ("id", "system", "client", "user", "session_number")
+        if pick.get(key) is not None and attached.get(key) is not None
+        and str(pick[key]) != str(attached[key])
+    ]
+    if changed:
+        await _com(c.disconnect)  # attached, not opened: nothing is closed
+        raise ValueError(
+            "The open SAP sessions changed while the session was being chosen: "
+            f"{_attach_label(pick)} was picked, but that position now holds "
+            f"{_attach_label({**pick, **attached})}. Nothing was attached; "
+            "call sap_connect_existing again."
+        )
+    log_attach_event(attached, chosen_by)
     return {**info, "chosen_by": chosen_by}
 
 

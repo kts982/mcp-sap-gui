@@ -43,14 +43,24 @@ QAS_1 = _session(0, "QAS", "200", "TESTUSER", "SESSION_MANAGER", 1,
 class FakeController:
     def __init__(self, connections):
         self._connections = connections
+        # What the positions hold when attaching, if the sessions changed
+        # after the listing (None: unchanged).
+        self.after = None
         self.attached: List[tuple] = []
+        self.disconnected = False
 
     def list_connections(self):
         return self._connections
 
+    def disconnect(self):
+        self.disconnected = True
+
     def connect_to_existing_session(self, connection_index=0, session_index=0):
         self.attached.append((connection_index, session_index))
-        sess = self._connections[connection_index]["sessions"][session_index]
+        current = self.after or self._connections
+        sess = current[connection_index]["sessions"][session_index]
+        # Like the real controller: the bound session object with its Id.
+        self._session = SimpleNamespace(Id=sess["id"])
         return SessionInfo(
             system_name=sess["system"], system_number="00",
             client=sess["client"], user=sess["user"], language="EN",
@@ -350,3 +360,30 @@ def test_no_session_to_attach(attach):
     attach([_connections(DEV_1, disabled=True)], point=True)
     with pytest.raises(ValueError, match="No SAP session is open"):
         _run(server.sap_connect_existing(FakeCtx()))
+
+
+def test_a_session_list_that_changed_meanwhile_attaches_nothing(attach):
+    # The user picks DEV (2) at position 0/1; while the picker was open,
+    # sessions changed and position 0/1 now holds QAS (1).
+    controller = attach([_connections(DEV_1, DEV_2)], point=True)
+    controller.after = [_connections(DEV_1, QAS_1)]
+
+    with pytest.raises(ValueError, match="sessions changed") as exc:
+        _run(server.sap_connect_existing(FakeCtx(pick=1)))
+
+    assert "DEV (2)" in str(exc.value) and "QAS (1)" in str(exc.value)
+    assert "Nothing was attached" in str(exc.value)
+    assert controller.disconnected is True
+
+
+def test_the_audit_names_the_session_actually_attached(attach, caplog):
+    attach([_connections(DEV_1, DEV_2)], point=True)
+    caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")
+
+    _run(server.sap_connect_existing(FakeCtx(pick=1)))
+
+    event = _attach_events(caplog)[-1]
+    assert event["event"] == "attach"
+    assert (event["system"], event["client"], event["user"]) == (
+        "DEV", "100", "TESTUSER")
+    assert event["chosen_by"] == "dialog"
