@@ -2,6 +2,12 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
+## Unreleased
+
+### Added
+
+- **Which radio button or checkbox is selected.** `sap_read_field`, `sap_get_popup_window` (`interactive_elements`) and `sap_get_screen_elements` report `selected` for radio buttons and checkboxes. It is read over COM for each of them, never through GetObjectTree, which crashes SAP GUI 8.00 when asked for it. A changeable radio button or checkbox that is selected in a popup is listed in `prefilled_inputs` with the notice, like a pre-filled field: a popup can open with an option already chosen (SCAL's holiday dialog: "with fixed date").
+
 ## 0.5.2 — 2026-10-18
 
 Popup answers that ask first, and table writes on the right row. Three of these fixes were contributed by [@nelz0n](https://github.com/nelz0n); all were checked live on SAP GUI 8.10 and 8.00.
