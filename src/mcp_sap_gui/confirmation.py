@@ -260,8 +260,8 @@ def build_relax_prompt(points: Iterable[str]) -> str:
 def log_confirmation_event(point: str, tool: str, outcome: str) -> None:
     """Emit a confirmation outcome to the audit log.
 
-    AuditMiddleware never inspects results, so it cannot tell an accepted
-    confirmation from a declined one — this is the only record of the outcome.
+    AuditMiddleware records only whether the call failed, not which point
+    prompted or what the user answered — this is the only record of that.
     """
     audit_logger.info(
         json.dumps({

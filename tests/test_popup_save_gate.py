@@ -367,6 +367,7 @@ def test_send_key_declined_save_unchanged(tools):
         "action": "decline",
         "key": "F11",
         "reason": "User did not confirm save (decline)",
+        "error": "Save declined by user (decline). Nothing was sent.",
     }
     assert tools.session.log == []
 
