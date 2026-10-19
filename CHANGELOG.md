@@ -4,6 +4,13 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ## Unreleased
 
+### Safety
+
+- **Session commands are blocked, and three ways around the transaction policy are closed** ([#25](https://github.com/kts982/mcp-sap-gui/pull/25), by [@nelz0n](https://github.com/nelz0n)).
+  - `/nex` (log off, closing every session of the connection without asking), `/nend` and `/i` (close a session; `/i3` closes session 3) passed the `default` and `abap-dev` presets, through `sap_execute_transaction` and through the command field. They are now refused with their own message; a policy file can still allow one (`"allow": ["EX"]`).
+  - `sap_set_textedit` on the command field skipped the transaction check, so `/nSU01` got through. It is now checked like `sap_set_field`.
+  - A command-field value that starts a transaction but does not parse as a whole (`/*SU01 USR02-BNAME=X`, which skips the first screen with a field filled) was not checked at all. The code it names is now checked, and one the policy cannot check is refused.
+
 ### Added
 
 - **Which radio button or checkbox is selected.** `sap_read_field`, `sap_get_popup_window` (`interactive_elements`) and `sap_get_screen_elements` report `selected` for radio buttons and checkboxes. It is read over COM for each of them, never through GetObjectTree, which crashes SAP GUI 8.00 when asked for it. A changeable radio button or checkbox that is selected in a popup is listed in `prefilled_inputs` with the notice, like a pre-filled field: a popup can open with an option already chosen (SCAL's holiday dialog: "with fixed date").
