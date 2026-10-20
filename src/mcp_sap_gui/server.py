@@ -1162,27 +1162,32 @@ async def sap_connect_existing(
             ctx, candidates, "Attach the agent to which SAP session?",
         )
 
-    info = _to_dict(await _com(
-        lambda: c.connect_to_existing_session(pick["connection_index"],
-                                              pick["index"])
-    ))
     # The pick is a position from the listing made before the dialog (or the
     # name lookup). If sessions opened or closed meanwhile, that position can
     # now hold another session: check what was attached before using it.
-    attached = {
-        "id": await _com(lambda: getattr(getattr(c, "_session", None), "Id", None)),
-        "system": info.get("system_name"),
-        "client": info.get("client"),
-        "user": info.get("user"),
-        "session_number": info.get("session_number"),
-    }
-    changed = [
-        key for key in ("id", "system", "client", "user", "session_number")
-        if pick.get(key) is not None and attached.get(key) is not None
-        and str(pick[key]) != str(attached[key])
-    ]
+    # Attaching, the check and the detach are one COM call, so no other tool
+    # call (a parallel one) can run on the session before it is checked.
+    def attach_checked():
+        info = _to_dict(c.connect_to_existing_session(pick["connection_index"],
+                                                      pick["index"]))
+        attached = {
+            "id": getattr(getattr(c, "_session", None), "Id", None),
+            "system": info.get("system_name"),
+            "client": info.get("client"),
+            "user": info.get("user"),
+            "session_number": info.get("session_number"),
+        }
+        changed = [
+            key for key in ("id", "system", "client", "user", "session_number")
+            if pick.get(key) is not None and attached.get(key) is not None
+            and str(pick[key]) != str(attached[key])
+        ]
+        if changed:
+            c.disconnect()  # attached, not opened: nothing is closed
+        return info, attached, changed
+
+    info, attached, changed = await _com(attach_checked)
     if changed:
-        await _com(c.disconnect)  # attached, not opened: nothing is closed
         raise ValueError(
             "The open SAP sessions changed while the session was being chosen: "
             f"{_attach_label(pick)} was picked, but that position now holds "

@@ -54,6 +54,7 @@ class FakeController:
 
     def disconnect(self):
         self.disconnected = True
+        self._session = None
 
     def connect_to_existing_session(self, connection_index=0, session_index=0):
         self.attached.append((connection_index, session_index))
@@ -374,6 +375,27 @@ def test_a_session_list_that_changed_meanwhile_attaches_nothing(attach):
     assert "DEV (2)" in str(exc.value) and "QAS (1)" in str(exc.value)
     assert "Nothing was attached" in str(exc.value)
     assert controller.disconnected is True
+
+
+def test_no_call_runs_on_a_changed_session_before_the_check(attach, monkeypatch):
+    # Another tool call (one sent in parallel) can run between any two COM
+    # calls. The session the check refuses must never be bound at such a point.
+    controller = attach([_connections(DEV_1, DEV_2)], point=True)
+    controller.after = [_connections(DEV_1, QAS_1)]
+    bound_between_calls = []
+
+    async def com(fn):
+        result = fn()
+        bound_between_calls.append(getattr(controller, "_session", None))
+        return result
+
+    monkeypatch.setattr(server, "_com", com)
+
+    with pytest.raises(ValueError, match="sessions changed"):
+        _run(server.sap_connect_existing(FakeCtx(pick=1)))
+
+    # After the listing, and after attaching, checking and detaching.
+    assert bound_between_calls == [None, None]
 
 
 def test_the_audit_names_the_session_actually_attached(attach, caplog):
