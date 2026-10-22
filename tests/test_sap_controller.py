@@ -2038,6 +2038,64 @@ class TestEngineDiscovery:
         saplogon_engine.OpenConnection.assert_called_once_with("DEV", True)
         assert controller._application is saplogon_engine
 
+    def _lookups(self, controller):
+        """ROT names resolved so far: each one is a GetScriptingEngine call."""
+        return [c.args[0] for c in controller._win32com.GetObject.call_args_list]
+
+    def test_engines_are_looked_up_once_not_per_call(self):
+        """Each GetScriptingEngine call raises the "allow scripting" dialog on
+        connections whose server forces the notification, so repeated
+        discovery must reuse the engines it already has."""
+        conn = _fake_connection("/app/con[0]", [_fake_session("/app/con[0]/ses[0]")])
+        server_conn = _fake_connection("/app/con[0]", [_fake_session("/app/con[0]/ses[0]")])
+        controller = self._make_controller(
+            {
+                "SAPGUI": _fake_engine([conn]),
+                "SAPGUISERVER-9B54": _fake_engine([server_conn]),
+            },
+            rot_names=["SAPGUI", "SAPGUISERVER-9B54"],
+        )
+
+        for _ in range(3):
+            assert len(self._run(controller, controller.list_connections)) == 2
+        self._run(controller, controller.connect_to_existing_session, 0, 0)
+        controller._get_saplogon_engine()
+
+        assert self._lookups(controller) == ["SAPGUI", "SAPGUISERVER-9B54"]
+
+    def test_an_engine_that_stopped_answering_is_looked_up_again(self):
+        old_engine = _fake_engine([_fake_connection("/app/con[0]", [])])
+        engines = {"SAPGUI": old_engine}
+        controller = self._make_controller(engines, rot_names=["SAPGUI"])
+        self._run(controller, controller.list_connections)
+
+        # SAP Logon restarted: the old proxy fails, the ROT has a new engine.
+        type(old_engine.Children).Count = PropertyMock(
+            side_effect=Exception("The RPC server is unavailable.")
+        )
+        conn = _fake_connection("/app/con[0]", [_fake_session("/app/con[0]/ses[0]")])
+        engines["SAPGUI"] = _fake_engine([conn])
+        result = self._run(controller, controller.list_connections)
+
+        assert result[0]["session_count"] == 1
+        assert self._lookups(controller) == ["SAPGUI", "SAPGUI"]
+
+    def test_a_gui_server_process_that_ended_is_forgotten(self):
+        engines = {
+            "SAPGUI": _fake_engine([]),
+            "SAPGUISERVER-9B54": _fake_engine(
+                [_fake_connection("/app/con[0]", [_fake_session("/app/con[0]/ses[0]")])]
+            ),
+        }
+        controller = self._make_controller(
+            engines, rot_names=["SAPGUI", "SAPGUISERVER-9B54"]
+        )
+        assert len(self._run(controller, controller.list_connections)) == 1
+
+        self._pythoncom = _fake_pythoncom(["SAPGUI"])
+        assert self._run(controller, controller.list_connections) == []
+        assert set(controller._rot_engines) == {"SAPGUI"}
+
 
 class TestSensitiveLogging:
     """Tests for secret handling in logging and client-facing errors."""
