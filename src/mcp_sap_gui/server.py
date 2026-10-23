@@ -2645,8 +2645,10 @@ SAP-specific rules:
 - Read large tables in pages: loop sap_read_table with start_row until
   total_rows is reached (ALV) or has_more is false (TableControl, with
   start_row=next_start_row); aggregate locally and return only the aggregate.
-- Never call sap_screenshot inside a script (image results are unusable in the
-  sandbox) — call it directly as a normal tool instead.
+- Never call sap_screenshot inside a script: an image result is unusable in
+  the sandbox, and in code mode it is not in the tool list either. Describe
+  the screen with sap_get_screen_elements or sap_get_popup_window; for a
+  picture the user needs a server without --code-mode.
 - Sandbox limits: plain async code only; no classes; imports restricted to
   sys, os, typing, asyncio, re, datetime, json.
 """
