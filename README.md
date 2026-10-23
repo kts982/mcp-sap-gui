@@ -232,6 +232,9 @@ uv run python -m mcp_sap_gui.server --confirm field_writes transactions
 # Audit log to file (JSON lines)
 uv run python -m mcp_sap_gui.server --audit-log sap_audit.jsonl
 
+# On shutdown, leave every SAP session open, even the ones sap_connect opened
+uv run python -m mcp_sap_gui.server --detach-on-exit
+
 # EXPERIMENTAL: code mode — replaces the tool catalog with search/get_schema/
 # tags/execute meta-tools; agents script chained SAP flows in a sandbox.
 # Faster and cheaper on long chained flows (e.g. full table dumps), slower on
@@ -368,7 +371,7 @@ The server uses stdio transport. Point any MCP client at:
 
 ```
 Command:   uvx mcp-sap-gui[screenshots]
-Arguments: [--read-only] [--profile exploration|operator|full] [--confirm POINT ...] [--audit-log FILE] [--debug] [--policy-preset default|abap-dev|strict] [--policy-file FILE] [--allowed-transactions T1 T2 ...]
+Arguments: [--read-only] [--profile exploration|operator|full] [--confirm POINT ...] [--audit-log FILE] [--detach-on-exit] [--debug] [--policy-preset default|abap-dev|strict] [--policy-file FILE] [--allowed-transactions T1 T2 ...]
 Transport: stdio
 ```
 

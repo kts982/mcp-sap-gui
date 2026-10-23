@@ -288,7 +288,7 @@ async def _lifespan(server: FastMCP):
         if _session_mgr is not None:
             try:
                 _session_mgr.executor.submit(
-                    _session_mgr.release_all, _may_close_on_exit
+                    _session_mgr.release_all, not config.detach_on_exit
                 ).result(timeout=10)
             except Exception:
                 pass
@@ -664,23 +664,6 @@ def _session_key(ctx: Context) -> str:
 def _ctrl(ctx: Context):
     """Get the SAPGUIController bound to the current MCP session."""
     return _session_mgr.get_or_create(_session_key(ctx)).controller
-
-
-def _may_close_sessions(session_key: int) -> bool:
-    """Whether this MCP session may close the SAP sessions it opened.
-
-    Closing is the 'destructive' tier: only the 'full' profile has it, so a
-    session (or a server floor) at 'exploration' or 'operator' only detaches.
-    """
-    profile = config.profile
-    if _session_mgr is not None:
-        profile = _session_mgr.get_profile(session_key) or profile
-    return "destructive" in _PROFILES.get(profile, set())
-
-
-def _may_close_on_exit(session_key: int) -> bool:
-    """Server shutdown closes owned sessions only where a tool call could."""
-    return not config.detach_on_exit and _may_close_sessions(session_key)
 
 
 def _check_write(ctx: Context | None = None):
@@ -2420,16 +2403,12 @@ async def sap_set_policy_profile(
     Profiles control which tools are visible:
     - exploration: read-only tools (discover, inspect, screenshot)
     - operator: read + write tools (normal SAP interaction)
-    - full: all tools including destructive (sap_close_session; at this
-      profile sap_disconnect and server shutdown also close the sessions
-      this server opened, below it they only detach)
+    - full: all tools including destructive (transaction execution)
 
     A session can only restrict, never widen: if the server was started with
     --profile, a request above that floor is capped to the floor.
     Default profile is 'full' unless the server was started with --profile."""
     effective, allowed_tags = _effective_profile(profile)
-    if _session_mgr is not None:
-        _session_mgr.set_profile(_session_key(ctx), effective)
     # Subtractive semantics (same as the server-level --profile path): touch
     # only read/write/destructive-tagged tools. Untagged components — the
     # code-mode meta-tools (execute/search/get_schema/tags), prompts,
@@ -2623,43 +2602,18 @@ async def sap_get_transaction_guide(
 # Session lifecycle tools
 # ===========================================================================
 
-# Read tier, so every profile can detach; but at 'full' it can close sessions,
-# so it does not claim to be read-only.
+# Read tier, so every profile can detach; but it closes the sessions this
+# server opened, so it does not claim to be read-only.
 @mcp.tool(annotations=_DESTRUCTIVE, tags=_TAGS_READ)
 async def sap_disconnect(ctx: Context) -> dict:
     """Disconnect from the current SAP session and release the binding.
 
-    Sessions that were attached (via sap_connect_existing) are detached but
-    left open so the user can continue working manually. Sessions opened by
-    this MCP session (via sap_connect, and /o windows opened from them) are
-    closed in the 'full' profile; in 'exploration' and 'operator' they are
-    left open too. A session this MCP session did not open is never closed."""
+    Closes only the sessions this MCP session opened: the one sap_connect
+    logged on in and any /o window opened from it. Sessions that were
+    attached (via sap_connect_existing), and /o windows opened from them, are
+    detached but left open so the user can continue working manually."""
     key = _session_key(ctx)
-    close_owned = _may_close_sessions(key)
-    result = await _com(lambda: _session_mgr.release(key, close_owned=close_owned))
-    if result.get("owned_sessions_left_open"):
-        result["note"] = (
-            "Sessions this server opened were left open: closing them needs "
-            "the 'full' profile."
-        )
-    return result
-
-
-@mcp.tool(annotations=_DESTRUCTIVE, tags=_TAGS_DESTRUCTIVE)
-async def sap_close_session(ctx: Context) -> dict:
-    """Close the SAP sessions this MCP session opened, and release the binding.
-
-    Closes the session sap_connect logged on in and any /o window opened from
-    it; closing the last session of a connection ends that connection. A
-    session attached via sap_connect_existing is never closed, only detached.
-    Only in the 'full' profile."""
-    key = _session_key(ctx)
-    if not _may_close_sessions(key):
-        raise ValueError(
-            "Closing sessions needs the 'full' policy profile; "
-            "use sap_disconnect to detach."
-        )
-    return await _com(lambda: _session_mgr.release(key, close_owned=True))
+    return await _com(lambda: _session_mgr.release(key))
 
 
 @mcp.resource("docs://sap-gui-guide")

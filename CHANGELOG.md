@@ -11,6 +11,11 @@ Every release and what changed for someone running the server. The [GitHub relea
   - `/nex` (log off, closing every session of the connection without asking), `/nend` and `/i` (close a session; `/i3` closes session 3) passed the `default` and `abap-dev` presets, through `sap_execute_transaction` and through the command field. They are now refused with their own message; a policy file can still allow one (`"allow": ["EX"]`).
   - `sap_set_textedit` on the command field skipped the transaction check, so `/nSU01` got through. It is now checked like `sap_set_field`.
   - A command-field value that starts a transaction but does not parse as a whole (`/*SU01 USR02-BNAME=X`, which skips the first screen with a field filled) was not checked at all. The code it names is now checked, and one the policy cannot check is refused.
+- **The server closes only the SAP sessions it opened** ([#26](https://github.com/kts982/mcp-sap-gui/pull/26), by [@nelz0n](https://github.com/nelz0n)).
+  - After `sap_connect`, an `/o` command moved the binding to `GuiApplication.ActiveSession` (which can be a window the user works in, on any connection) or to the last session of the connection (which can be an existing one), and `sap_disconnect` or server shutdown then closed that session, while the one the server had opened stayed open. The server now keeps the sessions it opened, the `sap_connect` logon session and `/o` windows opened from it, and closes only those, newest first; one the user already closed is skipped.
+  - `/o` binds only a session that was not on the bound connection before the command (it waits up to 2 seconds for it) and reports `new_session_bound`. An `/o` window opened from an attached session is attached too, so it is never closed.
+  - `--detach-on-exit` leaves every session open on shutdown, including the ones the server opened.
+  - `sap_connect` is no longer annotated read-only, and `sap_disconnect` is annotated destructive. Both keep the `read` tag, so every profile can still log on and detach.
 
 ### Added
 

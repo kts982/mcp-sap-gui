@@ -646,7 +646,7 @@ class TestToolRegistration:
         expected = {
             # Connection & lifecycle
             "sap_connect", "sap_connect_existing", "sap_list_connections",
-            "sap_get_session_info", "sap_disconnect", "sap_close_session",
+            "sap_get_session_info", "sap_disconnect",
             # Navigation
             "sap_execute_transaction", "sap_send_key", "sap_get_screen_info",
             # Field
@@ -768,8 +768,8 @@ class TestToolRegistration:
             "sap_get_workflow_guide",
             "sap_get_transaction_guide",
         }
-        # Closing an SAP session the server opened.
-        destructive_tools = {"sap_disconnect", "sap_close_session"}
+        # Closes the SAP sessions the server opened.
+        destructive_tools = {"sap_disconnect"}
 
         for tool in tools:
             assert tool.annotations is not None, f"{tool.name} missing annotations"
@@ -797,7 +797,7 @@ class TestToolTags:
 
     # Session lifecycle tools whose tier is not their annotation: every
     # profile must be able to log on and detach, but neither tool is
-    # read-only (sap_disconnect closes owned sessions at 'full').
+    # read-only (sap_disconnect closes the sessions this server opened).
     TIER_NOT_ANNOTATION = {"sap_connect": {"read"}, "sap_disconnect": {"read"}}
 
     def test_all_tools_have_tags(self, srv):

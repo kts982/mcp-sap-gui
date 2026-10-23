@@ -12,7 +12,7 @@ import time
 from collections.abc import Hashable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .sap_controller import SAPGUIController
 
@@ -46,9 +46,6 @@ class SessionManager:
         # tool call, and get_or_create would eagerly build a SAPGUIController
         # for calls that never touch SAP.
         self._confirmation_points: Dict[Hashable, set] = {}
-        # Session-level policy profile (sap_set_policy_profile), same lifetime
-        # as the confirmation points. Absent means the server floor applies.
-        self._profiles: Dict[Hashable, str] = {}
         self._executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
@@ -97,14 +94,6 @@ class SessionManager:
         self._confirmation_points[session_key] = stored
         return set(stored)
 
-    def get_profile(self, session_key: Hashable) -> Optional[str]:
-        """The profile this session switched to, or None for the floor."""
-        return self._profiles.get(session_key)
-
-    def set_profile(self, session_key: Hashable, profile: str) -> None:
-        """Record the effective profile of this session."""
-        self._profiles[session_key] = profile
-
     def release(self, session_key: Hashable, close_owned: bool = True) -> Dict[str, Any]:
         """Release and clean up a managed session.
 
@@ -148,19 +137,15 @@ class SessionManager:
             result["owned_sessions_left_open"] = owned_open
         return result
 
-    def release_all(
-        self, may_close: Optional[Callable[[int], bool]] = None,
-    ) -> None:
+    def release_all(self, close_owned: bool = True) -> None:
         """Release every session.  Called on server shutdown.
 
-        ``may_close(session_key)`` decides whether that binding's owned
-        sessions are closed; without it they are (the previous behaviour).
+        ``close_owned=False`` (``--detach-on-exit``) leaves the sessions this
+        server opened open as well.
         """
         for key in list(self._sessions):
             try:
-                self.release(
-                    key, close_owned=True if may_close is None else may_close(key),
-                )
+                self.release(key, close_owned=close_owned)
             except Exception:
                 logger.warning("Error releasing session %s", key, exc_info=True)
 
@@ -185,5 +170,4 @@ class SessionManager:
         connect/disconnect cycles and die with the server.
         """
         self._confirmation_points.clear()
-        self._profiles.clear()
         self._executor.shutdown(wait=False)

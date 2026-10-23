@@ -294,13 +294,13 @@ def test_release_attached_is_detached():
     assert manager.release(0)["action"] == "detached"
 
 
-def test_release_all_asks_per_binding():
+def test_release_all_without_close_detaches_every_binding():
     first, second = FakeController(owned=1), FakeController(owned=1)
     manager = _manager_with(first, second)
 
-    manager.release_all(may_close=lambda key: key == 1)
+    manager.release_all(close_owned=False)
 
-    assert first.calls == [False] and second.calls == [True]
+    assert first.calls == [False] and second.calls == [False]
 
 
 def test_release_all_default_closes():
@@ -308,12 +308,3 @@ def test_release_all_default_closes():
     manager = _manager_with(controller)
     manager.release_all()
     assert controller.calls == [True]
-
-
-def test_profile_outlives_release_and_dies_with_shutdown():
-    manager = _manager_with(FakeController(owned=0))
-    manager.set_profile(0, "operator")
-    manager.release(0)
-    assert manager.get_profile(0) == "operator"
-    manager.shutdown()
-    assert manager.get_profile(0) is None

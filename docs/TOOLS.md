@@ -59,7 +59,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_connect_existing` | Attach to an already open SAP session (SAP Logon or SAP Business Client), by `connection_index` / `session_index` or by `system` (`DEV` or `DEV/100`) when the user named it: one open session on it is attached, several or none return an error listing what is open. The response says how the session was chosen (`chosen_by`), and the audit log records an `attach` event |
 | `sap_list_connections` | List all currently open SAP connections and sessions, incl. SAP Business Client; reports `host` and `scripting_disabled`, and per session its system, client, user, transaction, `session_number` and window `title` |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen, plus the SAP GUI release (`sap_gui_version`, e.g. `8.10 PL0`) and whether the server allows only read-only scripting (`scripting_read_only`) |
-| `sap_disconnect` | Disconnect from the current SAP session (detaches attached sessions, closes owned sessions) |
+| `sap_disconnect` | Disconnect from the current SAP session. Closes only the sessions this server opened (the `sap_connect` session and `/o` windows opened from it); attached sessions are left open |
 | `sap_set_policy_profile` | Switch the active policy profile for this session (exploration, operator, full); capped by the server `--profile` floor |
 | `sap_set_confirmation_points` | Choose which write categories need blocking user approval for this session (see [Confirmation Points](#confirmation-points)) |
 
