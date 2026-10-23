@@ -1860,8 +1860,15 @@ async def sap_get_popup_window(ctx: Context) -> dict:
 
     Returns the popup's title, text content, and available buttons so
     you know how to respond. Also classifies the popup and suggests a
-    safe next action. Radio buttons and checkboxes in interactive_elements
-    carry selected. Returns {popup_exists: false} if no popup."""
+    safe next action. Returns {popup_exists: false} if no popup.
+
+    The popup's text is in `texts`: labels and display-only fields (a
+    message popup's lines). A popup whose body is a classic list (an F4
+    hit list, a note, a message's long text) has `list` (`cells`, `rows`,
+    `hint`) instead: its lines are never in `texts` or
+    `interactive_elements`; read them with sap_read_list. Radio buttons
+    and checkboxes in interactive_elements carry selected. `texts`,
+    `buttons` and `interactive_elements` are left out when empty."""
     c = _ctrl(ctx)
     return await _com(c.get_popup_window)
 
