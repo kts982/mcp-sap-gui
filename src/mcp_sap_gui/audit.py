@@ -91,6 +91,14 @@ class AuditMiddleware(Middleware):
     ) -> None:
         self._identity = identity
 
+    @staticmethod
+    def _protocol(context: MiddlewareContext) -> str | None:
+        """The MCP protocol version of this request (2026-07-28 asks by
+        MRTR, older versions by elicitation requests)."""
+        rc = getattr(context.fastmcp_context, "request_context", None)
+        version = getattr(rc, "protocol_version", None)
+        return version if isinstance(version, str) else None
+
     def _sap(self, context: MiddlewareContext) -> dict[str, str]:
         if self._identity is None:
             return {}
@@ -110,6 +118,7 @@ class AuditMiddleware(Middleware):
         safe_args = _mask_secrets(raw_args)
         ts = context.timestamp.isoformat()
         sap_before = self._sap(context)
+        protocol = self._protocol(context)
 
         start = time.perf_counter()
         try:
@@ -142,6 +151,8 @@ class AuditMiddleware(Middleware):
                 line["error_msg"] = error_msg
             if sap:
                 line["sap"] = sap
+            if protocol:
+                line["protocol"] = protocol
             (logger.warning if failed else logger.info)(
                 json.dumps(line, default=str),
             )
@@ -162,5 +173,7 @@ class AuditMiddleware(Middleware):
             sap = self._sap(context) or sap_before
             if sap:
                 line["sap"] = sap
+            if protocol:
+                line["protocol"] = protocol
             logger.warning(json.dumps(line, default=str))
             raise

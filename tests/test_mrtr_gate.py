@@ -107,7 +107,8 @@ async def test_question_round_is_audited(gated, caplog):
     async with Client(server.mcp, elicitation_handler=_accept) as client:
         await _ask(client.session)
     lines = [json.loads(r.message) for r in caplog.records if r.name == "mcp_sap_gui.audit"]
-    assert {"event": "tool_call", "status": "input_required"}.items() <= next(
+    expected = {"event": "tool_call", "status": "input_required", "protocol": "2026-07-28"}
+    assert expected.items() <= next(
         line for line in lines if line["event"] == "tool_call").items()
     asked = [line for line in lines if line["event"] == "confirmation"]
     assert [(a["point"], a["outcome"]) for a in asked] == [("field_writes", "asked")]
