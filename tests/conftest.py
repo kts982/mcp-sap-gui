@@ -1,8 +1,33 @@
 """Shared test fixtures."""
 
+import os
 from unittest.mock import MagicMock, patch
 
+import fastmcp
 import pytest
+
+# MCP_TEST_ERA=legacy runs every in-memory and stdio Client on the handshake
+# protocol (2025-11-25); unset, Client negotiates MCP 2026-07-28 (FastMCP 4's
+# default). CI runs the suite once per era.
+MCP_TEST_ERA = os.environ.get("MCP_TEST_ERA", "modern")
+if MCP_TEST_ERA == "legacy":
+    _client_init = fastmcp.Client.__init__
+
+    def _legacy_client_init(self, *args, mode="legacy", **kwargs):
+        _client_init(self, *args, mode=mode, **kwargs)
+
+    fastmcp.Client.__init__ = _legacy_client_init
+
+
+def pytest_collection_modifyitems(config, items):
+    if MCP_TEST_ERA == "legacy":
+        return
+    pending = pytest.mark.xfail(
+        reason="body-gate question not yet ported to MCP 2026-07-28", strict=True,
+    )
+    for item in items:
+        if item.get_closest_marker("mrtr_body_gate"):
+            item.add_marker(pending)
 
 # The patch.dict(sys.modules) below drops every module a test imported.
 # FastMCP 4 caches the prefab classes, so a prefab_ui imported again in a

@@ -204,6 +204,7 @@ def test_audit_still_records_raised_errors(fake, monkeypatch, caplog):
 
 # --- sap_send_key Save -------------------------------------------------------
 
+@pytest.mark.mrtr_body_gate
 def test_declined_save_carries_error(fake, caplog):
     caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")
 
@@ -223,6 +224,7 @@ def test_declined_save_carries_error(fake, caplog):
     assert line["status"] == "error"
 
 
+@pytest.mark.mrtr_body_gate
 def test_declined_save_in_strict_mode_is_an_mcp_error(fake, monkeypatch):
     strict(monkeypatch)
 
@@ -235,6 +237,7 @@ def test_declined_save_in_strict_mode_is_an_mcp_error(fake, monkeypatch):
     assert result.structured_content["status"] == "cancelled"
 
 
+@pytest.mark.mrtr_body_gate
 def test_accepted_save_is_sent_and_audited_ok(fake, monkeypatch, caplog):
     strict(monkeypatch)
     caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")

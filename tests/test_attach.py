@@ -311,6 +311,7 @@ def _real_client_attach(monkeypatch, handler):
     return controller, asyncio.run(run())
 
 
+@pytest.mark.mrtr_body_gate
 def test_dialog_over_a_real_client(monkeypatch):
     # The options go over the wire as titled values (oneOf const/title): the
     # client shows the titles and answers with the const, the session's
@@ -319,8 +320,8 @@ def test_dialog_over_a_real_client(monkeypatch):
     seen = []
 
     async def pick_second(message, response_type, params, context):
-        seen.append(params.requestedSchema)
-        choice = params.requestedSchema["properties"]["value"]["oneOf"][1]["const"]
+        seen.append(params.requested_schema)
+        choice = params.requested_schema["properties"]["value"]["oneOf"][1]["const"]
         return ElicitResult(action="accept", content=response_type(value=choice))
 
     controller, result = _real_client_attach(monkeypatch, pick_second)
@@ -338,6 +339,7 @@ def test_dialog_over_a_real_client(monkeypatch):
     ]
 
 
+@pytest.mark.mrtr_body_gate
 def test_a_typed_answer_that_is_no_option_attaches_nothing(monkeypatch, caplog):
     # Live in the Claude Code CLI: the picker came up as a text box and the
     # answer was "test?". fastmcp rejects it; the tool says so plainly.

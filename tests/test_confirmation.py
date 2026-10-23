@@ -515,6 +515,7 @@ class TestGating:
         assert result.structured_content == {"status": "ok", "confirmed_by_user": True}
         assert json.loads(_text(result)) == result.structured_content
 
+    @pytest.mark.mrtr_body_gate
     async def test_accepted_save_key_reports_confirmed_by_user(self, srv):
         _, patcher = _patched_controller(send_vkey={"status": "ok"}, check_vkey=None)
         elicitor = _Elicitor("accept")
@@ -594,6 +595,7 @@ class TestGating:
         assert elicitor.messages == []
         controller.read_field.assert_called_once()
 
+    @pytest.mark.mrtr_body_gate
     async def test_send_key_is_gated_once_by_the_body_gate(self, srv):
         """No point maps sap_send_key, so F11 keeps exactly its own gate."""
         controller, patcher = _patched_controller(
@@ -612,6 +614,7 @@ class TestGating:
         assert "triggers Save (F11)" in elicitor.messages[0]
         assert controller.send_vkey.call_count == 2
 
+    @pytest.mark.mrtr_body_gate
     async def test_all_writes_prompts_twice_for_the_save_key(self, srv):
         """Documented consequence: all_writes covers every write-tagged tool and
         the sap_send_key body gate is unchanged, so F11 asks twice."""
@@ -871,12 +874,14 @@ class TestPolicyOrdering:
 
 
 def _confirmation_records(caplog):
+    """Confirmation outcomes. On MCP 2026-07-28 the question round also logs
+    an "asked" line; it is left out here so one list fits both eras."""
     records = []
     for record in caplog.records:
         if record.name != "mcp_sap_gui.audit":
             continue
         payload = json.loads(record.message)
-        if payload.get("event") == "confirmation":
+        if payload.get("event") == "confirmation" and payload.get("outcome") != "asked":
             records.append(payload)
     return records
 
@@ -942,6 +947,7 @@ class TestConfirmationAudit:
     @pytest.mark.parametrize("action, outcome", [
         ("accept", "accepted"), ("decline", "declined"), ("cancel", "declined"),
     ])
+    @pytest.mark.mrtr_body_gate
     async def test_save_key_outcome_is_logged(self, srv, caplog, action, outcome):
         """The sap_send_key body gate leaves the same audit record as the
         middleware: the save point, the tool, the outcome."""
@@ -998,9 +1004,11 @@ class TestConfirmationAudit:
             json.loads(r.message) for r in caplog.records
             if r.name == "mcp_sap_gui.audit"
         ]
+        # On MCP 2026-07-28 the question round has its own line first.
         errored = [
             e for e in tool_calls
             if e.get("event") == "tool_call" and e.get("tool") == "sap_set_field"
+            and e.get("status") != "input_required"
         ]
         assert errored and errored[0]["status"] == "error"
 

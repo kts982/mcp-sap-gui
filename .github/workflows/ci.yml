@@ -38,7 +38,14 @@ jobs:
       - name: Run Ruff
         run: uv run ruff check src tests
 
-      - name: Run pytest
+      # Clients negotiate MCP 2026-07-28 by default (FastMCP 4); the second
+      # run pins the handshake protocol, which most clients still use.
+      - name: Run pytest (MCP 2026-07-28)
+        run: uv run pytest -q
+
+      - name: Run pytest (handshake protocol)
+        env:
+          MCP_TEST_ERA: legacy
         run: uv run pytest -q
 
       # sap_preview must degrade to text when prefab-ui is absent, which the

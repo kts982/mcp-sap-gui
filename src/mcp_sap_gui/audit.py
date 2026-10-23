@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping, Optional
 
 import mcp.types
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools import ToolResult
+from fastmcp.tools import InputRequiredToolResult, ToolResult
 
 from .strict import result_error
 
@@ -126,12 +126,16 @@ class AuditMiddleware(Middleware):
             failed = error_msg is not None or (
                 isinstance(result, ToolResult) and result.is_error
             )
+            # On MCP 2026-07-28 a call that asks the user returns the
+            # question and is called again with the answer: one line per round.
+            status = ("input_required" if isinstance(result, InputRequiredToolResult)
+                      else "error" if failed else "ok")
             line: dict[str, Any] = {
                 "event": "tool_call",
                 "ts": ts,
                 "tool": tool_name,
                 "args": safe_args,
-                "status": "error" if failed else "ok",
+                "status": status,
                 "duration_ms": duration_ms,
             }
             if error_msg is not None:

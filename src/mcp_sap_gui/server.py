@@ -43,6 +43,7 @@ from .confirmation import (
     ask_user,
     build_relax_prompt,
     effective_points,
+    is_modern,
     log_attach_event,
     log_confirmation_event,
     points_with_provenance,
@@ -648,15 +649,27 @@ def _note_cap(result, requested: int, capped: int):
 
 
 def _session_key(ctx: Context) -> str:
-    """Derive a stable key for the current MCP client session.
+    """Derive a stable key for the current MCP client.
 
-    ``ctx.session_id``, not ``id(ctx.session)``: with the MCP Python SDK v2
-    (FastMCP 4) every request gets a new ServerSession object, so ``id()``
-    changes on every call, and confirmation points and the SAP binding
-    silently vanish between calls. ``session_id`` is the same for all calls
-    of one client on FastMCP 3.x and 4.
+    - Handshake-era connection: ``ctx.session_id``. Not ``id(ctx.session)``:
+      the MCP SDK v2 makes a new ServerSession per request, so ``id()``
+      changes on every call and the binding and points silently vanish.
+    - MCP 2026-07-28 over stdio (or in memory): ``"process"``. That protocol
+      has no sessions, and a stdio server process serves one client (the
+      same rule as FastMCP's own session scope, without its private API).
+    - MCP 2026-07-28 over HTTP: nothing identifies the client from one
+      request to the next, so the call is refused rather than shared.
     """
-    return ctx.session_id
+    if not is_modern(ctx):
+        return ctx.session_id
+    if ctx.transport in ("sse", "streamable-http"):
+        raise ValueError(
+            "This request uses MCP 2026-07-28 over HTTP, which carries no "
+            "client identity, so the server cannot keep an SAP session per "
+            "client. Connect over stdio, or with a client that uses the "
+            "older protocol."
+        )
+    return "process"
 
 
 def _ctrl(ctx: Context):
@@ -2673,7 +2686,7 @@ def _build_code_mode_transform():
         sandbox_provider=MontySandboxProvider(
             # Defaults (30 s / 50 calls) are too tight for table pagination
             # loops over slow SAP screens.
-            limits={"max_duration_secs": 120, "max_memory": 100_000_000},
+            limits={"max_feed_duration_secs": 120, "max_memory": 100_000_000},
         ),
         discovery_tools=[GetTags(), Search(default_detail="detailed"), GetSchemas()],
         max_tool_calls=200,

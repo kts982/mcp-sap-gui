@@ -773,16 +773,16 @@ class TestToolRegistration:
         for tool in tools:
             assert tool.annotations is not None, f"{tool.name} missing annotations"
             if tool.name in read_only_tools:
-                assert tool.annotations.readOnlyHint is True, (
+                assert tool.annotations.read_only_hint is True, (
                     f"{tool.name} should be readOnly"
                 )
             elif tool.name in destructive_tools:
-                assert tool.annotations.destructiveHint is True, (
+                assert tool.annotations.destructive_hint is True, (
                     f"{tool.name} should be destructive"
                 )
             else:
                 # Write tools
-                assert tool.annotations.readOnlyHint is False, (
+                assert tool.annotations.read_only_hint is False, (
                     f"{tool.name} should NOT be readOnly"
                 )
 
@@ -817,7 +817,7 @@ class TestToolTags:
 
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
         for tool in tools:
-            if tool.annotations and tool.annotations.readOnlyHint:
+            if tool.annotations and tool.annotations.read_only_hint:
                 assert "read" in tool.tags, (
                     f"{tool.name} is readOnly but missing 'read' tag"
                 )
@@ -832,8 +832,8 @@ class TestToolTags:
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
         for tool in tools:
             if (tool.annotations
-                    and not tool.annotations.readOnlyHint
-                    and not tool.annotations.destructiveHint):
+                    and not tool.annotations.read_only_hint
+                    and not tool.annotations.destructive_hint):
                 assert "write" in tool.tags, (
                     f"{tool.name} is write but missing 'write' tag"
                 )
@@ -847,7 +847,7 @@ class TestToolTags:
 
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
         for tool in tools:
-            if tool.annotations and tool.annotations.destructiveHint:
+            if tool.annotations and tool.annotations.destructive_hint:
                 assert "destructive" in tool.tags, (
                     f"{tool.name} is destructive but missing 'destructive' tag"
                 )
@@ -1148,7 +1148,7 @@ class TestWorkflowGuideTool:
 
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
         tool = next(t for t in tools if t.name == "sap_get_workflow_guide")
-        assert tool.annotations.readOnlyHint is True
+        assert tool.annotations.read_only_hint is True
 
     def test_tool_has_read_tag(self, srv):
         """sap_get_workflow_guide has the 'read' tag."""
@@ -1324,7 +1324,7 @@ class TestTransactionGuideTool:
 
         tools = asyncio.new_event_loop().run_until_complete(get_tools())
         tool = next(t for t in tools if t.name == "sap_get_transaction_guide")
-        assert tool.annotations.readOnlyHint is True
+        assert tool.annotations.read_only_hint is True
         assert "read" in tool.tags
 
     def test_tool_schema_transaction_is_string(self, srv):
