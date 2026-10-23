@@ -4,6 +4,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# The patch.dict(sys.modules) below drops every module a test imported.
+# FastMCP 4 caches the prefab classes, so a prefab_ui imported again in a
+# later test no longer matches the cache and preview cards serialize as plain
+# dumps. Loaded once here, it stays. Not installed without the apps extra.
+try:
+    import prefab_ui.app  # noqa: F401
+    import prefab_ui.components.base  # noqa: F401
+except ImportError:
+    pass
+
 
 @pytest.fixture(autouse=True)
 def mock_windows_com_modules():

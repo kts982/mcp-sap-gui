@@ -110,7 +110,7 @@ class TestMarkConfirmed:
     """_mark_confirmed only rewrites a plain dict result."""
 
     def test_dict_result_gets_the_flag(self):
-        from fastmcp.tools.tool import ToolResult
+        from fastmcp.tools import ToolResult
 
         marked = _confirm_mod._mark_confirmed(ToolResult(structured_content={"a": 1}))
 
@@ -118,7 +118,7 @@ class TestMarkConfirmed:
         assert json.loads(marked.content[0].text) == marked.structured_content
 
     def test_error_and_multi_block_results_pass_unchanged(self):
-        from fastmcp.tools.tool import ToolResult
+        from fastmcp.tools import ToolResult
         from mcp.types import ImageContent, TextContent
 
         error = ToolResult(structured_content={"a": 1}, is_error=True)
@@ -324,14 +324,15 @@ class TestConfirmationPointTool:
         assert result["always_on"] == ["save"]
 
     async def test_relax_fails_closed_without_elicitation(self, srv):
-        from mcp.shared.exceptions import McpError
-        from mcp.types import INVALID_REQUEST, ErrorData
+        from mcp.types import INVALID_REQUEST
+
+        from tests.fakes import mcp_error
 
         ctx = _make_elicit_ctx()
         await srv.sap_set_confirmation_points(["field_writes"], ctx)
-        ctx.elicit = AsyncMock(side_effect=McpError(
-            ErrorData(code=INVALID_REQUEST, message="Elicitation not supported")
-        ))
+        ctx.elicit = AsyncMock(
+            side_effect=mcp_error(INVALID_REQUEST, "Elicitation not supported")
+        )
 
         with pytest.raises(ValueError, match="does not support elicitation"):
             await srv.sap_set_confirmation_points([], ctx)

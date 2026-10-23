@@ -29,10 +29,9 @@ from typing import List, Literal, Optional
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 from fastmcp.apps import UI_EXTENSION_ID
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import McpError, ToolError
 from fastmcp.server.lifespan import lifespan
 from fastmcp.tools import ToolResult
-from mcp.shared.exceptions import McpError
 from mcp.types import ImageContent, TextContent
 
 from .audit import AuditMiddleware

@@ -373,12 +373,11 @@ def test_send_key_declined_save_unchanged(tools):
 
 
 def test_handle_popup_save_without_elicitation_fails_closed(tools):
-    from mcp.shared.exceptions import McpError
-    from mcp.types import ErrorData
+    from tests.fakes import mcp_error
 
     class NoElicitCtx:
         async def elicit(self, message: str, response_type: Any = None, **_: Any):
-            raise McpError(ErrorData(code=-32601, message="elicitation not supported"))
+            raise mcp_error(-32601, "elicitation not supported")
 
     _open(tools, SAVE_FIRST)
     with pytest.raises(ValueError, match="does not support elicitation"):
