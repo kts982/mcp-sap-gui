@@ -61,6 +61,7 @@ from .policy import (
     DEFAULT_PRESET,
     POLICY_FILE_ENV,
     PRESETS,
+    SESSION_COMMANDS,
     PolicyError,
     TransactionPolicy,
     load_policy,
@@ -96,6 +97,14 @@ _DEFAULT_BLOCKED_TRANSACTIONS = list(PRESETS[DEFAULT_PRESET]["block"])
 
 _TRANSACTION_PREFIX_RE = re.compile(r"^(?:/(?:N|O|\*)\s*)+", re.IGNORECASE)
 _TRANSACTION_CODE_RE = re.compile(r"^/?[A-Z0-9_]+(?:/[A-Z0-9_]+)*$")
+# /i with an optional session number. Live (SAP GUI 8.10): /i3 closed session
+# 3 from session 4, and "/i 2" closed the current session (the number after a
+# space is ignored). No transaction code has this shape: a namespaced code
+# always has a second slash.
+_SESSION_CLOSE_RE = re.compile(r"/I(?:\s*\d+)?")
+# Command-field prefixes that start a transaction: /n, /o, /* and a bare *.
+# A value without one of them is a function code (%PC, &ALL, BACK) or a code.
+_OKCODE_START_PREFIX_RE = re.compile(r"^(?:(?:/(?:N|O|\*)|\*)\s*)+", re.IGNORECASE)
 _COMMAND_FIELD_EXACT_NAMES = {
     "okcd",
     "okcode",
@@ -139,6 +148,8 @@ def _normalize_transaction_code(raw: str, *, strict: bool = True) -> str | None:
             raise ValueError("Transaction code cannot be empty")
         return None
 
+    if _SESSION_CLOSE_RE.fullmatch(value):
+        return "/I"
     if not _TRANSACTION_CODE_RE.fullmatch(value):
         if strict:
             raise ValueError(
@@ -712,6 +723,8 @@ def precheck_before_confirmation(tool_name: str, args,
             if isinstance(fields, dict):
                 for fid, val in fields.items():
                     _check_okcode_bypass(fid, str(val))
+        elif tool_name == "sap_set_textedit":
+            _check_okcode_bypass(get("textedit_id"), get("text"))
     except ValueError as exc:
         raise ToolError(f"Error calling tool '{tool_name}': {exc}") from exc
 
@@ -755,6 +768,14 @@ def _enforce_transaction_policy(tcode: str, *, source: str = "transaction") -> s
         return canonical
 
     if not config.policy.permits(canonical):
+        if canonical in SESSION_COMMANDS:
+            raise ValueError(
+                f"{canonical} is a session command, not a transaction "
+                f"({SESSION_COMMANDS[canonical]}). It is blocked by security "
+                f"policy"
+                f"{f' (attempted via {source})' if source != 'transaction' else ''}"
+                f"{config.policy.how_to_allow(canonical)}"
+            )
         raise ValueError(
             f"Transaction {canonical} is blocked by security policy"
             f"{f' (attempted via {source})' if source != 'transaction' else ''}"
@@ -798,13 +819,47 @@ def _is_okcode_field(field_id: str) -> bool:
     )
 
 
+def _okcode_start_token(value: object) -> str | None:
+    """Return the code a command-field value tries to start, or None.
+
+    Only for values the normalizer could not parse. A value that starts with
+    /n, /o, /* or * (after any leading '=') starts a transaction; the code is
+    the first token after the prefix, up to whitespace or ';'. Anything else
+    (``%PC``, ``&ALL``) is a function code and returns None, as does a bare
+    prefix, which names no code.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    while text.startswith("="):
+        text = text[1:].lstrip()
+    match = _OKCODE_START_PREFIX_RE.match(text)
+    if not match:
+        return None
+    rest = text[match.end():]
+    token = re.split(r"[\s;]", rest, maxsplit=1)[0]
+    return token or None
+
+
 def _check_okcode_bypass(field_id: str, value: str):
     """Block attempts to execute blocked transactions via the OK-code field."""
     if not _is_okcode_field(field_id):
         return
     candidate = _normalize_transaction_code(value, strict=False)
     if candidate is None:
-        return
+        # Fail closed for values that start a transaction but do not parse
+        # as a whole (/*SU01 FIELD=VALUE, *SU01): check the code they name,
+        # and refuse when there is no code the policy can check.
+        token = _okcode_start_token(value)
+        if token is None:
+            return
+        candidate = _normalize_transaction_code(token, strict=False)
+        if candidate is None:
+            raise ValueError(
+                f"Command field value {value!r} starts a transaction, but "
+                f"{token!r} is not a transaction code the security policy "
+                "can check; refused"
+            )
     _enforce_transaction_policy(candidate, source="command field")
 
 
@@ -1527,6 +1582,8 @@ async def sap_set_textedit(textedit_id: str, text: str, ctx: Context) -> dict:
     """Write text into a multiline text editor (GuiTextedit) —
     long texts, notes, comments, document text."""
     _check_write(ctx)
+    # set_textedit writes .Text on any element Id, the command field included.
+    _check_okcode_bypass(textedit_id, text)
     c = _ctrl(ctx)
     return await _com(lambda: c.set_textedit(textedit_id, text))
 
