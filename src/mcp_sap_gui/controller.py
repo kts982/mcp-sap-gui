@@ -179,8 +179,6 @@ class SAPGUIControllerBase:
     def __init__(self):
         """Initialize the SAP GUI controller."""
         self._win32com = None
-        self._sap_gui_auto = None
-        self._saplogon_engine = None
         # Scripting engine per ROT entry, reused across discoveries: every
         # GetScriptingEngine call raises the "allow scripting" dialog on each
         # connection whose server sets
@@ -227,37 +225,19 @@ class SAPGUIControllerBase:
         except Exception:
             pass  # Already initialized or not needed
 
-    def _get_sap_gui(self):
-        """Get the SAP Logon (``SAPGUI``) automation object."""
-        if self._sap_gui_auto is None:
-            self._ensure_com_initialized()
-            try:
-                self._sap_gui_auto = self._win32com.GetObject("SAPGUI")
-            except Exception as e:
-                logger.warning(
-                    "Failed to get SAP GUI automation object: %s",
-                    e,
-                    exc_info=logger.isEnabledFor(logging.DEBUG),
-                )
-                raise SAPGUINotAvailableError(_NOT_AVAILABLE_MESSAGE + ".")
-        return self._sap_gui_auto
-
     def _get_saplogon_engine(self):
-        """Get the SAP Logon scripting engine (needed for OpenConnection)."""
-        if self._saplogon_engine is None:
-            engine = self._rot_engines.get("SAPGUI")
-            if engine is None:
-                sap_gui = self._get_sap_gui()
-                # Use property access (no parentheses) - works more reliably
-                engine = sap_gui.GetScriptingEngine
-            if engine is None:
-                raise SAPGUINotAvailableError(
-                    "Could not get SAP GUI Scripting Engine. "
-                    "Is SAP GUI Scripting enabled?"
-                )
-            self._saplogon_engine = engine
-            self._rot_engines.setdefault("SAPGUI", engine)
-        return self._saplogon_engine
+        """Get the SAP Logon scripting engine (needed for OpenConnection).
+
+        Shares discovery's cache and its check (_get_engine_from_rot): after a
+        SAP Logon restart the dead engine is dropped and the new SAP Logon
+        looked up, where a kept engine made every sap_connect fail until the
+        server restarted.
+        """
+        self._ensure_com_initialized()
+        engine = self._get_engine_from_rot("SAPGUI")
+        if engine is None:
+            raise SAPGUINotAvailableError(_NOT_AVAILABLE_MESSAGE + ".")
+        return engine
 
     def _get_application(self):
         """Get the scripting engine of the bound session.

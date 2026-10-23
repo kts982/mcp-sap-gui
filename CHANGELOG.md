@@ -35,6 +35,7 @@ Every release and what changed for someone running the server. The [GitHub relea
 - **A blank New Entries line with a dropdown read as an entry** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)). The dropdown's empty entry reads as a single space; a whitespace-only cell now counts as blank, so `empty_rows_from` marks where the data ends.
 - **`validation.performed` was true when Enter was refused or failed** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)). It is now false, with the error.
 - **One "allow scripting" dialog per SAP GUI process, not one per tool call** ([#32](https://github.com/kts982/mcp-sap-gui/pull/32), by [@nelz0n](https://github.com/nelz0n)). Since 0.5.0 every `sap_list_connections` and `sap_connect_existing` looked up the scripting engine of each SAP GUI process again, and a system with `sapgui/user_scripting_force_notification` set asks the user at each lookup, for each of its connections. The engine of each process is now kept and reused while it answers; one that stops answering (SAP Logon restarted) is looked up again, and a GUI server process that ended is forgotten.
+- **`sap_connect` failed after SAP Logon was restarted, until the server restarted.** It kept the SAP Logon engine from its first use; after a restart that engine was dead and `OpenConnection` failed. It now uses the engine discovery keeps, checked before each use, so a new SAP Logon is picked up.
 
 ### Dependencies
 
