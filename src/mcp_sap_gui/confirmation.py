@@ -26,17 +26,22 @@ tool body on the single-threaded COM executor.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
 
 import mcp.types
 from fastmcp.exceptions import McpError, ToolError
+from fastmcp.server.elicitation import handle_elicit_accept, parse_elicit_response_type
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools import ToolResult
+from fastmcp.tools import InputRequiredToolResult, ToolResult
+from mcp_types import ElicitRequest, ElicitRequestFormParams, InputRequiredResult
+from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 
 from .audit import logger as audit_logger
 from .preview import _normalize_fields, _overflow_line
@@ -356,6 +361,149 @@ def _is_true(data: Any) -> bool:
     return data is True
 
 
+# ---------------------------------------------------------------------------
+# Protocol eras
+# ---------------------------------------------------------------------------
+#
+# A handshake-era connection (MCP 2025-11-25 and older) asks with
+# ctx.elicit(): the server sends elicitation/create and waits. MCP 2026-07-28
+# has no server-to-client requests: a tool asks by returning an
+# InputRequiredResult, and the client shows the dialog and calls the tool
+# again, with the answer in input_responses and our request_state echoed
+# back. The SDK seals request_state (AES-GCM, bound to the tool, its
+# arguments and a TTL), so a client cannot forge or edit it. In it we record
+# which questions we asked and when; an answer counts only for a question we
+# asked, and only once.
+
+
+def is_modern(ctx: Any) -> bool:
+    """True on an MCP 2026-07-28 connection (questions go by MRTR)."""
+    rc = getattr(ctx, "request_context", None)
+    return getattr(rc, "protocol_version", None) in MODERN_PROTOCOL_VERSIONS
+
+
+@dataclass
+class Ask:
+    """A question for a 2026-07-28 client. The tool returns ``result`` (the
+    middleware wraps it in ``InputRequiredToolResult``); the client shows the
+    dialog and calls the tool again with the answer."""
+
+    result: InputRequiredResult
+
+
+#: Approvals already counted, as (nonce, gate): an answer is used once, even
+#: if a client sends the same sealed state and answer again within its TTL.
+_CONSUMED: set[tuple[str, str]] = set()
+_ROUND_STATE = "mcp_sap_gui.confirmation_round"
+#: Outcomes logged before an answer exists, so without elapsed_ms.
+_UNTIMED = frozenset({"asked", "unsolicited_answer", "replayed"})
+
+#: For an answer whose question is out of date (see ``shown`` in ask_user).
+CHANGED_NOTE = (
+    " What the question showed changed before the answer arrived (another "
+    "popup, screen or session list), so the answer does not apply. Read the "
+    "screen again and repeat the call if it is still wanted."
+)
+
+
+def _canonical(value: Any) -> Any:
+    """``value`` as it reads back from the sealed JSON state."""
+    return json.loads(json.dumps(value, default=str))
+
+
+async def _round_state(ctx: Any) -> dict[str, Any]:
+    """This call's question state: shared by the middleware and the tool body
+    within one round, carried to the next round in request_state."""
+    state = await ctx.get_state(_ROUND_STATE)
+    if state is None:
+        state = {"nonce": uuid.uuid4().hex, "asked": {}, "approved": []}
+        raw = getattr(ctx, "request_state", None)
+        if raw:
+            try:
+                state = json.loads(raw)
+            except (TypeError, ValueError):
+                pass  # not ours; the SDK rejects a state it did not seal
+        await ctx.set_state(_ROUND_STATE, state, serializable=False)
+    return state
+
+
+#: The tool the client called, set by ConfirmationMiddleware on the outermost
+#: call. A tool that code mode's ``execute`` calls runs in the same task, so
+#: it sees ``execute`` here. (The request context does not say: on a nested
+#: call it carries no tool name.)
+_OUTER_TOOL: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_sap_gui_outer_tool", default=None,
+)
+
+
+def _outer_tool(ctx: Any) -> str | None:
+    return _OUTER_TOOL.get()
+
+
+def _client_can_elicit(ctx: Any) -> bool:
+    caps = getattr(getattr(ctx, "session", None), "client_capabilities", None)
+    return getattr(caps, "elicitation", None) is not None
+
+
+def _cannot_ask(message: str) -> McpError:
+    return McpError(code=-32601, message=message)
+
+
+async def _modern_answer(
+    ctx: Any, *, gate: str, can_ask: bool, tool: str, message: str,
+    response_type: Any, response_title: str | None, shown: Any,
+    log: Callable[..., None],
+) -> tuple[Any, Any, float | None] | Ask:
+    """The answer to *gate* in this round as (action, data, elapsed_ms), or
+    an Ask to return. elapsed_ms is None for a question approved in an
+    earlier round of the same call; action is "changed" when *shown* differs
+    from what the question showed. Raises McpError where no question can be
+    asked, so every gate fails closed through its unsupported-client path."""
+    if not _client_can_elicit(ctx):
+        raise _cannot_ask("The client did not declare elicitation support.")
+    outer = _outer_tool(ctx)
+    if outer is not None and outer != tool:
+        raise _cannot_ask(
+            f"{tool} was called from a script ({outer}). On MCP 2026-07-28 a "
+            f"script cannot ask the user: call {tool} directly."
+        )
+    if not can_ask:
+        raise _cannot_ask("This question is not available yet on MCP 2026-07-28.")
+
+    state = await _round_state(ctx)
+    if gate in state["approved"]:
+        return "accept", True, None
+    cfg = parse_elicit_response_type(response_type, response_title=response_title)
+    answer = (getattr(ctx, "input_responses", None) or {}).get(gate)
+    if answer is not None and gate in state["asked"]:
+        key = (state["nonce"], gate)
+        if key in _CONSUMED:
+            log("replayed")
+            raise ToolError(f"{tool}: this approval was already used. Nothing was executed.")
+        _CONSUMED.add(key)
+        elapsed = (time.time() - state["asked"][gate]) * 1000
+        if state.get("shown", {}).get(gate) != _canonical(shown):
+            return "changed", None, elapsed
+        action = getattr(answer, "action", None)
+        data = None
+        if action == "accept":
+            data = getattr(handle_elicit_accept(cfg, answer.content), "data", None)
+        return action, data, elapsed
+    if answer is not None:
+        log("unsolicited_answer")  # an answer to a question we did not ask
+    state["asked"][gate] = time.time()
+    state.setdefault("shown", {})[gate] = _canonical(shown)
+    log("asked")
+    return Ask(InputRequiredResult(
+        result_type="input_required",
+        input_requests={gate: ElicitRequest(
+            method="elicitation/create",
+            params=ElicitRequestFormParams(message=message, requested_schema=cfg.schema),
+        )},
+        request_state=json.dumps(state),
+    ))
+
+
 async def ask_user(
     ctx: Any,
     *,
@@ -366,30 +514,60 @@ async def ask_user(
     response_title: str | None = None,
     is_yes: Callable[[Any], bool] = _is_true,
     is_valid: Callable[[Any], bool] | None = None,
-) -> Answer:
+    gate: str | None = None,
+    can_ask: bool = False,
+    shown: Any = None,
+) -> Answer | Ask:
     """Ask the user one question; the same rules for every gate.
 
-    - The answer is timed (``timed_elicit``). An answer faster than
-      ``NO_DIALOG_MS`` came from the client, not a person: a decline gets
-      ``no_dialog_note``, and a yes is refused with ``fast_yes_note``.
+    - The answer is timed. An answer faster than ``NO_DIALOG_MS`` came from
+      the client, not a person: a decline gets ``no_dialog_note``, and a yes
+      is refused with ``fast_yes_note``.
     - ``is_yes(data)`` decides what an accepted answer means (a ticked box
       by default). ``is_valid(data)``, when given, separates a wrong answer
       (``action: invalid``) from a no.
     - Every outcome is written to the audit log, one line per point.
     - ``McpError`` (a client without elicitation) is not caught: each gate
       fails closed with its own message.
+    - On MCP 2026-07-28 the first round returns an ``Ask`` for the caller to
+      return, and the next round (with the answer) the ``Answer``. ``gate``
+      names the question within the call (default: the points). Only a
+      caller that passes ``can_ask=True`` gets an Ask; for the others the
+      question fails closed there as unsupported.
+    - The tool body runs again when the answer arrives, so a caller passes
+      ``shown``: what the question is about (the screen, the popup and its
+      button, the options), read again in the answer round. If it differs
+      from the question's, the answer does not count (``action: changed``).
     """
     point_list = [points] if isinstance(points, str) else list(points)
-    kwargs: dict[str, Any] = {"message": message, "response_type": response_type}
-    if response_title is not None:
-        kwargs["response_title"] = response_title
-    result, elapsed = await timed_elicit(ctx, **kwargs)
-    data = getattr(result, "data", None)
-    accepted = result.action == "accept"
+    elapsed: float | None = None
 
     def log(outcome: str, client_answer: str | None = None) -> None:
+        timed = None if outcome in _UNTIMED else elapsed
         for point in point_list:
-            log_confirmation_event(point, tool, outcome, elapsed, client_answer)
+            log_confirmation_event(point, tool, outcome, timed, client_answer)
+
+    if is_modern(ctx):
+        found = await _modern_answer(
+            ctx, gate=gate or "+".join(point_list), can_ask=can_ask, tool=tool,
+            message=message, response_type=response_type,
+            response_title=response_title, shown=shown, log=log,
+        )
+        if isinstance(found, Ask):
+            return found
+        action, data, elapsed = found
+        if elapsed is None:  # approved in an earlier round of this call
+            return Answer(True, "accept", data, 0.0, "")
+        if action == "changed":
+            log("changed")
+            return Answer(False, "changed", None, elapsed, CHANGED_NOTE)
+    else:
+        kwargs: dict[str, Any] = {"message": message, "response_type": response_type}
+        if response_title is not None:
+            kwargs["response_title"] = response_title
+        result, elapsed = await timed_elicit(ctx, **kwargs)
+        action, data = result.action, getattr(result, "data", None)
+    accepted = action == "accept"
 
     if accepted and is_valid is not None and not is_valid(data):
         log("invalid_answer")
@@ -399,9 +577,13 @@ async def ask_user(
             log("declined", client_answer="accept")
             return Answer(False, "decline", data, elapsed, fast_yes_note(elapsed))
         log("accepted")
+        if is_modern(ctx):
+            # Later rounds of this call (a second gate asks after this one)
+            # must not ask this question again.
+            (await _round_state(ctx))["approved"].append(gate or "+".join(point_list))
         return Answer(True, "accept", data, elapsed, "")
     log("declined")
-    return Answer(False, result.action, data, elapsed, no_dialog_note(elapsed))
+    return Answer(False, action, data, elapsed, no_dialog_note(elapsed))
 
 
 def log_attach_event(session: Mapping[str, Any], chosen_by: str) -> None:
@@ -481,6 +663,19 @@ class ConfirmationMiddleware(Middleware):
         context: MiddlewareContext[mcp.types.CallToolRequestParams],
         call_next: CallNext[mcp.types.CallToolRequestParams, ToolResult],
     ) -> ToolResult:
+        if _OUTER_TOOL.get() is not None:  # called from a script
+            return await self._gate(context, call_next)
+        token = _OUTER_TOOL.set(context.message.name)
+        try:
+            return await self._gate(context, call_next)
+        finally:
+            _OUTER_TOOL.reset(token)
+
+    async def _gate(
+        self,
+        context: MiddlewareContext[mcp.types.CallToolRequestParams],
+        call_next: CallNext[mcp.types.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
         ctx = context.fastmcp_context
         if ctx is None:
             return await call_next(context)
@@ -513,6 +708,8 @@ class ConfirmationMiddleware(Middleware):
                 # The CLI shows the answer as a checkbox: without a title it
                 # reads "Value". Only a ticked box with Accept proceeds.
                 response_title="Yes, run it",
+                gate=f"point:{point}",
+                can_ask=True,
             )
         except McpError as exc:
             # Fail closed, matching the existing save gate.
@@ -522,6 +719,8 @@ class ConfirmationMiddleware(Middleware):
                 f"client does not support elicitation: {exc}"
             ) from exc
 
+        if isinstance(answer, Ask):
+            return InputRequiredToolResult(answer.result)
         if answer.yes:
             return _mark_confirmed(await call_next(context))
         raise ToolError(

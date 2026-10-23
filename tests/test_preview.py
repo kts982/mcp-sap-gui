@@ -344,7 +344,7 @@ class TestPreviewToolRegistration:
     async def test_registered_read_only_and_tagged_read(self, srv):
         tools = {t.name: t for t in await srv.mcp.list_tools()}
         tool = tools["sap_preview"]
-        assert tool.annotations.readOnlyHint is True
+        assert tool.annotations.read_only_hint is True
         assert "read" in tool.tags
         assert "write" not in tool.tags
 
@@ -415,7 +415,7 @@ class TestPreviewTextFallback:
         images = _image_blocks(result)
         assert len(images) == 1
         assert images[0].data == PNG_B64
-        assert images[0].mimeType == "image/png"
+        assert images[0].mime_type == "image/png"
         assert "Screenshot: included" in _first_text(result)
 
     async def test_include_screenshot_false_skips_capture(self):

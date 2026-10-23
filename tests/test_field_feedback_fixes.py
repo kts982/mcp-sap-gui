@@ -444,7 +444,7 @@ class TestScreenshotTool:
         mock_ctrl.save_screenshot.assert_not_called()
         assert [block.type for block in result.content] == ["image"]
         assert result.content[0].data == "QUJD"
-        assert result.content[0].mimeType == "image/png"
+        assert result.content[0].mime_type == "image/png"
 
     async def test_save_path_reports_the_file_and_keeps_the_image(self, srv):
         ctx = _make_mock_ctx()

@@ -871,12 +871,14 @@ class TestPolicyOrdering:
 
 
 def _confirmation_records(caplog):
+    """Confirmation outcomes. On MCP 2026-07-28 the question round also logs
+    an "asked" line; it is left out here so one list fits both eras."""
     records = []
     for record in caplog.records:
         if record.name != "mcp_sap_gui.audit":
             continue
         payload = json.loads(record.message)
-        if payload.get("event") == "confirmation":
+        if payload.get("event") == "confirmation" and payload.get("outcome") != "asked":
             records.append(payload)
     return records
 
@@ -998,9 +1000,11 @@ class TestConfirmationAudit:
             json.loads(r.message) for r in caplog.records
             if r.name == "mcp_sap_gui.audit"
         ]
+        # On MCP 2026-07-28 the question round has its own line first.
         errored = [
             e for e in tool_calls
             if e.get("event") == "tool_call" and e.get("tool") == "sap_set_field"
+            and e.get("status") != "input_required"
         ]
         assert errored and errored[0]["status"] == "error"
 

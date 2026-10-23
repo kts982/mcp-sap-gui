@@ -319,8 +319,8 @@ def test_dialog_over_a_real_client(monkeypatch):
     seen = []
 
     async def pick_second(message, response_type, params, context):
-        seen.append(params.requestedSchema)
-        choice = params.requestedSchema["properties"]["value"]["oneOf"][1]["const"]
+        seen.append(params.requested_schema)
+        choice = params.requested_schema["properties"]["value"]["oneOf"][1]["const"]
         return ElicitResult(action="accept", content=response_type(value=choice))
 
     controller, result = _real_client_attach(monkeypatch, pick_second)

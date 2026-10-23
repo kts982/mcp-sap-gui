@@ -173,7 +173,7 @@ def test_yes_no_prompts_are_labelled(monkeypatch):
     seen = []
 
     async def decline(message, response_type, params, context):
-        seen.append(params.requestedSchema["properties"]["value"])
+        seen.append(params.requested_schema["properties"]["value"])
         return ElicitResult(action="decline")
 
     async def run():
