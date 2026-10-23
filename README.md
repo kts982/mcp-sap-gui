@@ -498,7 +498,7 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
    `all_writes` covers every write-tagged tool, including selection, scrolling and navigation helpers that change no business data — it is deliberately strict and noisy, and under it `sap_send_key("F11")` prompts twice (once for the category, once for the unchanged save gate).
 
-9. **Audit Logging** - `--audit-log FILE` writes every tool call (name, arguments, timing, outcome) as JSON lines. Secrets in arguments are masked automatically
+9. **Audit Logging** - `--audit-log FILE` writes every tool call (name, arguments, timing, outcome, and the SAP system, client and user the chat is bound to) as JSON lines. Secrets in arguments are masked automatically
 
 10. **Secure Credential Resolution** - `sap_connect` resolves credentials from a `.env` file (`SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT`, `SAP_LANGUAGE`). Passwords are never accepted as MCP tool parameters and never appear in client logs, tool-call history, or audit logs. Copy `.env.example` to `.env` to get started
 

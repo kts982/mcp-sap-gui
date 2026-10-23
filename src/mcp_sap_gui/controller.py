@@ -160,6 +160,13 @@ _SUBSCREEN_ID_RE = re.compile(
 )
 
 
+def _identity_dict(system: Any, client: Any, user: Any) -> Dict[str, str]:
+    """System, client and user as the audit log records them; empty ones
+    (a logon screen has no user yet) are left out."""
+    values = {"system": system, "client": client, "user": user}
+    return {key: str(value) for key, value in values.items() if value}
+
+
 class SAPGUIControllerBase:
     """
     Base controller for SAP GUI Scripting API via COM automation.
@@ -190,6 +197,10 @@ class SAPGUIControllerBase:
         # checks scripting_read_only on the event loop, where COM is off limits.
         self.sap_gui_version = ""
         self.scripting_read_only = False
+        # System, client and user of the bound session, for the audit log
+        # (also on the event loop). Read per bind and refreshed by
+        # get_session_info, since a sap_connect session logs on after binding.
+        self.sap_identity: Dict[str, str] = {}
         self._check_dependencies()
 
     def _check_dependencies(self):
@@ -779,6 +790,7 @@ class SAPGUIControllerBase:
         self._owns_session = False
         self.sap_gui_version = ""
         self.scripting_read_only = False
+        self.sap_identity = {}
         logger.info("Disconnected")
 
     def _read_session_traits(self) -> None:
@@ -804,6 +816,12 @@ class SAPGUIControllerBase:
         except Exception as e:
             logger.debug("Scripting mode not readable: %s", e)
             self.scripting_read_only = False
+        try:
+            info = self._session.Info
+            self.sap_identity = _identity_dict(info.SystemName, info.Client, info.User)
+        except Exception as e:
+            logger.debug("Session identity not readable: %s", e)
+            self.sap_identity = {}
 
     def _find_session_by_id(self, session_id: str):
         """Locate a session by ID and return its connection plus session object."""
@@ -847,11 +865,13 @@ class SAPGUIControllerBase:
         self._require_session()
 
         info = self._session.Info
+        system, client, user = info.SystemName, info.Client, info.User
+        self.sap_identity = _identity_dict(system, client, user)
         return SessionInfo(
-            system_name=info.SystemName,
+            system_name=system,
             system_number=str(info.SystemNumber),
-            client=info.Client,
-            user=info.User,
+            client=client,
+            user=user,
             language=info.Language,
             transaction=info.Transaction,
             program=info.Program,

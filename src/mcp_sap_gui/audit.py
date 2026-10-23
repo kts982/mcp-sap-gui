@@ -8,7 +8,7 @@ Designed to feed downstream analysis (playbook generation, compliance).
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Callable, Mapping, Optional
 
 import mcp.types
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
@@ -78,7 +78,27 @@ class AuditMiddleware(Middleware):
     result that ``strict.result_error`` counts as failed (``error_msg`` then
     carries the reason). Exceptions keep their ``error`` (type) and
     ``error_msg`` keys.
+
+    ``sap`` names the system, client and user of the SAP session the chat is
+    bound to, from ``identity(fastmcp_context)``: the binding after the call
+    (an attach names the system it attached), or before it when the call
+    ended the binding. Left out while nothing is bound.
     """
+
+    def __init__(
+        self,
+        identity: Optional[Callable[[Any], Mapping[str, str]]] = None,
+    ) -> None:
+        self._identity = identity
+
+    def _sap(self, context: MiddlewareContext) -> dict[str, str]:
+        if self._identity is None:
+            return {}
+        try:
+            return dict(self._identity(context.fastmcp_context) or {})
+        except Exception:  # the audit never fails a tool call
+            logger.debug("SAP identity not available", exc_info=True)
+            return {}
 
     async def on_call_tool(
         self,
@@ -89,11 +109,13 @@ class AuditMiddleware(Middleware):
         raw_args = context.message.arguments or {}
         safe_args = _mask_secrets(raw_args)
         ts = context.timestamp.isoformat()
+        sap_before = self._sap(context)
 
         start = time.perf_counter()
         try:
             result = await call_next(context)
             duration_ms = round((time.perf_counter() - start) * 1000, 1)
+            sap = self._sap(context) or sap_before
 
             # Most SAP failures come back as a normal result with an
             # ``error`` key, not as an exception: the status follows the
@@ -114,6 +136,8 @@ class AuditMiddleware(Middleware):
             }
             if error_msg is not None:
                 line["error_msg"] = error_msg
+            if sap:
+                line["sap"] = sap
             (logger.warning if failed else logger.info)(
                 json.dumps(line, default=str),
             )
@@ -121,17 +145,18 @@ class AuditMiddleware(Middleware):
 
         except Exception as exc:
             duration_ms = round((time.perf_counter() - start) * 1000, 1)
-
-            logger.warning(
-                json.dumps({
-                    "event": "tool_call",
-                    "ts": ts,
-                    "tool": tool_name,
-                    "args": safe_args,
-                    "status": "error",
-                    "duration_ms": duration_ms,
-                    "error": type(exc).__name__,
-                    "error_msg": str(exc),
-                }, default=str),
-            )
+            line = {
+                "event": "tool_call",
+                "ts": ts,
+                "tool": tool_name,
+                "args": safe_args,
+                "status": "error",
+                "duration_ms": duration_ms,
+                "error": type(exc).__name__,
+                "error_msg": str(exc),
+            }
+            sap = self._sap(context) or sap_before
+            if sap:
+                line["sap"] = sap
+            logger.warning(json.dumps(line, default=str))
             raise
