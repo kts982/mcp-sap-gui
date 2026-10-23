@@ -707,7 +707,7 @@ class TestTagLookupFailsClosed:
         ctx.session = object()
         ctx.fastmcp.get_tool = AsyncMock(side_effect=RuntimeError("catalog gone"))
         ctx.elicit = AsyncMock(return_value=MagicMock(action="decline", data=None))
-        srv._session_mgr.set_confirmation_points(id(ctx.session), {"all_writes"})
+        srv._session_mgr.set_confirmation_points(srv._session_key(ctx), {"all_writes"})
 
         params = MagicMock()
         params.name = "sap_some_unlisted_tool"
@@ -902,7 +902,9 @@ class TestConfirmationAudit:
             "point": "field_writes",
             "tool": "sap_set_field",
             "outcome": "accepted",
+            "elapsed_ms": events[0]["elapsed_ms"],
         }]
+        assert isinstance(events[0]["elapsed_ms"], float)
 
     async def test_declined_confirmation_is_logged(self, srv, caplog):
         _, patcher = _patched_controller(set_field={"status": "ok"})

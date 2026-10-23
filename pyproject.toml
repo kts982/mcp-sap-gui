@@ -40,7 +40,10 @@ dependencies = [
 
 [project.optional-dependencies]
 screenshots = [
-    "pillow>=10.0.0",
+    # Pillow 13.0.0 fixes the 2026-10 CVE batch and needs Python 3.11+; no
+    # 12.x backport exists. On 3.10 the extra installs nothing: screenshots
+    # still work, only the PNG downscale and optimization are skipped.
+    "pillow>=13.0.0; python_version >= '3.11'",
 ]
 dev = [
     "pytest>=7.0.0",

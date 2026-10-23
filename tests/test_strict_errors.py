@@ -253,7 +253,7 @@ def test_accepted_save_is_sent_and_audited_ok(fake, monkeypatch, caplog):
 
 def test_declined_popup_answer_carries_error():
     class DeclineCtx:
-        async def elicit(self, message, response_type=None):
+        async def elicit(self, message, response_type=None, **_):
             return ElicitResult(action="decline")
 
     plan = {"popup": {"window_id": "wnd[1]", "title": "Exit Editor",

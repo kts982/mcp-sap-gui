@@ -19,3 +19,12 @@ def mock_windows_com_modules():
         },
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def answers_count_as_human(monkeypatch):
+    """Fake dialogs answer at once. Count every answer as a person's, so the
+    no-dialog note (confirmation.NO_DIALOG_MS) appears only in the tests that
+    set the threshold themselves (tests/test_no_dialog.py)."""
+    from mcp_sap_gui import confirmation
+    monkeypatch.setattr(confirmation, "NO_DIALOG_MS", 0.0)

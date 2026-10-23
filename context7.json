@@ -1,0 +1,21 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "mcp-sap-gui",
+  "description": "MCP server that drives SAP GUI for Windows through the SAP GUI Scripting API. It reads screens, fields, ALV grids, table controls, trees and popups, and fills fields, presses buttons and runs transactions, with a transaction policy, confirmation dialogs for saves and an audit log. Python package mcp-sap-gui on PyPI.",
+  "folders": ["docs"],
+  "excludeFiles": [
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE.md"
+  ],
+  "rules": [
+    "Runs on Windows only: it controls SAP GUI for Windows over COM, and SAP GUI Scripting must be enabled on the client and on the SAP server (profile parameter sapgui/user_scripting).",
+    "Start with sap_connect_existing when SAP GUI is already logged on; pass system (for example 'DEV') when the user named the SAP system.",
+    "Discover element IDs with sap_get_screen_elements, sap_get_toolbar_buttons or sap_read_table(columns_only=true) before reading or writing; never guess element IDs.",
+    "Check screen.active_window after every action: wnd[1] or higher is a popup, read it with sap_get_popup_window.",
+    "Saves (F11, the Save button, popup answers that may save) need the user's confirmation through an MCP elicitation dialog, so use a client that shows those dialogs; treat a declined confirmation as a stop.",
+    "Read large tables in pages: an ALV grid with start_row until total_rows, a table control with start_row=next_start_row while has_more is true."
+  ]
+}

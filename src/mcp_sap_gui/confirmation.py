@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import mcp.types
 from fastmcp.exceptions import ToolError
@@ -57,7 +59,12 @@ SETTABLE_POINTS: tuple[str, ...] = (
     "field_writes",
     "transactions",
     "all_writes",
+    "attach",
 )
+
+#: Not a yes/no gate: ``sap_connect_existing`` asks in its tool body which
+#: session to attach to (a choice dialog), so no tool maps to it here.
+ATTACH_POINT = "attach"
 
 ALL_POINTS: tuple[str, ...] = (SAVE_POINT, *SETTABLE_POINTS)
 
@@ -257,19 +264,160 @@ def build_relax_prompt(points: Iterable[str]) -> str:
 # Audit
 # ---------------------------------------------------------------------------
 
-def log_confirmation_event(point: str, tool: str, outcome: str) -> None:
+#: Nobody reads a dialog and answers it this fast: an answer quicker than
+#: this came from the client, which showed no dialog. Live on 2026-10-19 the
+#: Claude Code desktop app answered "decline" in 7-13 ms, in auto and in
+#: manual mode, while the Claude Code CLI showed the dialog.
+NO_DIALOG_MS = 250.0
+
+
+async def timed_elicit(ctx: Any, **kwargs: Any) -> tuple[Any, float]:
+    """``ctx.elicit(**kwargs)`` and how long the answer took, in ms."""
+    start = time.perf_counter()
+    result = await ctx.elicit(**kwargs)
+    return result, (time.perf_counter() - start) * 1000
+
+
+def no_dialog_note(elapsed_ms: float) -> str:
+    """A sentence for a decline that came back too fast for a person, else ''.
+
+    The decline still counts (fail closed); the note keeps the error from
+    claiming that the user declined, and tells the agent what to do.
+    """
+    if elapsed_ms >= NO_DIALOG_MS:
+        return ""
+    return (
+        f" The client answered in {elapsed_ms:.0f} ms without showing a "
+        "dialog, so no person saw this request. It cannot be approved in "
+        "this client: tell the user, and use a client that shows MCP "
+        "confirmation dialogs."
+    )
+
+
+def fast_yes_note(elapsed_ms: float) -> str:
+    """The sentence for a yes that came back too fast for a person.
+
+    No person can read a dialog, tick its box and press Accept this fast, so
+    the yes came from the client (or something answering for it) and is
+    refused: a gate exists so that a person approves.
+    """
+    return (
+        f" The client answered yes in {elapsed_ms:.0f} ms without showing a "
+        "dialog, so no person approved this, and it counts as declined. Tell "
+        "the user, and use a client that shows MCP confirmation dialogs."
+    )
+
+
+def log_confirmation_event(point: str, tool: str, outcome: str,
+                           elapsed_ms: float | None = None,
+                           client_answer: str | None = None) -> None:
     """Emit a confirmation outcome to the audit log.
 
     AuditMiddleware records only whether the call failed, not which point
     prompted or what the user answered — this is the only record of that.
+    ``elapsed_ms`` is how long the answer took; ``no_dialog`` marks one that
+    came back faster than a person can answer (``NO_DIALOG_MS``), and
+    ``client_answer`` what the client said when that answer was overruled.
     """
+    line: dict[str, Any] = {
+        "event": "confirmation",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "point": point,
+        "tool": tool,
+        "outcome": outcome,
+    }
+    if elapsed_ms is not None:
+        line["elapsed_ms"] = round(elapsed_ms, 1)
+        if elapsed_ms < NO_DIALOG_MS:
+            line["no_dialog"] = True
+    if client_answer is not None:
+        line["client_answer"] = client_answer
+    audit_logger.info(json.dumps(line, default=str))
+
+
+@dataclass
+class Answer:
+    """What ask_user found out.
+
+    ``yes`` is true only when a person approved (or picked a valid option).
+    ``action`` is the client's action, ``decline`` for an overruled fast yes,
+    or ``invalid`` for an accepted answer that is not one of the options.
+    ``note`` is empty when a person answered; otherwise it explains why no
+    person did, for the caller to append to its error.
+    """
+
+    yes: bool
+    action: str
+    data: Any
+    elapsed_ms: float
+    note: str
+
+
+def _is_true(data: Any) -> bool:
+    return data is True
+
+
+async def ask_user(
+    ctx: Any,
+    *,
+    points: str | Iterable[str],
+    tool: str,
+    message: str,
+    response_type: Any = bool,
+    response_title: str | None = None,
+    is_yes: Callable[[Any], bool] = _is_true,
+    is_valid: Callable[[Any], bool] | None = None,
+) -> Answer:
+    """Ask the user one question; the same rules for every gate.
+
+    - The answer is timed (``timed_elicit``). An answer faster than
+      ``NO_DIALOG_MS`` came from the client, not a person: a decline gets
+      ``no_dialog_note``, and a yes is refused with ``fast_yes_note``.
+    - ``is_yes(data)`` decides what an accepted answer means (a ticked box
+      by default). ``is_valid(data)``, when given, separates a wrong answer
+      (``action: invalid``) from a no.
+    - Every outcome is written to the audit log, one line per point.
+    - ``McpError`` (a client without elicitation) is not caught: each gate
+      fails closed with its own message.
+    """
+    point_list = [points] if isinstance(points, str) else list(points)
+    kwargs: dict[str, Any] = {"message": message, "response_type": response_type}
+    if response_title is not None:
+        kwargs["response_title"] = response_title
+    result, elapsed = await timed_elicit(ctx, **kwargs)
+    data = getattr(result, "data", None)
+    accepted = result.action == "accept"
+
+    def log(outcome: str, client_answer: str | None = None) -> None:
+        for point in point_list:
+            log_confirmation_event(point, tool, outcome, elapsed, client_answer)
+
+    if accepted and is_valid is not None and not is_valid(data):
+        log("invalid_answer")
+        return Answer(False, "invalid", data, elapsed, "")
+    if accepted and is_yes(data):
+        if elapsed < NO_DIALOG_MS:
+            log("declined", client_answer="accept")
+            return Answer(False, "decline", data, elapsed, fast_yes_note(elapsed))
+        log("accepted")
+        return Answer(True, "accept", data, elapsed, "")
+    log("declined")
+    return Answer(False, result.action, data, elapsed, no_dialog_note(elapsed))
+
+
+def log_attach_event(session: Mapping[str, Any], chosen_by: str) -> None:
+    """Record which SAP session the agent was attached to, and how it was
+    chosen: ``named`` (the call named the system), ``dialog`` (the user
+    picked it) or ``index`` (connection and session index)."""
     audit_logger.info(
         json.dumps({
-            "event": "confirmation",
+            "event": "attach",
             "ts": datetime.now(timezone.utc).isoformat(),
-            "point": point,
-            "tool": tool,
-            "outcome": outcome,
+            "system": session.get("system"),
+            "client": session.get("client"),
+            "user": session.get("user"),
+            "session": session.get("id"),
+            "chosen_by": chosen_by,
         }, default=str),
     )
 
@@ -358,9 +506,14 @@ class ConfirmationMiddleware(Middleware):
         self._precheck(tool_name, args, ctx)
 
         try:
-            result = await ctx.elicit(
+            answer = await ask_user(
+                ctx,
+                points=point,
+                tool=tool_name,
                 message=build_prompt(tool_name, args, point),
-                response_type=bool,
+                # The CLI shows the answer as a checkbox: without a title it
+                # reads "Value". Only a ticked box with Accept proceeds.
+                response_title="Yes, run it",
             )
         except McpError as exc:
             # Fail closed, matching the existing save gate.
@@ -370,12 +523,9 @@ class ConfirmationMiddleware(Middleware):
                 f"client does not support elicitation: {exc}"
             ) from exc
 
-        if result.action == "accept" and getattr(result, "data", None) is True:
-            log_confirmation_event(point, tool_name, "accepted")
+        if answer.yes:
             return _mark_confirmed(await call_next(context))
-
-        log_confirmation_event(point, tool_name, "declined")
         raise ToolError(
             f"{tool_name} declined by user at confirmation point '{point}' "
-            f"({result.action}). Nothing was executed."
+            f"({answer.action}). Nothing was executed.{answer.note}"
         )

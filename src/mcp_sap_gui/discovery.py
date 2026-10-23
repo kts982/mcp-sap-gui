@@ -106,6 +106,23 @@ class DiscoveryMixin:
         decide how to respond, plus a coarse classification and safe
         next-action hint.
 
+        Where the text is:
+
+        - ``texts``: labels and display-only text fields (a message popup's
+          MESSTXT lines among them, without element IDs).
+        - ``list``: present when the popup body is a classic list (cells
+          ``lbl[c,r]``, ``txt[c,r]``, ``chk[c,r]``): an F4 hit list, a note
+          or a message's long text. Its lines are never in ``texts`` or
+          ``interactive_elements`` (so a changeable list cell does not set
+          ``has_inputs``); ``list`` gives ``cells``, ``rows`` and a ``hint``,
+          and sap_read_list reads every line, with IDs.
+        - ``interactive_elements``: changeable inputs and display-only
+          widgets other than text fields; radio buttons and checkboxes
+          carry ``selected``.
+
+        ``texts``, ``buttons`` and ``interactive_elements`` are left out
+        when empty.
+
         Returns:
             Dict with popup info or {"popup_exists": False}
         """
@@ -139,18 +156,21 @@ class DiscoveryMixin:
             self._read_popup_com(popup_id, popup_wnd, result, texts, buttons,
                                  interactive_elements, found)
 
-        # An F4 hit list is a classic list: one cell per word, hundreds for a
-        # long one. Summarise it; sap_read_list shows it line by line.
+        # A classic list (an F4 hit list, a note, a message's long text):
+        # one cell per word, hundreds for a long one. Summarise it;
+        # sap_read_list shows it line by line. A note and a hit list both
+        # offer Cancel, and only their button words differ, so the hint
+        # covers both.
         rows = [row for cells in found.list_rows.values() for row in cells]
         if rows:
             result["list"] = {
                 "cells": len(rows),
                 "rows": len(set(rows)),
                 "hint": (
-                    f"Classic list (e.g. an F4 hit list): read it with "
-                    f"sap_read_list(window_id='{popup_id}'). To pick a line, "
-                    f"read with with_ids=true, sap_set_focus that line's ID, "
-                    f"then Enter."
+                    f"Classic list: its lines are not in texts. Read them "
+                    f"with sap_read_list(window_id='{popup_id}'). In an F4 "
+                    f"hit list, pick a line: read with with_ids=true, "
+                    f"sap_set_focus that line's ID, then Enter."
                 ),
             }
         if found.calendars:

@@ -43,8 +43,8 @@ def _make_code_mode_server():
 
     @srv.tool(tags={"read"})
     async def capture_session(label: str, ctx: Context) -> dict:
-        """Record the ctx.session object observed for this call."""
-        sessions[label] = ctx.session
+        """Record the session id observed for this call (the key _ctrl uses)."""
+        sessions[label] = ctx.session_id
         return {"label": label}
 
     @srv.tool(tags={"read"})
@@ -99,8 +99,8 @@ class TestCodeModeCatalog:
 
 class TestSessionBinding:
     async def test_sandbox_tool_sees_same_ctx_session_as_direct_call(self):
-        """_ctrl(ctx) keys SAP bindings by id(ctx.session); a sandbox-invoked
-        tool must observe the originating client's session object."""
+        """_ctrl(ctx) keys SAP bindings by ctx.session_id; a sandbox-invoked
+        tool must observe the originating client's session id."""
         srv, sessions = _make_code_mode_server()
         async with Client(srv) as client:
             await client.call_tool("capture_session", {"label": "direct"})
@@ -115,7 +115,7 @@ class TestSessionBinding:
                 },
             )
         assert sessions["direct"] is not None
-        assert sessions["direct"] is sessions["sandbox"]
+        assert sessions["direct"] == sessions["sandbox"]
 
 
 # ===========================================================================

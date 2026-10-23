@@ -169,7 +169,7 @@ Nothing to clone. `uvx` downloads the latest release and runs it in an isolated 
 uvx "mcp-sap-gui[screenshots]" --help
 ```
 
-The `[screenshots]` extra adds screenshot optimization (reduces screenshot size by 70-90%) and is recommended. Point your MCP client at `uvx` with argument `mcp-sap-gui[screenshots]` — see [MCP Setup](#mcp-setup) below.
+The `[screenshots]` extra adds screenshot optimization (reduces screenshot size by 70-90%) and is recommended. It needs Python 3.11 or newer; on 3.10 it installs nothing and screenshots stay unoptimized. Point your MCP client at `uvx` with argument `mcp-sap-gui[screenshots]` — see [MCP Setup](#mcp-setup) below.
 
 ### From source (for development)
 
@@ -488,9 +488,11 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 7. **Save Confirmation** - `sap_send_key("F11")` and `sap_send_key("Save")` now require explicit user confirmation via MCP elicitation. If the client does not support elicitation, the save is blocked instead of proceeding silently.
 
-8. **Confirmation Points** - Named categories of write operations that require blocking user approval before the server executes them. `save` (the `F11` / `Save` key and the `wnd[0]/tbar[0]/btn[11]` Save toolbar button) is always on. `transactions`, `batch_fields`, `field_writes` and `all_writes` can be activated per session with `sap_set_confirmation_points`, or for every session with `--confirm POINT [POINT ...]`.
+8. **Confirmation Points** - Named categories of write operations that require blocking user approval before the server executes them. `save` (the `F11` / `Save` key and the `wnd[0]/tbar[0]/btn[11]` Save toolbar button) is always on. `transactions`, `batch_fields`, `field_writes`, `all_writes` and `attach` can be activated per session with `sap_set_confirmation_points`, or for every session with `--confirm POINT [POINT ...]`. `attach` is a choice, not a yes/no: `sap_connect_existing` lets the user pick the SAP session the agent works in (`--confirm attach` turns it on for every chat).
 
    The gate is enforced server-side by middleware, so it applies no matter what the agent does — including inside the experimental `--code-mode` sandbox. Adding a point is silent; *removing* a session point asks the user first, and points set by `--confirm` cannot be removed at all. Declining returns an error and nothing is executed, and clients without elicitation support fail closed (the gated call errors instead of running unconfirmed). Every confirmation is written to the audit log with its outcome (`accepted`, `declined`, `unsupported_client`).
+
+   The client has to show these prompts. The Claude Code CLI does; the Claude Code desktop app (tested 2026-10-19) declined every one within milliseconds without showing it, so saves through the server cannot be approved there. The server then says that no dialog was shown, instead of reporting that you declined. See [Confirmation Points](docs/TOOLS.md#confirmation-points).
 
    On a client without elicitation support, removal fails closed too: a point activated there cannot be turned off again, so it blocks that whole category for the rest of the session. Points survive `sap_disconnect` — their lifetime is the MCP session, not the SAP connection.
 

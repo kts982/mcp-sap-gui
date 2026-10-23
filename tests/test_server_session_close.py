@@ -28,7 +28,7 @@ def bound(monkeypatch):
     manager = SessionManager()
     monkeypatch.setattr(server, "_session_mgr", manager)
     monkeypatch.setattr(server, "config", server.ServerConfig())
-    ctx = SimpleNamespace(session=object())
+    ctx = SimpleNamespace(session=object(), session_id="chat-1")
     controller = FakeController(owned=1)
     manager._sessions[server._session_key(ctx)] = ManagedSession(controller=controller)
     yield SimpleNamespace(manager=manager, ctx=ctx, controller=controller)

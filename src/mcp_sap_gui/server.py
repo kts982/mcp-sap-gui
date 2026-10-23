@@ -37,11 +37,14 @@ from mcp.types import ImageContent, TextContent
 
 from .audit import AuditMiddleware
 from .confirmation import (
+    ATTACH_POINT,
     SAVE_POINT,
     SETTABLE_POINTS,
     ConfirmationMiddleware,
+    ask_user,
     build_relax_prompt,
     effective_points,
+    log_attach_event,
     log_confirmation_event,
     points_with_provenance,
 )
@@ -58,6 +61,7 @@ from .policy import (
     DEFAULT_PRESET,
     POLICY_FILE_ENV,
     PRESETS,
+    SESSION_COMMANDS,
     PolicyError,
     TransactionPolicy,
     load_policy,
@@ -93,6 +97,14 @@ _DEFAULT_BLOCKED_TRANSACTIONS = list(PRESETS[DEFAULT_PRESET]["block"])
 
 _TRANSACTION_PREFIX_RE = re.compile(r"^(?:/(?:N|O|\*)\s*)+", re.IGNORECASE)
 _TRANSACTION_CODE_RE = re.compile(r"^/?[A-Z0-9_]+(?:/[A-Z0-9_]+)*$")
+# /i with an optional session number. Live (SAP GUI 8.10): /i3 closed session
+# 3 from session 4, and "/i 2" closed the current session (the number after a
+# space is ignored). No transaction code has this shape: a namespaced code
+# always has a second slash.
+_SESSION_CLOSE_RE = re.compile(r"/I(?:\s*\d+)?")
+# Command-field prefixes that start a transaction: /n, /o, /* and a bare *.
+# A value without one of them is a function code (%PC, &ALL, BACK) or a code.
+_OKCODE_START_PREFIX_RE = re.compile(r"^(?:(?:/(?:N|O|\*)|\*)\s*)+", re.IGNORECASE)
 _COMMAND_FIELD_EXACT_NAMES = {
     "okcd",
     "okcode",
@@ -136,6 +148,8 @@ def _normalize_transaction_code(raw: str, *, strict: bool = True) -> str | None:
             raise ValueError("Transaction code cannot be empty")
         return None
 
+    if _SESSION_CLOSE_RE.fullmatch(value):
+        return "/I"
     if not _TRANSACTION_CODE_RE.fullmatch(value):
         if strict:
             raise ValueError(
@@ -289,107 +303,69 @@ async def _lifespan(server: FastMCP):
 _INSTRUCTIONS = """\
 SAP GUI automation server. Controls SAP GUI for Windows via COM scripting.
 
+## Rules (read first)
+
+- **Never guess element IDs.** Discover them on every new screen \
+(`sap_get_screen_elements`, `sap_get_toolbar_buttons`): IDs differ between \
+systems and customizations.
+- **Check `screen.active_window` after every action.** `wnd[1]` or higher is a \
+popup: read it with `sap_get_popup_window` before you go on.
+- **Confirmations.** F11 / Save always asks the user first; \
+`sap_set_confirmation_points` can add `transactions`, `batch_fields`, \
+`field_writes`, `all_writes` and `attach`. A "declined" error is a stop: do not \
+retry or route around it, tell the user. Offer `sap_preview` before significant \
+writes (batch fills, Save) so the user sees the screen and the pending values.
+
 ## Getting Started
 
-1. If SAP is already open and logged in, use `sap_connect_existing` (most common). \
-SAP Business Client sessions are supported too (experimental).
-2. If SAP is not open, use `sap_connect` with the system name from SAP Logon Pad.
-3. After connecting, use `sap_get_session_info` to see the current transaction/screen.
+1. SAP already logged on: `sap_connect_existing`; pass `system` (e.g. 'DEV') \
+when the user named the system. SAP Business Client sessions work too \
+(experimental).
+2. SAP not open: `sap_connect` with the SAP Logon entry.
+3. `sap_get_session_info` shows the current transaction and screen.
 
-## Screen Discovery (use this workflow on every new screen)
+## Screen Discovery
 
-1. `sap_get_screen_elements` — discovers all element IDs on the current screen. \
-Use `type_filter` (e.g. "GuiTextField,GuiCTextField") and `changeable_only=true` \
-to reduce output on complex screens.
-2. `sap_get_toolbar_buttons` — lists toolbar button IDs (system bar + app bar).
-3. `sap_read_field` — reads a specific field's value and labels.
-
-A tree docked beside the screen (view clusters in SM34 / IMG activities) is NOT \
-under `wnd[0]/usr`: step 1 reports it as `docking_containers` (e.g. `wnd[0]/shellcont`).
-
-**CRITICAL: Never guess or hallucinate element IDs.** Always discover them first \
-with the tools above. SAP field IDs vary across systems and customizations.
+`sap_get_screen_elements` with `type_filter` (e.g. "GuiTextField,GuiCTextField") \
+and `changeable_only=true` keeps the output small; `sap_read_field` reads one \
+field. A tree docked beside the screen (SM34 view clusters, IMG activities) is \
+not under `wnd[0]/usr`: discovery lists it under `docking_containers` \
+(e.g. `wnd[0]/shellcont`).
 
 ## Popup Handling
 
-Every action tool returns `screen.active_window`. If it is `wnd[1]` or higher, \
-a popup appeared. Call `sap_get_popup_window` to read popup text and buttons. \
-Always check for popups after actions that may trigger them (button presses, \
-Enter key, transaction execution, double-clicks).
+Popups often follow button presses, Enter, F8 and double-clicks. \
+`sap_get_popup_window` gives the text, the buttons, a classification and a safe \
+next step; `sap_handle_popup` acts on it.
 
-## Tables: ALV Grid vs TableControl
+## Tables
 
-`sap_read_table` auto-detects the type. The response includes `table_type`:
-- **GuiGridView (ALV)**: Standard for reports. All rows accessible via `start_row`. \
-Use `sap_get_alv_toolbar` for toolbar actions.
-- **GuiTableControl**: Standard for customizing (SPRO, SM30). Visible rows only.
+`sap_read_table` detects the type (`table_type`). Start with \
+`columns_only=true`, then fetch only `columns="COL_A,COL_B"`.
+- ALV grid (reports): page with `start_row` until `total_rows`; its toolbar is \
+`sap_get_alv_toolbar`.
+- Table control (SM30, SPRO): one read returns the visible rows; page with \
+`start_row=next_start_row` while `has_more` is true. `total_rows` counts empty \
+lines; `empty_rows_from` is where the data ends. To jump to an entry use the \
+"Position..." toolbar button, not manual scrolling.
 
-**Pagination**: Use `start_row` parameter to paginate through large tables. \
-For an ALV grid, check `total_rows` in the response to know when you've read \
-everything. A TableControl's `total_rows` counts empty lines too, and one read \
-returns at most its visible rows: page with `start_row=next_start_row` while \
-`has_more` is true. `empty_rows_from` in the response means the data ended there.
+## SPRO and Trees
 
-**Schema first**: Use `columns_only=true` to see column names before reading data. \
-Then use `columns="COL_A,COL_B"` to fetch only what you need.
+Never `sap_read_tree` SPRO (1000+ nodes). `sap_search_tree_nodes` searches \
+expanded nodes only: expand parents with \
+`sap_get_tree_node_children(expand=true)`. Run an activity with \
+`sap_click_tree_link(tree_id, node_key, "2")`; a double-click opens its \
+documentation. In a view cluster (SM34) use `double_click_tree_item` with the \
+column name (usually "Column1").
 
-**Table maintenance views (SM30-style)**: These use GuiTableControl. If you need \
-to jump to a specific entry, look for a "Position..." button in the toolbar \
-(`sap_get_toolbar_buttons`) — it opens a search dialog. Don't manually scroll.
+## Keys and Common Mistakes
 
-## SPRO / Customizing Tree Navigation
-
-SPRO uses a deep tree (1000+ nodes). **Do NOT use `sap_read_tree`** — it's too slow.
-
-1. `sap_search_tree_nodes` — find nodes by text (e.g. "Storage Type"). \
-**Note**: only searches already-expanded nodes. If you don't find a match, \
-expand parent nodes first with `sap_get_tree_node_children(expand=true)`, \
-then search again.
-2. `sap_get_tree_node_children` with `expand=true` — step through the hierarchy.
-3. **To execute an activity**: use `sap_click_tree_link(tree_id, node_key, "2")` \
-(column "2" is the execute icon). Do NOT use `sap_double_click_tree_node` — that \
-opens documentation, not the activity.
-4. After clicking, check for popups (selection screens often appear as dialogs).
-
-## Key Reference
-
-- **Enter**: Confirm / continue
-- **F3 / Back**: Go back one screen
-- **F4**: Value help on the focused field (`sap_set_focus` first). The popup's \
-classification says what opened: `list` (hit list), `date_picker`, `time_picker`, \
-or `input_required` (restriction dialog); `sap_get_workflow_guide("search_help", \
-field_id)` covers each. Dropdowns (`cmb`) have no F4: `sap_set_field` takes an \
-entry's key or text.
-- **F5 / Refresh**: Context-dependent — in table maintenance views this means \
-"New Entries", NOT refresh. Check toolbar button tooltips first.
-- **F8 / Execute**: Run report / execute selection
-- **F11 / Save**: Save (Ctrl+S equivalent)
-- **F12 / Cancel**: Cancel / close dialog
-
-## Common Mistakes to Avoid
-
-- **Guessing IDs**: Always use `sap_get_screen_elements` or `sap_get_toolbar_buttons` first.
-- **Ignoring popups**: Check `active_window` in every action response.
-- **F5 in table maintenance**: F5 means "New Entries", not refresh.
-- **double_click_tree_node in SPRO**: Opens docs, not activities. Use `click_tree_link`.
-- **double_click_tree_node in a view cluster (SM34)**: Does nothing. Use \
-`double_click_tree_item` with the tree's column name (usually "Column1").
-- **Scrolling TableControls manually**: Use `start_row` in `sap_read_table` or \
-the "Position..." button instead.
-- **Reading huge trees**: Use `search_tree_nodes` + `get_tree_node_children`, \
-not `read_tree` on large trees like SPRO.
-- **Writing without showing the user**: Offer `sap_preview` before significant \
-writes (batch field fills, F11 / Save) so the user can see the screen and the \
-pending values first — it is read-only and never saves.
-
-## Confirmation Points
-
-Some operations are gated: the server pauses the call and asks the user to \
-approve it. `save` (F11 / Save key, Save toolbar button) is always gated; the \
-user or the deployment can add `transactions`, `batch_fields`, `field_writes` \
-or `all_writes` via `sap_set_confirmation_points`. Expect a prompt on those \
-calls, call `sap_preview` first so the user sees what is pending, and treat a \
-"declined by user" error as a stop signal — do not retry or route around it.
+Enter confirms, F3 goes back, F8 executes, F11 saves, F12 cancels. F4 is value \
+help on the focused field (`sap_set_focus` first): the popup's classification \
+says what opened (`list`, `date_picker`, `time_picker`, `input_required`), and \
+`sap_get_workflow_guide("search_help", field_id)` covers each. Dropdowns (`cmb`) \
+have no F4: `sap_set_field` takes the entry's key or text. In table maintenance \
+F5 means "New Entries", not refresh: check the toolbar tooltips first.
 """
 
 
@@ -673,9 +649,16 @@ def _note_cap(result, requested: int, capped: int):
     return result
 
 
-def _session_key(ctx: Context) -> int:
-    """Derive a stable key for the current MCP client session."""
-    return id(ctx.session)
+def _session_key(ctx: Context) -> str:
+    """Derive a stable key for the current MCP client session.
+
+    ``ctx.session_id``, not ``id(ctx.session)``: with the MCP Python SDK v2
+    (FastMCP 4) every request gets a new ServerSession object, so ``id()``
+    changes on every call, and confirmation points and the SAP binding
+    silently vanish between calls. ``session_id`` is the same for all calls
+    of one client on FastMCP 3.x and 4.
+    """
+    return ctx.session_id
 
 
 def _ctrl(ctx: Context):
@@ -760,6 +743,8 @@ def precheck_before_confirmation(tool_name: str, args,
             if isinstance(fields, dict):
                 for fid, val in fields.items():
                     _check_okcode_bypass(fid, str(val))
+        elif tool_name == "sap_set_textedit":
+            _check_okcode_bypass(get("textedit_id"), get("text"))
     except ValueError as exc:
         raise ToolError(f"Error calling tool '{tool_name}': {exc}") from exc
 
@@ -803,6 +788,14 @@ def _enforce_transaction_policy(tcode: str, *, source: str = "transaction") -> s
         return canonical
 
     if not config.policy.permits(canonical):
+        if canonical in SESSION_COMMANDS:
+            raise ValueError(
+                f"{canonical} is a session command, not a transaction "
+                f"({SESSION_COMMANDS[canonical]}). It is blocked by security "
+                f"policy"
+                f"{f' (attempted via {source})' if source != 'transaction' else ''}"
+                f"{config.policy.how_to_allow(canonical)}"
+            )
         raise ValueError(
             f"Transaction {canonical} is blocked by security policy"
             f"{f' (attempted via {source})' if source != 'transaction' else ''}"
@@ -846,13 +839,47 @@ def _is_okcode_field(field_id: str) -> bool:
     )
 
 
+def _okcode_start_token(value: object) -> str | None:
+    """Return the code a command-field value tries to start, or None.
+
+    Only for values the normalizer could not parse. A value that starts with
+    /n, /o, /* or * (after any leading '=') starts a transaction; the code is
+    the first token after the prefix, up to whitespace or ';'. Anything else
+    (``%PC``, ``&ALL``) is a function code and returns None, as does a bare
+    prefix, which names no code.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    while text.startswith("="):
+        text = text[1:].lstrip()
+    match = _OKCODE_START_PREFIX_RE.match(text)
+    if not match:
+        return None
+    rest = text[match.end():]
+    token = re.split(r"[\s;]", rest, maxsplit=1)[0]
+    return token or None
+
+
 def _check_okcode_bypass(field_id: str, value: str):
     """Block attempts to execute blocked transactions via the OK-code field."""
     if not _is_okcode_field(field_id):
         return
     candidate = _normalize_transaction_code(value, strict=False)
     if candidate is None:
-        return
+        # Fail closed for values that start a transaction but do not parse
+        # as a whole (/*SU01 FIELD=VALUE, *SU01): check the code they name,
+        # and refuse when there is no code the policy can check.
+        token = _okcode_start_token(value)
+        if token is None:
+            return
+        candidate = _normalize_transaction_code(token, strict=False)
+        if candidate is None:
+            raise ValueError(
+                f"Command field value {value!r} starts a transaction, but "
+                f"{token!r} is not a transaction code the security policy "
+                "can check; refused"
+            )
     _enforce_transaction_policy(candidate, source="command field")
 
 
@@ -894,15 +921,18 @@ _SAVE_KEYS = {"F11", "Save"}
 
 
 async def _elicit_save(ctx: Context, message: str,
-                       tool: str = "sap_send_key") -> str | None:
+                       tool: str = "sap_send_key") -> tuple[str, str] | None:
     """Ask the user to confirm a save.
 
-    Returns ``None`` if the user accepted (caller should proceed), else the
-    elicitation action (``decline`` / ``cancel``).
+    Returns ``None`` if a person accepted (caller should proceed), else the
+    action (``decline`` / ``cancel``) and a note that is empty unless the
+    client answered without showing a dialog (confirmation.ask_user).
     Raises ``ValueError`` if the client does not support elicitation.
     """
     try:
-        result = await ctx.elicit(message=message, response_type=bool)
+        # Shown as a checkbox (CLI): tick it and Accept to save.
+        answer = await ask_user(ctx, points=SAVE_POINT, tool=tool,
+                                message=message, response_title="Yes, save")
     except McpError as exc:
         log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
         raise ValueError(
@@ -910,12 +940,9 @@ async def _elicit_save(ctx: Context, message: str,
             f"support elicitation: {exc}"
         ) from exc
 
-    if result.action == "accept" and result.data is True:
-        log_confirmation_event(SAVE_POINT, tool, "accepted")
+    if answer.yes:
         return None  # proceed
-
-    log_confirmation_event(SAVE_POINT, tool, "declined")
-    return result.action
+    return answer.action, answer.note
 
 
 async def _confirm_save(ctx: Context, key: str) -> dict | None:
@@ -925,13 +952,14 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
     Returns a cancellation dict if declined/cancelled.
     Raises ``ValueError`` if the client does not support elicitation.
     """
-    action = await _elicit_save(ctx, (
+    declined = await _elicit_save(ctx, (
         f"You are about to send '{key}' which triggers Save (F11) "
         "in SAP. This can persist changes to the database. "
         "Do you want to proceed?"
     ))
-    if action is None:
+    if declined is None:
         return None
+    action, note = declined
     return {
         "status": "cancelled",
         "action": action,
@@ -939,7 +967,7 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
         "reason": f"User did not confirm save ({action})",
         # Same wording as a decline at a confirmation point, which the
         # instructions tell agents to stop on.
-        "error": f"Save declined by user ({action}). Nothing was sent.",
+        "error": f"Save declined by user ({action}). Nothing was sent.{note}",
     }
 
 
@@ -970,9 +998,10 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
             + ", which may save changes to the database. "
             "Do you want to proceed?"
         )
-    action = await _elicit_save(ctx, message, tool)
-    if action is None:
+    declined = await _elicit_save(ctx, message, tool)
+    if declined is None:
         return None
+    action, note = declined
     # The popup is still open and unchanged: keep its buttons for the next
     # step (e.g. press "No").
     what = "the answer" if plan.get("unread_question") else "save"
@@ -981,7 +1010,8 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
         "action": "none",
         "button": label,
         "reason": f"User did not confirm {what} ({action})",
-        "error": f"Popup answer declined by user ({action}). Nothing was pressed.",
+        "error": (f"Popup answer declined by user ({action}). "
+                  f"Nothing was pressed.{note}"),
     })
     return popup
 
@@ -1023,22 +1053,226 @@ async def sap_connect(
     return _to_dict(await _com(lambda: c.connect(**kwargs)))
 
 
+# "DEV(2)/100 " in front of a window title: the system, session number and
+# client, which the attach dialog shows in their own columns already.
+_TITLE_PREFIX_RE = re.compile(r"^\S+\(\d+\)/\d+\s+")
+_SYSTEM_ID_RE = re.compile(r"^[A-Z0-9]{3}$")
+_CLIENT_RE = re.compile(r"^\d{3}$")
+
+
+def _parse_system(system: str) -> tuple[str, str | None]:
+    """'DEV' or 'DEV/100' -> ('DEV', None) or ('DEV', '100')."""
+    sid, _, client = str(system).strip().upper().partition("/")
+    sid, client = sid.strip(), client.strip()
+    if not _SYSTEM_ID_RE.fullmatch(sid) or (client and not _CLIENT_RE.fullmatch(client)):
+        raise ValueError(
+            f"system={system!r}: expected a system ID such as 'DEV', or "
+            "system and client such as 'DEV/100'"
+        )
+    return sid, client or None
+
+
+def _attach_candidates(connections: list) -> list[dict]:
+    """Every open session that can be attached, with its connection index."""
+    candidates = []
+    for conn in connections:
+        if conn.get("scripting_disabled"):
+            continue
+        for sess in conn.get("sessions", []):
+            if "error" in sess or not sess.get("system"):
+                continue
+            candidates.append({**sess, "connection_index": conn["index"]})
+    return candidates
+
+
+def _attach_label(sess: dict) -> str:
+    """'DEV (2) / 100 / TESTUSER - SE16 - Data Browser: Initial Screen'."""
+    number = sess.get("session_number")
+    head = f"{sess.get('system', '')}" + (f" ({number})" if number else "")
+    title = _TITLE_PREFIX_RE.sub("", str(sess.get("title") or "")).strip()
+    parts = [f"{head} / {sess.get('client', '')} / {sess.get('user', '')}",
+             str(sess.get("transaction") or ""), title]
+    return " - ".join(part for part in parts if part)
+
+
+def _candidate_summary(candidates: list[dict]) -> str:
+    return "; ".join(
+        f"{_attach_label(s)} (connection_index={s['connection_index']}, "
+        f"session_index={s['index']})"
+        for s in candidates
+    ) or "no session that can be attached"
+
+
+_NOT_AN_OPTION = (
+    "The answer to the session picker was not one of the listed sessions. "
+    "Nothing was attached. Ask the user which system to use, then call "
+    "sap_connect_existing(system='SID') (or system='SID/client')."
+)
+
+
+async def _pick_session(ctx: Context, candidates: list[dict],
+                        message: str) -> dict:
+    """Ask the user which session to attach to (the 'attach' point).
+
+    Raises ValueError when the user declines, gives an answer that is not
+    one of the sessions, or when the client cannot show the dialog (fail
+    closed: the agent asks in the chat instead).
+
+    The options go out as titled values (oneOf const/title): the user sees
+    the label, the answer is the session's "connection/session" index pair.
+    A plain enum of labels was shown as a free-text box by the Claude Code
+    CLI (2.1.302), so only an exact retyped label could match.
+    """
+    options: dict[str, dict[str, str]] = {}
+    titles: set[str] = set()
+    for sess in candidates:
+        title = _attach_label(sess)
+        if title in titles:  # same system and number on two connections
+            title += f" [connection {sess['connection_index']}]"
+        titles.add(title)
+        options[f"{sess['connection_index']}/{sess['index']}"] = {"title": title}
+    def is_option(choice) -> bool:
+        return choice in options
+
+    try:
+        # A client that shows the options as a text box lets the user type
+        # anything, and fastmcp passes it through for titled options: an
+        # accepted answer that is no option is refused, not taken as a no.
+        answer = await ask_user(
+            ctx, points=ATTACH_POINT, tool="sap_connect_existing",
+            message=message, response_type=options,
+            response_title="SAP session", is_yes=is_option, is_valid=is_option,
+        )
+    except McpError as exc:
+        log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
+                               "unsupported_client")
+        raise ValueError(
+            "The 'attach' confirmation point is on, but this client cannot "
+            "show the session picker. Ask the user in the chat which SAP "
+            "system to use, then call sap_connect_existing(system='SID') "
+            "(or system='SID/client')."
+        ) from exc
+    except Exception as exc:  # an answer the schema rejects (pydantic)
+        log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
+                               "invalid_answer")
+        raise ValueError(_NOT_AN_OPTION) from exc
+    if answer.action == "invalid":
+        raise ValueError(_NOT_AN_OPTION)
+    if not answer.yes:
+        raise ValueError(
+            f"Attach declined by user ({answer.action}). Nothing was "
+            f"attached.{answer.note}"
+        )
+    return candidates[list(options).index(answer.data)]
+
+
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_connect_existing(
     ctx: Context,
     connection_index: int = 0,
     session_index: int = 0,
+    system: str | None = None,
 ) -> dict:
     """Connect to an already open SAP session. Use this when SAP is already logged in.
 
     This is the most common starting point. connection_index=0 and session_index=0
     connect to the first open session. Also attaches to SAP Business Client /
     embedded SAP GUI sessions. Indexes come from sap_list_connections; a
-    connection with scripting_disabled=true cannot be attached."""
+    connection with scripting_disabled=true cannot be attached.
+
+    system: pass it only when the user named the SAP system, as 'DEV' or
+    'DEV/100' (system/client). One open session on it is attached; several,
+    or none, return an error that lists what is open. The indexes are then
+    ignored.
+
+    With the 'attach' confirmation point on, the user picks the session in a
+    dialog unless `system` names exactly one open session. The response
+    says how it was chosen (`chosen_by`: named, dialog or index)."""
     c = _ctrl(ctx)
-    return _to_dict(await _com(
-        lambda: c.connect_to_existing_session(connection_index, session_index)
-    ))
+    attach_point = ATTACH_POINT in active_confirmation_points(ctx)
+
+    if system is None and not attach_point:
+        info = _to_dict(await _com(
+            lambda: c.connect_to_existing_session(connection_index, session_index)
+        ))
+        session_id = await _com(lambda: getattr(getattr(c, "_session", None),
+                                                "Id", None))
+        chosen = {"system": info.get("system_name"), "client": info.get("client"),
+                  "user": info.get("user"), "id": session_id}
+        log_attach_event(chosen, "index")
+        return {**info, "chosen_by": "index"}
+
+    candidates = _attach_candidates(await _com(c.list_connections))
+    chosen_by = "dialog"
+    if system is not None:
+        sid, client = _parse_system(system)
+        matches = [s for s in candidates
+                   if str(s.get("system", "")).upper() == sid
+                   and (client is None or str(s.get("client", "")) == client)]
+        if not matches:
+            raise ValueError(
+                f"No open session on {system}. Open sessions: "
+                f"{_candidate_summary(candidates)}"
+            )
+        if len(matches) == 1:
+            pick, chosen_by = matches[0], "named"
+        elif attach_point:
+            pick = await _pick_session(
+                ctx, matches,
+                f"Several sessions are open on {system}. Attach the agent to "
+                "which one?",
+            )
+        else:
+            raise ValueError(
+                f"{len(matches)} sessions are open on {system}: "
+                f"{_candidate_summary(matches)}. Ask the user which one, then "
+                "call sap_connect_existing with its connection_index and "
+                "session_index (without system)."
+            )
+    else:
+        if not candidates:
+            raise ValueError(
+                "No SAP session is open that can be attached (none open, or "
+                "SAP GUI Scripting is disabled on the server)."
+            )
+        pick = await _pick_session(
+            ctx, candidates, "Attach the agent to which SAP session?",
+        )
+
+    # The pick is a position from the listing made before the dialog (or the
+    # name lookup). If sessions opened or closed meanwhile, that position can
+    # now hold another session: check what was attached before using it.
+    # Attaching, the check and the detach are one COM call, so no other tool
+    # call (a parallel one) can run on the session before it is checked.
+    def attach_checked():
+        info = _to_dict(c.connect_to_existing_session(pick["connection_index"],
+                                                      pick["index"]))
+        attached = {
+            "id": getattr(getattr(c, "_session", None), "Id", None),
+            "system": info.get("system_name"),
+            "client": info.get("client"),
+            "user": info.get("user"),
+            "session_number": info.get("session_number"),
+        }
+        changed = [
+            key for key in ("id", "system", "client", "user", "session_number")
+            if pick.get(key) is not None and attached.get(key) is not None
+            and str(pick[key]) != str(attached[key])
+        ]
+        if changed:
+            c.disconnect()  # attached, not opened: nothing is closed
+        return info, attached, changed
+
+    info, attached, changed = await _com(attach_checked)
+    if changed:
+        raise ValueError(
+            "The open SAP sessions changed while the session was being chosen: "
+            f"{_attach_label(pick)} was picked, but that position now holds "
+            f"{_attach_label({**pick, **attached})}. Nothing was attached; "
+            "call sap_connect_existing again."
+        )
+    log_attach_event(attached, chosen_by)
+    return {**info, "chosen_by": chosen_by}
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
@@ -1048,7 +1282,9 @@ async def sap_list_connections(ctx: Context) -> dict:
     Covers SAP Logon plus SAP Business Client / embedded SAP GUI sessions
     (`host`: saplogon | sapguiserver). A connection with no sessions and
     `scripting_disabled: true` means the server parameter sapgui/user_scripting
-    is off, so no session can be read."""
+    is off, so no session can be read. Each session has its system, client,
+    user, transaction, `session_number` (the "(2)" in "DEV(2)") and window
+    `title`."""
     c = _ctrl(ctx)
     connections = await _com(c.list_connections)
     return {"connections": connections}
@@ -1368,6 +1604,8 @@ async def sap_set_textedit(textedit_id: str, text: str, ctx: Context) -> dict:
     """Write text into a multiline text editor (GuiTextedit) —
     long texts, notes, comments, document text."""
     _check_write(ctx)
+    # set_textedit writes .Text on any element Id, the command field included.
+    _check_okcode_bypass(textedit_id, text)
     c = _ctrl(ctx)
     return await _com(lambda: c.set_textedit(textedit_id, text))
 
@@ -1644,8 +1882,15 @@ async def sap_get_popup_window(ctx: Context) -> dict:
 
     Returns the popup's title, text content, and available buttons so
     you know how to respond. Also classifies the popup and suggests a
-    safe next action. Radio buttons and checkboxes in interactive_elements
-    carry selected. Returns {popup_exists: false} if no popup."""
+    safe next action. Returns {popup_exists: false} if no popup.
+
+    The popup's text is in `texts`: labels and display-only fields (a
+    message popup's lines). A popup whose body is a classic list (an F4
+    hit list, a note, a message's long text) has `list` (`cells`, `rows`,
+    `hint`) instead: its lines are never in `texts` or
+    `interactive_elements`; read them with sap_read_list. Radio buttons
+    and checkboxes in interactive_elements carry selected. `texts`,
+    `buttons` and `interactive_elements` are left out when empty."""
     c = _ctrl(ctx)
     return await _com(c.get_popup_window)
 
@@ -2216,7 +2461,8 @@ async def sap_set_policy_profile(
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_set_confirmation_points(
-    points: list[Literal["batch_fields", "field_writes", "transactions", "all_writes"]],
+    points: list[Literal["batch_fields", "field_writes", "transactions",
+                         "all_writes", "attach"]],
     ctx: Context,
 ) -> dict:
     """Choose which SAP operations need the user's explicit approval first.
@@ -2235,6 +2481,8 @@ async def sap_set_confirmation_points(
       only select, scroll or navigate, and they will all prompt. Under
       all_writes, sap_send_key("F11") asks twice: once for the category and
       once for the unchanged save gate.
+    - attach: sap_connect_existing lets the user pick the SAP session in a
+      dialog, unless the call names a system with exactly one open session.
 
     'save' (F11 / Save key, Save toolbar button) is always on and cannot be
     turned off. Points set by the server's --confirm flag cannot be removed
@@ -2269,11 +2517,15 @@ async def sap_set_confirmation_points(
     removals = sorted((current - requested) - floor)
 
     declined: list[str] = []
+    note = ""
     if removals:
         try:
-            result = await ctx.elicit(
+            answer = await ask_user(
+                ctx,
+                points=removals,
+                tool="sap_set_confirmation_points",
                 message=build_relax_prompt(removals),
-                response_type=bool,
+                response_title="Yes, turn it off",
             )
         except McpError as exc:
             # Fail closed: the points stay active. Swallowing this would make
@@ -2286,14 +2538,9 @@ async def sap_set_confirmation_points(
                 f"client does not support elicitation: {exc}"
             ) from exc
 
-        accepted = result.action == "accept" and getattr(result, "data", None) is True
-        for point in removals:
-            log_confirmation_event(
-                point, "sap_set_confirmation_points",
-                "accepted" if accepted else "declined",
-            )
-        if not accepted:
+        if not answer.yes:
             declined = removals
+            note = answer.note
 
     stored = (requested | set(declined)) - floor
     _session_mgr.set_confirmation_points(key, stored)
@@ -2303,6 +2550,7 @@ async def sap_set_confirmation_points(
         message = (
             f"User declined to disable: {', '.join(declined)}. "
             f"Active confirmation points: {', '.join(active)}"
+            + (f".{note}" if note else "")
         )
     else:
         message = f"Active confirmation points: {', '.join(active)}"

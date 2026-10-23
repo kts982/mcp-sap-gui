@@ -1018,6 +1018,18 @@ class TestInstructionsAndResource:
         """Instructions explicitly warn against guessing element IDs."""
         assert "Never guess" in srv.mcp.instructions
 
+    def test_safety_rules_come_first_and_the_text_stays_short(self, srv):
+        """Clients cut long server instructions (Claude Code at about 4,100
+        characters in 2026-10): the confirmation rule used to start at 4,989
+        and never reached agents. The rules must come first, and the whole
+        text must stay well under the cut."""
+        instructions = srv.mcp.instructions
+        assert len(instructions) < 3500
+        rules = instructions.split("## Getting Started")[0]
+        assert "Never guess" in rules
+        assert "active_window" in rules
+        assert '"declined" error is a stop' in rules
+
     def test_resource_registered(self, srv):
         """The docs://sap-gui-guide resource is registered."""
         import asyncio
@@ -1651,6 +1663,38 @@ class TestAuditMiddleware:
         args = {"field_id": "wnd[0]/usr/txtMATNR", "value": "MAT-001"}
         result = _mask_secrets(args)
         assert result == args
+
+    def test_mask_secrets_value_written_into_a_password_field(self):
+        """sap_set_field on a password field: the value is masked, the field
+        ID stays visible (it says which field was written, not what)."""
+        from mcp_sap_gui.audit import _mask_secrets
+        result = _mask_secrets({"field_id": "wnd[0]/usr/pwdRSYST-BCODE",
+                                "value": "Secret123"})
+        assert result == {"field_id": "wnd[0]/usr/pwdRSYST-BCODE",
+                          "value": "***"}
+
+    def test_mask_secrets_value_written_into_a_password_column(self):
+        """sap_modify_cell on a password-like column masks the value."""
+        from mcp_sap_gui.audit import _mask_secrets
+        result = _mask_secrets({"table_id": "wnd[0]/usr/tblX", "row": 3,
+                                "column": "PASSWORD", "value": "s3cret"})
+        assert result["value"] == "***"
+        assert result["column"] == "PASSWORD"
+        assert result["row"] == 3
+
+    def test_mask_secrets_text_written_into_a_secret_editor(self):
+        """sap_set_textedit's text is masked when the editor looks secret."""
+        from mcp_sap_gui.audit import _mask_secrets
+        result = _mask_secrets({"textedit_id": "wnd[0]/usr/cntlTOKEN/shell",
+                                "text": "abc"})
+        assert result["text"] == "***"
+
+    def test_mask_secrets_a_value_that_mentions_password_is_kept(self):
+        """Only the target decides: a normal field's value stays, even when
+        it contains a secret-looking word."""
+        from mcp_sap_gui.audit import _mask_secrets
+        args = {"field_id": "wnd[0]/usr/txtNOTE", "value": "reset password"}
+        assert _mask_secrets(args) == args
 
     def test_mask_secrets_empty_dict(self):
         """Empty args return empty dict."""

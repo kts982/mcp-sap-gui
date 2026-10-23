@@ -28,6 +28,8 @@ Real SAP GUI integration work requires:
 
 The unit test suite is mocked and can run in CI without a live SAP system.
 
+Working with a coding agent? [AGENTS.md](AGENTS.md) has the technical ground rules (layout, checks, safety gates, SAP GUI Scripting pitfalls).
+
 ## Before Opening a PR
 
 - Keep changes focused. Small, reviewable PRs are easier to merge.

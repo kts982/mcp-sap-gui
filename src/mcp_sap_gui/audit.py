@@ -27,26 +27,41 @@ def _is_secret_key(key: Any) -> bool:
     return any(p in key_lower for p in _SECRET_PATTERNS)
 
 
+# Arguments that carry what is written into the target another argument names
+# (sap_set_field's value, sap_set_textedit's text, sap_modify_cell's value).
+_WRITTEN_VALUE_KEYS = frozenset({"value", "text"})
+
+
 def _mask_secrets(args: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of args with secret-looking values masked.
 
-    Recurses one level into dict-valued arguments: tool arguments that carry
-    field maps (``sap_set_batch_fields``, ``sap_preview.pending_fields``) hide
-    their sensitive keys one level down, and MCP arguments never nest deeper.
+    - A key that looks secret (``password``, ``pwd``, ``bcode``, ...) has its
+      value masked.
+    - When another argument names a secret-looking target (sap_set_field's
+      ``field_id`` "wnd[0]/usr/pwdRSYST-BCODE", sap_modify_cell's ``column``
+      "PASSWORD"), the value written into it (``value`` / ``text``) is
+      masked. The target itself stays visible: the audit shows which field
+      was written, not what.
+    - Recurses one level into dict-valued arguments: tool arguments that carry
+      field maps (``sap_set_batch_fields``, ``sap_preview.pending_fields``)
+      hide their sensitive keys one level down, and MCP arguments never nest
+      deeper.
     """
+    secret_target = any(
+        isinstance(value, str) and _is_secret_key(value)
+        for key, value in args.items()
+        if key not in _WRITTEN_VALUE_KEYS
+    )
     masked = {}
     for key, value in args.items():
         if _is_secret_key(key):
+            masked[key] = "***"
+        elif secret_target and key in _WRITTEN_VALUE_KEYS:
             masked[key] = "***"
         elif isinstance(value, dict):
             masked[key] = {
                 k: ("***" if _is_secret_key(k) else v) for k, v in value.items()
             }
-        elif isinstance(value, str) and any(
-            p in value.lower() for p in _SECRET_PATTERNS
-        ):
-            # Field IDs referencing password fields pass through unchanged
-            masked[key] = value
         else:
             masked[key] = value
     return masked

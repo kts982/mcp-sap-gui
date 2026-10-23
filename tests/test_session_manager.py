@@ -340,3 +340,17 @@ class TestListSessions:
             assert entry["idle_seconds"] >= 0
         finally:
             mgr.shutdown()
+
+
+def test_session_key_is_the_session_id_not_the_session_object():
+    """The binding key is ctx.session_id. With the MCP SDK v2 (FastMCP 4) a
+    new ServerSession object is made per request, so id(ctx.session) would
+    change on every call and drop the confirmation points and the SAP
+    binding between calls."""
+    from types import SimpleNamespace
+
+    from mcp_sap_gui import server
+
+    first = SimpleNamespace(session=object(), session_id="client-a")
+    second = SimpleNamespace(session=object(), session_id="client-a")
+    assert server._session_key(first) == server._session_key(second) == "client-a"
