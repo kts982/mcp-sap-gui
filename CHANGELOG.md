@@ -32,6 +32,7 @@ Every release and what changed for someone running the server. The [GitHub relea
 - **Table-control paging skipped rows** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)). One read returns at most the visible rows, but the guidance stepped `start_row` by `max_rows`, so every row between the visible ones and the next step was missed. Page with `start_row=next_start_row` while `has_more` is true. Checked live: an SM30 view with 137 entries reads every entry once.
 - **A blank New Entries line with a dropdown read as an entry** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)). The dropdown's empty entry reads as a single space; a whitespace-only cell now counts as blank, so `empty_rows_from` marks where the data ends.
 - **`validation.performed` was true when Enter was refused or failed** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)). It is now false, with the error.
+- **One "allow scripting" dialog per SAP GUI process, not one per tool call.** Since 0.5.0 every `sap_list_connections` and `sap_connect_existing` looked up the scripting engine of each SAP GUI process again, and a system with `sapgui/user_scripting_force_notification` set asks the user at each lookup, for each of its connections. The engine of each process is now kept and reused while it answers; one that stops answering (SAP Logon restarted) is looked up again, and a GUI server process that ended is forgotten.
 
 ## 0.5.2 — 2026-10-18
 

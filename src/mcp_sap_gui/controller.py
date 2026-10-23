@@ -174,6 +174,12 @@ class SAPGUIControllerBase:
         self._win32com = None
         self._sap_gui_auto = None
         self._saplogon_engine = None
+        # Scripting engine per ROT entry, reused across discoveries: every
+        # GetScriptingEngine call raises the "allow scripting" dialog on each
+        # connection whose server sets
+        # sapgui/user_scripting_force_notification (SAP GUI Scripting
+        # Security Guide), so it is called once per entry, not per tool call.
+        self._rot_engines: Dict[str, Any] = {}
         # Scripting engine the bound connection came from (SAP Logon or a
         # SAP GUI server process); session-lookup helpers walk this one.
         self._application = None
@@ -228,15 +234,18 @@ class SAPGUIControllerBase:
     def _get_saplogon_engine(self):
         """Get the SAP Logon scripting engine (needed for OpenConnection)."""
         if self._saplogon_engine is None:
-            sap_gui = self._get_sap_gui()
-            # Use property access (no parentheses) - works more reliably
-            engine = sap_gui.GetScriptingEngine
+            engine = self._rot_engines.get("SAPGUI")
+            if engine is None:
+                sap_gui = self._get_sap_gui()
+                # Use property access (no parentheses) - works more reliably
+                engine = sap_gui.GetScriptingEngine
             if engine is None:
                 raise SAPGUINotAvailableError(
                     "Could not get SAP GUI Scripting Engine. "
                     "Is SAP GUI Scripting enabled?"
                 )
             self._saplogon_engine = engine
+            self._rot_engines.setdefault("SAPGUI", engine)
         return self._saplogon_engine
 
     def _get_application(self):
@@ -267,7 +276,20 @@ class SAPGUIControllerBase:
         return names
 
     def _get_engine_from_rot(self, rot_name: str):
-        """Resolve a ROT entry to its scripting engine, or None on failure."""
+        """Resolve a ROT entry to its scripting engine, or None on failure.
+
+        A cached engine is reused while it still answers; one that does not
+        (SAP Logon or the GUI server process restarted) is dropped and the
+        entry resolved again.
+        """
+        cached = self._rot_engines.get(rot_name)
+        if cached is not None:
+            try:
+                cached.Children.Count
+                return cached
+            except Exception as e:
+                logger.debug("Cached scripting engine %s is gone: %s", rot_name, e)
+                del self._rot_engines[rot_name]
         try:
             gui = self._win32com.GetObject(rot_name)
             # Property, not a method: calling it raises "Member not found".
@@ -282,6 +304,8 @@ class SAPGUIControllerBase:
             return None
         if engine is None:
             logger.debug("ROT entry %s returned no scripting engine", rot_name)
+        else:
+            self._rot_engines[rot_name] = engine
         return engine
 
     def _iter_scripting_engines(self) -> Iterator[Tuple[str, str, Any]]:
@@ -313,6 +337,9 @@ class SAPGUIControllerBase:
         server_names = sorted({n for n in names if _SAPGUISERVER_ROT_RE.fullmatch(n)})
         if not server_names and "SAPGUISERVER" in names:
             server_names = ["SAPGUISERVER"]
+        # A GUI server process that ended leaves its entry; forget its engine.
+        for stale in set(self._rot_engines) - set(server_names) - {"SAPGUI"}:
+            del self._rot_engines[stale]
 
         for rot_name in server_names:
             engine = self._get_engine_from_rot(rot_name)
