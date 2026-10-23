@@ -169,7 +169,7 @@ Nothing to clone. `uvx` downloads the latest release and runs it in an isolated 
 uvx "mcp-sap-gui[screenshots]" --help
 ```
 
-The `[screenshots]` extra adds screenshot optimization (reduces screenshot size by 70-90%) and is recommended. Point your MCP client at `uvx` with argument `mcp-sap-gui[screenshots]` — see [MCP Setup](#mcp-setup) below.
+The `[screenshots]` extra adds screenshot optimization (reduces screenshot size by 70-90%) and is recommended. It needs Python 3.11 or newer; on 3.10 it installs nothing and screenshots stay unoptimized. Point your MCP client at `uvx` with argument `mcp-sap-gui[screenshots]` — see [MCP Setup](#mcp-setup) below.
 
 ### From source (for development)
 

@@ -34,6 +34,12 @@ Every release and what changed for someone running the server. The [GitHub relea
 - **`validation.performed` was true when Enter was refused or failed** ([#29](https://github.com/kts982/mcp-sap-gui/pull/29)). It is now false, with the error.
 - **One "allow scripting" dialog per SAP GUI process, not one per tool call.** Since 0.5.0 every `sap_list_connections` and `sap_connect_existing` looked up the scripting engine of each SAP GUI process again, and a system with `sapgui/user_scripting_force_notification` set asks the user at each lookup, for each of its connections. The engine of each process is now kept and reused while it answers; one that stops answering (SAP Logon restarted) is looked up again, and a GUI server process that ended is forgotten.
 
+### Dependencies
+
+- `pillow` 12.3.0 → 13.0.0 (the `screenshots` extra) for the advisories fixed in [Pillow 13.0.0](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html), among them [GHSA-78g4-xqwv-q3g8](https://github.com/advisories/GHSA-78g4-xqwv-q3g8) in the bundled OpenJPEG. They are all in decoding or encoding image files; the server opens only the PNG that SAP GUI writes for a screenshot. Pillow 13 needs Python 3.11 and there is no 12.x fix, so on Python 3.10 the `screenshots` extra now installs nothing: `sap_screenshot` still works, but the image is no longer downscaled or optimized.
+- `certifi` 2026.6.17 → 2026.10.19 (through httpx) for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2): eight intermediate CAs under the bundled `emSign ECC Root CA - G3` had compromised keys, and the new bundle drops that root.
+- `opentelemetry-api` 1.43.0 → 1.45.1 (through fastmcp) for [GHSA-xcq7-p3pf-p88h](https://github.com/advisories/GHSA-xcq7-p3pf-p88h) (CVE-2026-114603): a malformed W3C `tracestate` value in an incoming request could cost the server a lot of CPU time. Availability only.
+
 ## 0.5.2 — 2026-10-18
 
 Popup answers that ask first, and table writes on the right row. Three of these fixes were contributed by [@nelz0n](https://github.com/nelz0n); all were checked live on SAP GUI 8.10 and 8.00.
