@@ -33,12 +33,14 @@ from fastmcp.exceptions import McpError, ToolError
 from fastmcp.server.lifespan import lifespan
 from fastmcp.tools import ToolResult
 from mcp.types import ImageContent, TextContent
+from mcp_types import InputRequiredResult
 
 from .audit import AuditMiddleware
 from .confirmation import (
     ATTACH_POINT,
     SAVE_POINT,
     SETTABLE_POINTS,
+    Ask,
     ConfirmationMiddleware,
     ask_user,
     build_relax_prompt,
@@ -925,18 +927,21 @@ _SAVE_KEYS = {"F11", "Save"}
 
 
 async def _elicit_save(ctx: Context, message: str,
-                       tool: str = "sap_send_key") -> tuple[str, str] | None:
+                       tool: str = "sap_send_key",
+                       shown: object = None) -> tuple[str, str] | Ask | None:
     """Ask the user to confirm a save.
 
-    Returns ``None`` if a person accepted (caller should proceed), else the
-    action (``decline`` / ``cancel``) and a note that is empty unless the
-    client answered without showing a dialog (confirmation.ask_user).
+    Returns ``None`` if a person accepted (caller should proceed), an
+    ``Ask`` to return on MCP 2026-07-28, else the action (``decline`` /
+    ``cancel`` / ``changed``) and a note that is empty unless the client
+    answered without showing a dialog (confirmation.ask_user).
     Raises ``ValueError`` if the client does not support elicitation.
     """
     try:
         # Shown as a checkbox (CLI): tick it and Accept to save.
         answer = await ask_user(ctx, points=SAVE_POINT, tool=tool,
-                                message=message, response_title="Yes, save")
+                                message=message, response_title="Yes, save",
+                                gate="save", can_ask=True, shown=shown)
     except McpError as exc:
         log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
         raise ValueError(
@@ -944,25 +949,28 @@ async def _elicit_save(ctx: Context, message: str,
             f"support elicitation: {exc}"
         ) from exc
 
+    if isinstance(answer, Ask):
+        return answer
     if answer.yes:
         return None  # proceed
     return answer.action, answer.note
 
 
-async def _confirm_save(ctx: Context, key: str) -> dict | None:
+async def _confirm_save(ctx: Context, key: str,
+                        shown: object = None) -> dict | Ask | None:
     """Request user confirmation before sending a save key.
 
-    Returns ``None`` if the user accepted (caller should proceed).
-    Returns a cancellation dict if declined/cancelled.
+    Returns ``None`` if the user accepted (caller should proceed), an
+    ``Ask`` to return on MCP 2026-07-28, or a cancellation dict.
     Raises ``ValueError`` if the client does not support elicitation.
     """
     declined = await _elicit_save(ctx, (
         f"You are about to send '{key}' which triggers Save (F11) "
         "in SAP. This can persist changes to the database. "
         "Do you want to proceed?"
-    ))
-    if declined is None:
-        return None
+    ), shown=shown)
+    if declined is None or isinstance(declined, Ask):
+        return declined
     action, note = declined
     return {
         "status": "cancelled",
@@ -975,13 +983,28 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
     }
 
 
+def _popup_shown(plan: dict) -> dict:
+    """What a popup question shows: the window, its text and the button.
+    On MCP 2026-07-28 the answer counts only if the popup still reads so."""
+    popup = plan.get("popup") or {}
+    btn = plan.get("button") or {}
+    return {
+        "window": popup.get("window_id"),
+        "title": popup.get("title"),
+        "texts": popup.get("texts"),
+        "button": [btn.get("id"), btn.get("text"), btn.get("tooltip")],
+        "unread_question": bool(plan.get("unread_question")),
+    }
+
+
 async def _confirm_popup_save(ctx: Context, plan: dict,
-                              tool: str = "sap_handle_popup") -> dict | None:
+                              tool: str = "sap_handle_popup") -> dict | Ask | None:
     """The Save key's confirmation, for a press on a save-shaped popup or
     an answer to a popup question the tool cannot read.
 
-    Returns ``None`` if the user accepted, else the popup read with
-    ``status: cancelled`` (nothing was pressed).
+    Returns ``None`` if the user accepted, an ``Ask`` to return on MCP
+    2026-07-28, else the popup read with ``status: cancelled`` (nothing was
+    pressed).
     """
     popup = plan["popup"]
     btn = plan.get("button") or {}
@@ -1002,9 +1025,9 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
             + ", which may save changes to the database. "
             "Do you want to proceed?"
         )
-    declined = await _elicit_save(ctx, message, tool)
-    if declined is None:
-        return None
+    declined = await _elicit_save(ctx, message, tool, shown=_popup_shown(plan))
+    if declined is None or isinstance(declined, Ask):
+        return declined
     action, note = declined
     # The popup is still open and unchanged: keep its buttons for the next
     # step (e.g. press "No").
@@ -1018,6 +1041,13 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
                   f"Nothing was pressed.{note}"),
     })
     return popup
+
+
+def _screen_shown(c) -> dict:
+    """The screen a save question is asked on (COM thread)."""
+    screen = c.get_screen_info(include_popup=False)
+    return {key: screen.get(key) for key in
+            ("active_window", "transaction", "program", "screen_number", "title")}
 
 
 def _to_dict(obj):
@@ -1113,8 +1143,11 @@ _NOT_AN_OPTION = (
 
 
 async def _pick_session(ctx: Context, candidates: list[dict],
-                        message: str) -> dict:
+                        message: str) -> dict | Ask:
     """Ask the user which session to attach to (the 'attach' point).
+
+    On MCP 2026-07-28 the first round returns an ``Ask``; the answer counts
+    only if the sessions listed in the answer round are the ones shown.
 
     Raises ValueError when the user declines, gives an answer that is not
     one of the sessions, or when the client cannot show the dialog (fail
@@ -1144,6 +1177,7 @@ async def _pick_session(ctx: Context, candidates: list[dict],
             ctx, points=ATTACH_POINT, tool="sap_connect_existing",
             message=message, response_type=options,
             response_title="SAP session", is_yes=is_option, is_valid=is_option,
+            gate="attach", can_ask=True, shown=options,
         )
     except McpError as exc:
         log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
@@ -1158,8 +1192,12 @@ async def _pick_session(ctx: Context, candidates: list[dict],
         log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
                                "invalid_answer")
         raise ValueError(_NOT_AN_OPTION) from exc
+    if isinstance(answer, Ask):
+        return answer
     if answer.action == "invalid":
         raise ValueError(_NOT_AN_OPTION)
+    if answer.action == "changed":
+        raise ValueError(f"Nothing was attached.{answer.note}")
     if not answer.yes:
         raise ValueError(
             f"Attach declined by user ({answer.action}). Nothing was "
@@ -1174,7 +1212,7 @@ async def sap_connect_existing(
     connection_index: int = 0,
     session_index: int = 0,
     system: str | None = None,
-) -> dict:
+) -> dict | InputRequiredResult:
     """Connect to an already open SAP session. Use this when SAP is already logged in.
 
     This is the most common starting point. connection_index=0 and session_index=0
@@ -1224,6 +1262,8 @@ async def sap_connect_existing(
                 f"Several sessions are open on {system}. Attach the agent to "
                 "which one?",
             )
+            if isinstance(pick, Ask):
+                return pick.result
         else:
             raise ValueError(
                 f"{len(matches)} sessions are open on {system}: "
@@ -1240,6 +1280,8 @@ async def sap_connect_existing(
         pick = await _pick_session(
             ctx, candidates, "Attach the agent to which SAP session?",
         )
+        if isinstance(pick, Ask):
+            return pick.result
 
     # The pick is a position from the listing made before the dialog (or the
     # name lookup). If sessions opened or closed meanwhile, that position can
@@ -1334,7 +1376,7 @@ async def sap_send_key(
         "Ctrl+F", "Ctrl+G", "Ctrl+P",
     ],
     ctx: Context,
-) -> dict:
+) -> dict | InputRequiredResult:
     """Press a keyboard key / function key in the SAP window (sendVKey).
 
     Common keys: Enter (confirm), F1 (Help), F3 (Back), F4 (search help /
@@ -1357,7 +1399,12 @@ async def sap_send_key(
         refusal = await _com(lambda: c.check_vkey(vkey))
         if refusal is not None:
             return refusal
-        cancellation = await _confirm_save(ctx, key)
+        # On MCP 2026-07-28 this body runs again with the answer: the save
+        # goes only to the screen the question was asked on.
+        shown = await _com(lambda: _screen_shown(c)) if is_modern(ctx) else None
+        cancellation = await _confirm_save(ctx, key, shown)
+        if isinstance(cancellation, Ask):
+            return cancellation.result
         if cancellation is not None:
             return cancellation
         confirmed = True
@@ -1433,7 +1480,7 @@ async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
-async def sap_press_button(button_id: str, ctx: Context) -> dict:
+async def sap_press_button(button_id: str, ctx: Context) -> dict | InputRequiredResult:
     """Press (click) a pushbutton or toolbar button on the current SAP screen.
 
     Returns screen info after the press so you can detect navigation or popups.
@@ -1461,6 +1508,8 @@ async def sap_press_button(button_id: str, ctx: Context) -> dict:
     if result is not None:
         return result
     cancellation = await _confirm_popup_save(ctx, plan, "sap_press_button")
+    if isinstance(cancellation, Ask):
+        return cancellation.result
     if cancellation is not None:
         return cancellation
 
@@ -1902,7 +1951,7 @@ async def sap_handle_popup(
     ctx: Context,
     action: Literal["read", "confirm", "cancel", "press", "auto"] = "read",
     button_text: str = "",
-) -> dict:
+) -> dict | InputRequiredResult:
     """Read and optionally act on the current popup/modal dialog.
 
     Use when active_window shows wnd[1] or higher. Combines popup
@@ -1940,6 +1989,8 @@ async def sap_handle_popup(
     if result is not None:
         return result
     cancellation = await _confirm_popup_save(ctx, plan)
+    if isinstance(cancellation, Ask):
+        return cancellation.result
     if cancellation is not None:
         return cancellation
     result = await _com(lambda: c.apply_popup_plan(plan, recheck=True))
@@ -2462,7 +2513,7 @@ async def sap_set_confirmation_points(
     points: list[Literal["batch_fields", "field_writes", "transactions",
                          "all_writes", "attach"]],
     ctx: Context,
-) -> dict:
+) -> dict | InputRequiredResult:
     """Choose which SAP operations need the user's explicit approval first.
 
     Replaces this session's set of confirmation points. When a point is
@@ -2524,6 +2575,7 @@ async def sap_set_confirmation_points(
                 tool="sap_set_confirmation_points",
                 message=build_relax_prompt(removals),
                 response_title="Yes, turn it off",
+                gate="relax", can_ask=True, shown=removals,
             )
         except McpError as exc:
             # Fail closed: the points stay active. Swallowing this would make
@@ -2536,6 +2588,8 @@ async def sap_set_confirmation_points(
                 f"client does not support elicitation: {exc}"
             ) from exc
 
+        if isinstance(answer, Ask):
+            return answer.result
         if not answer.yes:
             declined = removals
             note = answer.note

@@ -19,16 +19,6 @@ if MCP_TEST_ERA == "legacy":
     fastmcp.Client.__init__ = _legacy_client_init
 
 
-def pytest_collection_modifyitems(config, items):
-    if MCP_TEST_ERA == "legacy":
-        return
-    pending = pytest.mark.xfail(
-        reason="body-gate question not yet ported to MCP 2026-07-28", strict=True,
-    )
-    for item in items:
-        if item.get_closest_marker("mrtr_body_gate"):
-            item.add_marker(pending)
-
 # The patch.dict(sys.modules) below drops every module a test imported.
 # FastMCP 4 caches the prefab classes, so a prefab_ui imported again in a
 # later test no longer matches the cache and preview cards serialize as plain

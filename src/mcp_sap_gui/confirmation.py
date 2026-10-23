@@ -398,6 +398,18 @@ _ROUND_STATE = "mcp_sap_gui.confirmation_round"
 #: Outcomes logged before an answer exists, so without elapsed_ms.
 _UNTIMED = frozenset({"asked", "unsolicited_answer", "replayed"})
 
+#: For an answer whose question is out of date (see ``shown`` in ask_user).
+CHANGED_NOTE = (
+    " What the question showed changed before the answer arrived (another "
+    "popup, screen or session list), so the answer does not apply. Read the "
+    "screen again and repeat the call if it is still wanted."
+)
+
+
+def _canonical(value: Any) -> Any:
+    """``value`` as it reads back from the sealed JSON state."""
+    return json.loads(json.dumps(value, default=str))
+
 
 async def _round_state(ctx: Any) -> dict[str, Any]:
     """This call's question state: shared by the middleware and the tool body
@@ -439,12 +451,13 @@ def _cannot_ask(message: str) -> McpError:
 
 async def _modern_answer(
     ctx: Any, *, gate: str, can_ask: bool, tool: str, message: str,
-    response_type: Any, response_title: str | None,
+    response_type: Any, response_title: str | None, shown: Any,
     log: Callable[..., None],
 ) -> tuple[Any, Any, float | None] | Ask:
     """The answer to *gate* in this round as (action, data, elapsed_ms), or
     an Ask to return. elapsed_ms is None for a question approved in an
-    earlier round of the same call. Raises McpError where no question can be
+    earlier round of the same call; action is "changed" when *shown* differs
+    from what the question showed. Raises McpError where no question can be
     asked, so every gate fails closed through its unsupported-client path."""
     if not _client_can_elicit(ctx):
         raise _cannot_ask("The client did not declare elicitation support.")
@@ -469,6 +482,8 @@ async def _modern_answer(
             raise ToolError(f"{tool}: this approval was already used. Nothing was executed.")
         _CONSUMED.add(key)
         elapsed = (time.time() - state["asked"][gate]) * 1000
+        if state.get("shown", {}).get(gate) != _canonical(shown):
+            return "changed", None, elapsed
         action = getattr(answer, "action", None)
         data = None
         if action == "accept":
@@ -477,6 +492,7 @@ async def _modern_answer(
     if answer is not None:
         log("unsolicited_answer")  # an answer to a question we did not ask
     state["asked"][gate] = time.time()
+    state.setdefault("shown", {})[gate] = _canonical(shown)
     log("asked")
     return Ask(InputRequiredResult(
         result_type="input_required",
@@ -500,6 +516,7 @@ async def ask_user(
     is_valid: Callable[[Any], bool] | None = None,
     gate: str | None = None,
     can_ask: bool = False,
+    shown: Any = None,
 ) -> Answer | Ask:
     """Ask the user one question; the same rules for every gate.
 
@@ -517,6 +534,10 @@ async def ask_user(
       names the question within the call (default: the points). Only a
       caller that passes ``can_ask=True`` gets an Ask; for the others the
       question fails closed there as unsupported.
+    - The tool body runs again when the answer arrives, so a caller passes
+      ``shown``: what the question is about (the screen, the popup and its
+      button, the options), read again in the answer round. If it differs
+      from the question's, the answer does not count (``action: changed``).
     """
     point_list = [points] if isinstance(points, str) else list(points)
     elapsed: float | None = None
@@ -530,13 +551,16 @@ async def ask_user(
         found = await _modern_answer(
             ctx, gate=gate or "+".join(point_list), can_ask=can_ask, tool=tool,
             message=message, response_type=response_type,
-            response_title=response_title, log=log,
+            response_title=response_title, shown=shown, log=log,
         )
         if isinstance(found, Ask):
             return found
         action, data, elapsed = found
         if elapsed is None:  # approved in an earlier round of this call
             return Answer(True, "accept", data, 0.0, "")
+        if action == "changed":
+            log("changed")
+            return Answer(False, "changed", None, elapsed, CHANGED_NOTE)
     else:
         kwargs: dict[str, Any] = {"message": message, "response_type": response_type}
         if response_title is not None:
@@ -553,6 +577,10 @@ async def ask_user(
             log("declined", client_answer="accept")
             return Answer(False, "decline", data, elapsed, fast_yes_note(elapsed))
         log("accepted")
+        if is_modern(ctx):
+            # Later rounds of this call (a second gate asks after this one)
+            # must not ask this question again.
+            (await _round_state(ctx))["approved"].append(gate or "+".join(point_list))
         return Answer(True, "accept", data, elapsed, "")
     log("declined")
     return Answer(False, action, data, elapsed, no_dialog_note(elapsed))

@@ -91,6 +91,3 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = [
-    "mrtr_body_gate: a question asked in a tool body, not yet ported to MCP 2026-07-28 (expected to fail there)",
-]
