@@ -94,11 +94,12 @@ class SessionManager:
         self._confirmation_points[session_key] = stored
         return set(stored)
 
-    def release(self, session_key: Hashable) -> Dict[str, Any]:
+    def release(self, session_key: Hashable, close_owned: bool = True) -> Dict[str, Any]:
         """Release and clean up a managed session.
 
-        Owned sessions (opened via ``sap_connect``) are closed.
-        Attached sessions (via ``sap_connect_existing``) are detached.
+        Owned sessions (opened via ``sap_connect``, and /o windows opened from
+        them) are closed when ``close_owned`` is True and left open otherwise.
+        Attached sessions (via ``sap_connect_existing``) are always detached.
 
         Confirmation points are deliberately NOT dropped here: their lifetime
         is the MCP session, not the SAP binding.  Clearing them on release
@@ -112,27 +113,39 @@ class SessionManager:
             return {"released": False, "reason": "no active session binding"}
 
         was_connected = managed.controller.is_connected
-        owns = managed.controller._owns_session
-        managed.controller.disconnect()
+        owned_open = len(managed.controller._owned_sessions)
+        closed = managed.controller.disconnect(close_owned=close_owned)
 
-        action = ("closed" if owns else "detached") if was_connected else "none"
+        if closed:
+            action = "closed"
+        else:
+            action = "detached" if was_connected else "none"
         logger.info(
             "Released SAP session binding (key=%s, action=%s, remaining=%d)",
             session_key,
             action,
             len(self._sessions),
         )
-        return {
+        result: Dict[str, Any] = {
             "released": True,
             "was_connected": was_connected,
             "action": action,
         }
+        if closed:
+            result["closed_sessions"] = closed
+        if not close_owned and owned_open:
+            result["owned_sessions_left_open"] = owned_open
+        return result
 
-    def release_all(self) -> None:
-        """Release every session.  Called on server shutdown."""
+    def release_all(self, close_owned: bool = True) -> None:
+        """Release every session.  Called on server shutdown.
+
+        ``close_owned=False`` (``--detach-on-exit``) leaves the sessions this
+        server opened open as well.
+        """
         for key in list(self._sessions):
             try:
-                self.release(key)
+                self.release(key, close_owned=close_owned)
             except Exception:
                 logger.warning("Error releasing session %s", key, exc_info=True)
 
