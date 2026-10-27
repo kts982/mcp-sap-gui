@@ -4,6 +4,10 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ## Unreleased
 
+### Fixed
+
+- **The server reported FastMCP's version as its own** ([#36](https://github.com/kts982/mcp-sap-gui/pull/36)). The `initialize` answer named the server `mcp-sap-gui` but carried the installed FastMCP's version (0.5.3 reported `3.4.11`). It now reports the package version.
+
 ### Python versions
 
 - **Python 3.11 or later is required.** Python 3.10 reached end of life on 2026-10-01, and 0.5.x was the last line that supported it. The `screenshots` extra now installs Pillow 13 on every supported Python, and every Python gets the fixed dnspython, so the dependency audit no longer skips GHSA-45c3-73f7-pv4m.
