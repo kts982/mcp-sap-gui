@@ -97,7 +97,7 @@ Read the first 20 rows of the visible table
   - 7.70 Patch Level 3 or later reads a whole screen, popup, list page or table control in one call (`GetObjectTree`); older releases fall back to reading element by element, which is much slower on large screens (seconds instead of a fraction of a second for a full list page)
 - **SAP Logon Pad** running, or a SAP GUI session hosted by **SAP Business Client** (experimental, see [below](#sap-business-client-experimental)) or another embedded SAP GUI (for COM connections)
 - **SAP GUI Scripting enabled** on your SAP systems
-- **Python 3.10+**
+- **Python 3.11+**
 - **[uv](https://docs.astral.sh/uv/)** (recommended Python package manager)
 
 ### SAP Business Client (experimental)
@@ -169,7 +169,7 @@ Nothing to clone. On its first launch, `uvx` downloads the latest release and ru
 uvx "mcp-sap-gui[screenshots]" --help
 ```
 
-The `[screenshots]` extra adds screenshot optimization (reduces screenshot size by 70-90%) and is recommended. It needs Python 3.11 or newer; on 3.10 it installs nothing and screenshots stay unoptimized. Point your MCP client at `uvx` with argument `mcp-sap-gui[screenshots]` — see [MCP Setup](#mcp-setup) below.
+The `[screenshots]` extra adds screenshot optimization (reduces screenshot size by 70-90%) and is recommended. Point your MCP client at `uvx` with argument `mcp-sap-gui[screenshots]` — see [MCP Setup](#mcp-setup) below.
 
 **Updating to a new release:** after the first launch, `uvx` keeps reusing the version it cached, so a new release is not picked up by itself. Run `uvx "mcp-sap-gui[screenshots]@latest" --help` once, then restart your MCP client; its next launch uses the new release. To stay on one release instead, put the version in the client's argument: `mcp-sap-gui[screenshots]==<version>`.
 

@@ -4,7 +4,7 @@ Guide for coding agents (and people) working on this repository. Process rules (
 
 ## What this is
 
-An MCP server (FastMCP 3.x, Python 3.10+) that drives SAP GUI for Windows through the SAP GUI Scripting API over COM (pywin32). It runs only on Windows; the test suite runs anywhere, with COM mocked.
+An MCP server (FastMCP 4.x, Python 3.11+) that drives SAP GUI for Windows through the SAP GUI Scripting API over COM (pywin32). It runs only on Windows; the test suite runs anywhere, with COM mocked.
 
 ## Layout
 
@@ -16,7 +16,7 @@ An MCP server (FastMCP 3.x, Python 3.10+) that drives SAP GUI for Windows throug
 
 ## Setup and checks
 
-The same commands CI runs (Windows, Python 3.10 to 3.14):
+The same commands CI runs (Windows, Python 3.11 to 3.14):
 
 ```bash
 uv sync --extra dev --extra screenshots --extra code-mode --extra apps

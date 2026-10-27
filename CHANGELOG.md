@@ -2,6 +2,12 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
+## Unreleased
+
+### Python versions
+
+- **Python 3.11 or later is required.** Python 3.10 reached end of life on 2026-10-01, and 0.5.x was the last line that supported it. The `screenshots` extra now installs Pillow 13 on every supported Python, and every Python gets the fixed dnspython, so the dependency audit no longer skips GHSA-45c3-73f7-pv4m.
+
 ## 0.5.3 — 2026-10-27
 
 Session commands refused, only the server's own SAP sessions closed, and a choice of the session to attach to. Six of these changes were contributed by [@nelz0n](https://github.com/nelz0n); the session changes were checked live on SAP GUI 8.10 and 8.00.

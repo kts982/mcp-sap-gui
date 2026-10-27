@@ -51,7 +51,7 @@ python scripts/check_docs.py
 uv build
 ```
 
-CI runs them on Windows with Python 3.10 to 3.14.
+CI runs them on Windows with Python 3.11 to 3.14.
 
 Notes:
 

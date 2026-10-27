@@ -42,11 +42,5 @@ jobs:
       - name: Export frozen lock as pylock.toml
         run: uv export --frozen --all-extras --format pylock.toml -o pylock.toml
 
-      # GHSA-45c3-73f7-pv4m (dnspython: CPU use parsing a crafted DNS answer)
-      # is fixed in dnspython 2.9.0, which needs Python 3.11. The lock gives
-      # 3.11+ that version; Python 3.10 (end of life since 2026-10-01) has no
-      # fix and keeps 2.8.0. Not reachable here: dnspython parses DNS answers
-      # only for email-validator's deliverability check, which pydantic's
-      # EmailStr does not run. Remove when Python 3.10 support is dropped.
       - name: Audit locked dependencies
-        run: pip-audit --locked . --ignore-vuln GHSA-45c3-73f7-pv4m
+        run: pip-audit --locked .
