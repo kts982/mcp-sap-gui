@@ -1,6 +1,6 @@
 """MCP Server for SAP GUI Scripting interaction."""
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 
 from .sap_controller import (  # noqa: F401
     SAPGUIController,

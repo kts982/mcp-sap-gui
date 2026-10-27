@@ -4,10 +4,6 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ## Unreleased
 
-### Safety
-
-- **A session profile no longer lapses after a day** ([#37](https://github.com/kts982/mcp-sap-gui/pull/37)). `sap_set_policy_profile` hid tools through FastMCP's session state, which expires 24 hours after it was set: the hidden write tools were then listed and callable again, without notice. The server now keeps the profile itself and refuses a tool outside it on every call, also from a `--code-mode` script. The `--profile` floor and the confirmation points were not affected.
-
 ### Removed
 
 - **`sap_set_policy_profile`**, 59 tools now. It switched a chat to a smaller set of tools by hiding the others for that session. MCP 2026-07-28 does not allow a tool list that varies per client, and FastMCP 4 keeps such hiding per server process on that protocol, so one chat's choice would hide tools for every chat. The server-level `--profile` stays and applies to every chat; to be asked before writes in one chat, use confirmation points (`sap_set_confirmation_points`). 0.5.4 kept the tool and made its restriction hold ([#37](https://github.com/kts982/mcp-sap-gui/pull/37)).
@@ -15,11 +11,23 @@ Every release and what changed for someone running the server. The [GitHub relea
 ### Fixed
 
 - **An HTTP client that went away left its SAP binding behind.** Its binding, its confirmation points and any SAP session the server had opened for it stayed until the server stopped. When an HTTP session ends now, because the client closes it or it expires after 30 idle minutes, the server releases the binding, drops the points, and closes the SAP sessions it opened for that client (left open with `--detach-on-exit`). stdio is unchanged.
-- **The server reported FastMCP's version as its own** ([#36](https://github.com/kts982/mcp-sap-gui/pull/36)). The `initialize` answer named the server `mcp-sap-gui` but carried the installed FastMCP's version (0.5.3 reported `3.4.11`). It now reports the package version.
 
 ### Python versions
 
 - **Python 3.11 or later is required.** Python 3.10 reached end of life on 2026-10-01, and 0.5.x was the last line that supported it. The `screenshots` extra now installs Pillow 13 on every supported Python, and every Python gets the fixed dnspython, so the dependency audit no longer skips GHSA-45c3-73f7-pv4m.
+
+## 0.5.4 — 2026-10-27
+
+A security release for the HTTP transport, a session profile that holds, and the server's own version in `serverInfo`. stdio, the default transport, was not affected by the security issue.
+
+### Safety
+
+- **The HTTP transport refuses requests a web page could forge** ([GHSA-rqrh-r823-7mqf](https://github.com/kts982/mcp-sap-gui/security/advisories/GHSA-rqrh-r823-7mqf)). With `--transport http`, any `Host` and `Origin` header was accepted, so a page opened in a browser could point its own domain at 127.0.0.1 (DNS rebinding), act as an MCP client and use the bound SAP session, answering the confirmation prompts itself. A request addressed to another host name now gets 421, and a browser request from another origin 403. `--allowed-host` and `--allowed-origin` add names and origins, for example with `--host 0.0.0.0`; such a bind without `--allowed-host` logs a warning. MCP clients send no `Origin` and are not affected. stdio, the default, has no network surface.
+- **A session profile no longer lapses after a day** ([#37](https://github.com/kts982/mcp-sap-gui/pull/37)). `sap_set_policy_profile` hid tools through FastMCP's session state, which expires 24 hours after it was set: the hidden write tools were then listed and callable again, without notice. The server now keeps the profile itself and refuses a tool outside it on every call, also from a `--code-mode` script. The `--profile` floor and the confirmation points were not affected.
+
+### Fixed
+
+- **The server reported FastMCP's version as its own** ([#36](https://github.com/kts982/mcp-sap-gui/pull/36)). The `initialize` answer named the server `mcp-sap-gui` but carried the installed FastMCP's version (0.5.3 reported `3.4.11`). It now reports the package version.
 
 ## 0.5.3 — 2026-10-27
 

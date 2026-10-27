@@ -6,12 +6,12 @@
     "url": "https://github.com/kts982/mcp-sap-gui",
     "source": "github"
   },
-  "version": "0.5.3",
+  "version": "0.5.4",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "mcp-sap-gui",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "transport": {
         "type": "stdio"
       }

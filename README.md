@@ -6,7 +6,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
 
-Current release: `0.5.3` for local Windows use over MCP `stdio`.
+Current release: `0.5.4` for local Windows use over MCP `stdio`.
 
 [![CI](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml)
 [![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
@@ -19,7 +19,7 @@ Current release: `0.5.3` for local Windows use over MCP `stdio`.
 
 ## What's New
 
-**0.5.3** refuses session commands such as `/nex` that close SAP windows, closes only the SAP sessions the server opened, and lets you choose the session to attach to. The audit log now names the SAP system of each call and no longer writes a password typed into a field. Six of its changes come from [@nelz0n](https://github.com/nelz0n). Every change, release by release: [CHANGELOG](CHANGELOG.md).
+**0.5.4** is a security release for the HTTP transport: it now refuses requests a web page could forge through DNS rebinding ([advisory](https://github.com/kts982/mcp-sap-gui/security/advisories/GHSA-rqrh-r823-7mqf)). stdio, the default, was not affected. It also keeps a `sap_set_policy_profile` restriction from lapsing after a day, and reports the server's own version. Every change, release by release: [CHANGELOG](CHANGELOG.md).
 
 **`sap_preview` — see it before it happens.** The agent can now show you an approval card at any checkpoint: before a batch write, before saving, or whenever you ask (*"before adding country GR, show me the values"*). It carries the current screenshot, session context, and the exact values about to be written — password-shaped values masked. On MCP Apps hosts (VS Code Copilot Chat) it renders as a rich inline card; everywhere else you get the same summary as text plus the screenshot. Saving still goes through the confirmation gate. Details: [Rendered Preview Cards](#rendered-preview-cards).
 
@@ -219,11 +219,13 @@ uv run python -m mcp_sap_gui.server --read-only
 # With transaction whitelist
 uv run python -m mcp_sap_gui.server --allowed-transactions MM03 VA03 ME23N
 
-# HTTP transport (for team/remote use, binds to localhost)
+# HTTP transport (binds to 127.0.0.1). Requests addressed to another host
+# name (DNS rebinding) or sent by a web page from another origin are refused.
 uv run python -m mcp_sap_gui.server --transport http
 
-# HTTP on custom host/port
-uv run python -m mcp_sap_gui.server --transport http --host 0.0.0.0 --port 9000
+# HTTP on another address: name the host clients use for this machine
+# (--allowed-origin adds a browser origin that may call the server)
+uv run python -m mcp_sap_gui.server --transport http --host 0.0.0.0 --port 9000 --allowed-host sap-box
 
 # Policy profile (restrict visible tools)
 uv run python -m mcp_sap_gui.server --profile exploration
@@ -510,6 +512,8 @@ This server provides powerful automation capabilities. **Use responsibly.**
 10. **Secure Credential Resolution** - `sap_connect` resolves credentials from a `.env` file (`SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT`, `SAP_LANGUAGE`). Passwords are never accepted as MCP tool parameters and never appear in client logs, tool-call history, or audit logs. Copy `.env.example` to `.env` to get started
 
 11. **ID Validation And Normalization** - User-supplied SAP window and element IDs are validated before `findById()` is called. Standard IDs like `wnd[0]/usr/...` are accepted, and full session paths like `/app/con[0]/ses[0]/wnd[0]/usr/...` are normalized to the short form automatically.
+
+12. **HTTP Host and Origin Checks** - With `--transport http`, a request addressed to a host name other than localhost, 127.0.0.1, the bound address or an `--allowed-host` is refused (421), so a web page cannot point its own name at this machine (DNS rebinding) and use the server. A browser request from another origin is refused too (403) unless it is listed with `--allowed-origin`; pages on localhost count as local. MCP clients send no `Origin` and are not affected. stdio, the default transport, has no network surface.
 
 ### Recommendations for Production Use
 
