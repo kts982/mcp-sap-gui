@@ -4,6 +4,10 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ## Unreleased
 
+### Safety
+
+- **A session profile no longer lapses after a day** ([#37](https://github.com/kts982/mcp-sap-gui/pull/37)). `sap_set_policy_profile` hid tools through FastMCP's session state, which expires 24 hours after it was set: the hidden write tools were then listed and callable again, without notice. The server now keeps the profile itself and refuses a tool outside it on every call, also from a `--code-mode` script. The `--profile` floor and the confirmation points were not affected.
+
 ### Fixed
 
 - **The server reported FastMCP's version as its own** ([#36](https://github.com/kts982/mcp-sap-gui/pull/36)). The `initialize` answer named the server `mcp-sap-gui` but carried the installed FastMCP's version (0.5.3 reported `3.4.11`). It now reports the package version.
