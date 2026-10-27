@@ -6,6 +6,7 @@ calls, T3 policy-profile visibility inside execute. Live gates run against
 a real SAP system separately.
 """
 
+import asyncio
 import json
 import logging
 from unittest.mock import MagicMock, patch
@@ -225,6 +226,32 @@ class TestPolicyProfileToolWithCodeMode:
         finally:
             # private attr, but the test must not leak the transform into
             # the shared module-level server used by other test files
+            _server_mod.mcp._transforms.remove(transform)
+
+    async def test_nested_write_refused_after_state_ttl(
+        self, mock_win32com, monkeypatch
+    ):
+        """A call_tool inside execute is checked against the session profile
+        too, also once FastMCP's visibility rules (24 h TTL) have expired."""
+        monkeypatch.setattr(Context, "_STATE_TTL_SECONDS", 1)
+        transform = _server_mod._build_code_mode_transform()
+        _server_mod.mcp.add_transform(transform)
+        try:
+            async with Client(_server_mod.mcp) as client:
+                await client.call_tool("execute", {"code": (
+                    'return await call_tool("sap_set_policy_profile",'
+                    ' {"profile": "exploration"})'
+                )})
+                await asyncio.sleep(1.5)
+                r = await client.call_tool("execute", {"code": (
+                    'return await call_tool("sap_set_field",'
+                    ' {"field_id": "wnd[0]/usr/txtX", "value": "1"})'
+                )}, raise_on_error=False)
+                assert r.is_error
+                assert "outside this session's 'exploration' profile" in (
+                    r.content[0].text
+                )
+        finally:
             _server_mod.mcp._transforms.remove(transform)
 
 
