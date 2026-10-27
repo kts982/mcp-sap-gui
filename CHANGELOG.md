@@ -48,6 +48,12 @@ Every release and what changed for someone running the server. The [GitHub relea
 - `certifi` 2026.6.17 → 2026.10.19 (through httpx) for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2): eight intermediate CAs under the bundled `emSign ECC Root CA - G3` had compromised keys, and the new bundle drops that root.
 - `opentelemetry-api` 1.43.0 → 1.45.1 (through fastmcp) for [GHSA-xcq7-p3pf-p88h](https://github.com/advisories/GHSA-xcq7-p3pf-p88h) (CVE-2026-114603): a malformed W3C `tracestate` value in an incoming request could cost the server a lot of CPU time. Availability only.
 - `fastmcp` 3.4.7 → 3.4.11. 3.4.10 backports a security fix (component authorization now applies after transforms, and a denied resource can no longer be served through a matching template; this server uses neither component authorization nor resource templates), and 3.4.11 requires the fixed `certifi`.
+- `authlib` 1.7.2 → 1.9.1 (through fastmcp) for seven advisories published on 2026-10-27, among them [GHSA-6v38-4h7w-rj9h](https://github.com/advisories/GHSA-6v38-4h7w-rj9h) (a JWS with an empty signature passed validation) and [GHSA-8m4g-j4wp-wgcg](https://github.com/advisories/GHSA-8m4g-j4wp-wgcg) (an empty HMAC key let anyone sign a JWT). All seven are in JWT, JWS and OAuth handling; this server configures no authentication on either transport and does not load authlib.
+- `dnspython` 2.8.0 → 2.9.0 on Python 3.11 and later (through pydantic's `email` extra, which fastmcp uses) for [GHSA-45c3-73f7-pv4m](https://github.com/advisories/GHSA-45c3-73f7-pv4m): parsing a crafted DNS answer could cost a lot of CPU time. dnspython parses DNS answers only for email-validator's deliverability check, which nothing here runs. 2.9.0 needs Python 3.11 and there is no 2.8.x fix, so Python 3.10 keeps 2.8.0 and the dependency audit skips this advisory.
+
+### Python versions
+
+- Python 3.10 reached end of life on 2026-10-01, and Pillow 13 and dnspython 2.9.0 already need 3.11. 0.5.x is the last line that supports Python 3.10; 0.6 needs Python 3.11 or later.
 
 ## 0.5.2 — 2026-10-18
 
