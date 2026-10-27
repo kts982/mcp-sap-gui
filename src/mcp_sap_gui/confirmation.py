@@ -34,10 +34,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
 
 import mcp.types
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import McpError, ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools.tool import ToolResult
-from mcp.shared.exceptions import McpError
+from fastmcp.tools import ToolResult
 
 from .audit import logger as audit_logger
 from .preview import _normalize_fields, _overflow_line

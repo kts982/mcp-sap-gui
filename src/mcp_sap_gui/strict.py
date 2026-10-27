@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping
 
 import mcp.types
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import ToolResult
 
 #: Environment variable that turns strict mode on, for launches (uvx, an MCP
 #: client's server config) where adding a CLI flag is awkward.

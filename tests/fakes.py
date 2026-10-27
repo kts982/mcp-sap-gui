@@ -3,12 +3,27 @@
 import re
 from typing import Any, List, Optional, Tuple
 
+from fastmcp.exceptions import McpError
+from mcp.types import ErrorData
+
 from mcp_sap_gui.sap_controller import SAPGUIController
 
 TABLE_ID = "wnd[0]/usr/tblSAPLTEST"
 
 # A cell is (Type, value): value is Text, Selected (bool) or Key by type.
 Cell = Tuple[str, Any]
+
+
+def mcp_error(code: int, message: str) -> McpError:
+    """The McpError a client raises when it cannot show a dialog.
+
+    mcp 1.x (FastMCP 3) builds it from an ErrorData; mcp 2.x (FastMCP 4)
+    takes code and message, and there McpError is an alias of MCPError.
+    """
+    try:
+        return McpError(ErrorData(code=code, message=message))
+    except TypeError:
+        return McpError(code=code, message=message)
 
 
 def text(value: str) -> Cell:

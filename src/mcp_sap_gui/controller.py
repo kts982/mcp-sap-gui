@@ -160,6 +160,13 @@ _SUBSCREEN_ID_RE = re.compile(
 )
 
 
+def _identity_dict(system: Any, client: Any, user: Any) -> Dict[str, str]:
+    """System, client and user as the audit log records them; empty ones
+    (a logon screen has no user yet) are left out."""
+    values = {"system": system, "client": client, "user": user}
+    return {key: str(value) for key, value in values.items() if value}
+
+
 class SAPGUIControllerBase:
     """
     Base controller for SAP GUI Scripting API via COM automation.
@@ -172,8 +179,6 @@ class SAPGUIControllerBase:
     def __init__(self):
         """Initialize the SAP GUI controller."""
         self._win32com = None
-        self._sap_gui_auto = None
-        self._saplogon_engine = None
         # Scripting engine per ROT entry, reused across discoveries: every
         # GetScriptingEngine call raises the "allow scripting" dialog on each
         # connection whose server sets
@@ -197,6 +202,10 @@ class SAPGUIControllerBase:
         # checks scripting_read_only on the event loop, where COM is off limits.
         self.sap_gui_version = ""
         self.scripting_read_only = False
+        # System, client and user of the bound session, for the audit log
+        # (also on the event loop). Read per bind and refreshed by
+        # get_session_info, since a sap_connect session logs on after binding.
+        self.sap_identity: Dict[str, str] = {}
         self._check_dependencies()
 
     def _check_dependencies(self):
@@ -223,37 +232,19 @@ class SAPGUIControllerBase:
         except Exception:
             pass  # Already initialized or not needed
 
-    def _get_sap_gui(self):
-        """Get the SAP Logon (``SAPGUI``) automation object."""
-        if self._sap_gui_auto is None:
-            self._ensure_com_initialized()
-            try:
-                self._sap_gui_auto = self._win32com.GetObject("SAPGUI")
-            except Exception as e:
-                logger.warning(
-                    "Failed to get SAP GUI automation object: %s",
-                    e,
-                    exc_info=logger.isEnabledFor(logging.DEBUG),
-                )
-                raise SAPGUINotAvailableError(_NOT_AVAILABLE_MESSAGE + ".")
-        return self._sap_gui_auto
-
     def _get_saplogon_engine(self):
-        """Get the SAP Logon scripting engine (needed for OpenConnection)."""
-        if self._saplogon_engine is None:
-            engine = self._rot_engines.get("SAPGUI")
-            if engine is None:
-                sap_gui = self._get_sap_gui()
-                # Use property access (no parentheses) - works more reliably
-                engine = sap_gui.GetScriptingEngine
-            if engine is None:
-                raise SAPGUINotAvailableError(
-                    "Could not get SAP GUI Scripting Engine. "
-                    "Is SAP GUI Scripting enabled?"
-                )
-            self._saplogon_engine = engine
-            self._rot_engines.setdefault("SAPGUI", engine)
-        return self._saplogon_engine
+        """Get the SAP Logon scripting engine (needed for OpenConnection).
+
+        Shares discovery's cache and its check (_get_engine_from_rot): after a
+        SAP Logon restart the dead engine is dropped and the new SAP Logon
+        looked up, where a kept engine made every sap_connect fail until the
+        server restarted.
+        """
+        self._ensure_com_initialized()
+        engine = self._get_engine_from_rot("SAPGUI")
+        if engine is None:
+            raise SAPGUINotAvailableError(_NOT_AVAILABLE_MESSAGE + ".")
+        return engine
 
     def _get_application(self):
         """Get the scripting engine of the bound session.
@@ -811,6 +802,7 @@ class SAPGUIControllerBase:
         self._owned_sessions = []
         self.sap_gui_version = ""
         self.scripting_read_only = False
+        self.sap_identity = {}
         logger.info("Disconnected")
         return closed
 
@@ -837,6 +829,12 @@ class SAPGUIControllerBase:
         except Exception as e:
             logger.debug("Scripting mode not readable: %s", e)
             self.scripting_read_only = False
+        try:
+            info = self._session.Info
+            self.sap_identity = _identity_dict(info.SystemName, info.Client, info.User)
+        except Exception as e:
+            logger.debug("Session identity not readable: %s", e)
+            self.sap_identity = {}
 
     # How long a /o command may take to show its new session.
     _NEW_SESSION_WAIT_S = 2.0
@@ -890,11 +888,13 @@ class SAPGUIControllerBase:
         self._require_session()
 
         info = self._session.Info
+        system, client, user = info.SystemName, info.Client, info.User
+        self.sap_identity = _identity_dict(system, client, user)
         return SessionInfo(
-            system_name=info.SystemName,
+            system_name=system,
             system_number=str(info.SystemNumber),
-            client=info.Client,
-            user=info.User,
+            client=client,
+            user=user,
             language=info.Language,
             transaction=info.Transaction,
             program=info.Program,

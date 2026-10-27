@@ -29,10 +29,9 @@ from typing import List, Literal, Optional
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
 from fastmcp.apps import UI_EXTENSION_ID
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import McpError, ToolError
 from fastmcp.server.lifespan import lifespan
 from fastmcp.tools import ToolResult
-from mcp.shared.exceptions import McpError
 from mcp.types import ImageContent, TextContent
 
 from .audit import AuditMiddleware
@@ -530,7 +529,9 @@ activated elsewhere, leave it (`/n`) and start it again before testing.
 # ---------------------------------------------------------------------------
 
 mcp = FastMCP("mcp-sap-gui", instructions=_INSTRUCTIONS, lifespan=_lifespan)
-mcp.add_middleware(AuditMiddleware())
+# The lambda resolves _sap_identity (defined below) in the running module at
+# call time, like the config lambda next to it.
+mcp.add_middleware(AuditMiddleware(identity=lambda ctx: _sap_identity(ctx)))
 # Next to audit, outside the confirmation gate: audit sees what it returns,
 # and the gate's confirmed_by_user (added only to a result that is not an
 # error) is already in the result it flags. The lambda reads the running
@@ -664,6 +665,16 @@ def _session_key(ctx: Context) -> str:
 def _ctrl(ctx: Context):
     """Get the SAPGUIController bound to the current MCP session."""
     return _session_mgr.get_or_create(_session_key(ctx)).controller
+
+
+def _sap_identity(ctx: Context | None) -> dict:
+    """System, client and user of the SAP session bound to this chat, for the
+    audit log. Cached values only (the audit runs on the event loop); never
+    creates a binding."""
+    if _session_mgr is None or ctx is None:
+        return {}
+    managed = _session_mgr.get_existing(_session_key(ctx))
+    return dict(managed.controller.sap_identity) if managed is not None else {}
 
 
 def _check_write(ctx: Context | None = None):
@@ -2642,8 +2653,10 @@ SAP-specific rules:
 - Read large tables in pages: loop sap_read_table with start_row until
   total_rows is reached (ALV) or has_more is false (TableControl, with
   start_row=next_start_row); aggregate locally and return only the aggregate.
-- Never call sap_screenshot inside a script (image results are unusable in the
-  sandbox) — call it directly as a normal tool instead.
+- Never call sap_screenshot inside a script: an image result is unusable in
+  the sandbox, and in code mode it is not in the tool list either. Describe
+  the screen with sap_get_screen_elements or sap_get_popup_window; for a
+  picture the user needs a server without --code-mode.
 - Sandbox limits: plain async code only; no classes; imports restricted to
   sys, os, typing, asyncio, re, datetime, json.
 """

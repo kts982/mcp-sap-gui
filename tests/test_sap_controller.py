@@ -36,7 +36,7 @@ class TestSAPGUIController:
         with pytest.raises(SAPGUINotConnectedError):
             controller.get_session_info()
 
-    def test_get_sap_gui_sanitizes_unavailable_errors(self):
+    def test_saplogon_engine_sanitizes_unavailable_errors(self):
         """Bootstrap errors should not leak raw COM details."""
         from mcp_sap_gui.sap_controller import SAPGUIController, SAPGUINotAvailableError
 
@@ -46,7 +46,7 @@ class TestSAPGUIController:
         )
 
         with pytest.raises(SAPGUINotAvailableError) as exc_info:
-            controller._get_sap_gui()
+            controller._get_saplogon_engine()
 
         assert "srv042.internal" not in str(exc_info.value)
         assert "C:\\secret" not in str(exc_info.value)
@@ -2088,6 +2088,25 @@ class TestEngineDiscovery:
         result = self._run(controller, controller.list_connections)
 
         assert result[0]["session_count"] == 1
+        assert self._lookups(controller) == ["SAPGUI", "SAPGUI"]
+
+    def test_connect_after_a_saplogon_restart_uses_the_new_saplogon(self):
+        old_engine = _fake_engine([])
+        engines = {"SAPGUI": old_engine}
+        controller = self._make_controller(engines, rot_names=["SAPGUI"])
+        controller.get_session_info = MagicMock(return_value={"system_name": "DEV"})
+        controller.connect("DEV")
+        controller.disconnect()
+
+        # SAP Logon restarted: the old proxy fails, the ROT has a new engine.
+        type(old_engine.Children).Count = PropertyMock(
+            side_effect=Exception("The RPC server is unavailable.")
+        )
+        new_engine = _fake_engine([])
+        engines["SAPGUI"] = new_engine
+        controller.connect("DEV")
+
+        new_engine.OpenConnection.assert_called_once_with("DEV", True)
         assert self._lookups(controller) == ["SAPGUI", "SAPGUI"]
 
     def test_a_gui_server_process_that_ended_is_forgotten(self):

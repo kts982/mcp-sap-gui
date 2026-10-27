@@ -11,12 +11,11 @@ from types import SimpleNamespace
 from typing import Any, List
 
 import pytest
-from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData
 
 from mcp_sap_gui import server
 from mcp_sap_gui.confirmation import SETTABLE_POINTS
 from mcp_sap_gui.models import SessionInfo
+from tests.fakes import mcp_error
 
 
 def _session(index, system, client, user, tcode, number, title):
@@ -86,7 +85,7 @@ class FakeCtx:
                              "keys": list(response_type),
                              "title": response_title})
         if self._unsupported:
-            raise McpError(ErrorData(code=-32601, message="Method not found"))
+            raise mcp_error(-32601, "Method not found")
         data = (list(response_type)[self._pick] if isinstance(self._pick, int)
                 else self._pick)
         return SimpleNamespace(action=self._answer, data=data)

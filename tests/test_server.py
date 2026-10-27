@@ -2016,15 +2016,13 @@ class TestSaveConfirmation:
     @pytest.mark.asyncio
     async def test_save_unsupported_elicitation_raises(self, srv):
         """McpError (capability failure) is converted to ValueError."""
-        from mcp.shared.exceptions import McpError
-        from mcp.types import INVALID_REQUEST, ErrorData
+        from mcp.types import INVALID_REQUEST
+
+        from tests.fakes import mcp_error
 
         ctx = _make_elicit_ctx(
-            elicit_side_effect=McpError(
-                ErrorData(
-                    code=INVALID_REQUEST,
-                    message="Client does not support elicitation",
-                )
+            elicit_side_effect=mcp_error(
+                INVALID_REQUEST, "Client does not support elicitation",
             ),
         )
         mock_controller = MagicMock()

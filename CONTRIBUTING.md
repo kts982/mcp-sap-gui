@@ -1,6 +1,6 @@
 # Contributing to MCP SAP GUI Server
 
-Thanks for contributing. This project is currently focused on a solid `0.1.x` foundation: safe local MCP use, reliable SAP GUI automation, and clear documentation.
+Thanks for contributing. The project's focus is safe local MCP use, reliable SAP GUI automation, and clear documentation.
 
 ## Scope
 
@@ -12,13 +12,15 @@ Useful contributions right now include:
 - better MCP client setup guidance
 - test coverage for controller and server behavior
 
-Larger product ideas such as remote transports, policy engines, or admin tooling are welcome, but they should usually start as an issue or design discussion before a broad implementation.
+Larger ideas (new tool families, changes to the safety gates or the transaction policy, new transports) are welcome, but they should usually start as an issue or design discussion before a broad implementation.
 
 ## Development Setup
 
 ```bash
-uv sync --extra dev --extra screenshots
+uv sync --extra dev --extra screenshots --extra code-mode --extra apps
 ```
+
+These are the extras CI installs; with fewer, the tests for the missing ones are skipped.
 
 Real SAP GUI integration work requires:
 
@@ -33,7 +35,7 @@ Working with a coding agent? [AGENTS.md](AGENTS.md) has the technical ground rul
 ## Before Opening a PR
 
 - Keep changes focused. Small, reviewable PRs are easier to merge.
-- Use generic SAP examples such as `D01`, `MAT-001`, and placeholder business values.
+- Use generic SAP examples such as system `DEV`, client `100`, user `TESTUSER`, `MAT-001`, and placeholder business values.
 - Do not commit customer-specific system names, screenshots, or SAP data.
 - Do not commit local-only files from `.dev/` or other ignored workspace artifacts.
 - If you change user-facing behavior, update the relevant docs in `README.md` or `docs/`.
@@ -43,11 +45,13 @@ Working with a coding agent? [AGENTS.md](AGENTS.md) has the technical ground rul
 Run the checks relevant to your change before opening a PR:
 
 ```bash
-uv run pytest -q
 uv run ruff check src tests
+uv run pytest -q
 python scripts/check_docs.py
 uv build
 ```
+
+CI runs them on Windows with Python 3.10 to 3.14.
 
 Notes:
 
