@@ -2759,6 +2759,24 @@ def _object_tree_settings() -> dict:
     return {"disabled_sites": sorted(disabled), "trace_file": trace_file}
 
 
+def http_guard_kwargs(allowed_hosts=(), allowed_origins=()) -> dict:
+    """Host and Origin checks for the HTTP transport (DNS rebinding).
+
+    FastMCP leaves its own guard off by default and turns the MCP SDK's off,
+    so a web page could point its own name at 127.0.0.1 and use this server
+    as an MCP client: read the bound SAP session, drive it, and answer the
+    confirmation prompts itself. Strict mode: the Host header must be
+    localhost, 127.0.0.1, ::1, the bound address or an allowed host (else
+    421), and a browser's Origin must be this server's own or an allowed
+    origin (else 403). MCP clients send no Origin and pass.
+    """
+    return {
+        "host_origin_protection": True,
+        "allowed_hosts": list(allowed_hosts) or None,
+        "allowed_origins": list(allowed_origins) or None,
+    }
+
+
 def main():
     """Main entry point."""
     import argparse
@@ -2792,6 +2810,16 @@ def main():
                         help="HTTP bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000,
                         help="HTTP port (default: 8000)")
+    parser.add_argument("--allowed-host", action="append", default=[],
+                        metavar="HOST",
+                        help="HTTP: a further name clients may use in the Host "
+                             "header, e.g. this machine's name when bound to "
+                             "0.0.0.0 (repeatable; localhost and 127.0.0.1 "
+                             "are always allowed)")
+    parser.add_argument("--allowed-origin", action="append", default=[],
+                        metavar="ORIGIN",
+                        help="HTTP: a browser origin allowed to call the "
+                             "server, e.g. https://tools.example (repeatable)")
     parser.add_argument("--profile", choices=["exploration", "operator", "full"],
                         default="full",
                         help="Default policy profile (default: full)")
@@ -2915,7 +2943,14 @@ def main():
 
     if args.transport == "http":
         logger.info("Starting HTTP transport on %s:%d", args.host, args.port)
-        mcp.run(transport="http", host=args.host, port=args.port)
+        if args.host not in ("127.0.0.1", "localhost", "::1") and not args.allowed_host:
+            logger.warning(
+                "HTTP is bound to %s, but only requests addressed to "
+                "localhost or 127.0.0.1 are accepted. Pass --allowed-host "
+                "with the name clients use for this machine.", args.host,
+            )
+        mcp.run(transport="http", host=args.host, port=args.port,
+                **http_guard_kwargs(args.allowed_host, args.allowed_origin))
     else:
         mcp.run()
 

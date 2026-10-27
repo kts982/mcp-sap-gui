@@ -864,7 +864,7 @@ wheels = [
 
 [[package]]
 name = "mcp-sap-gui"
-version = "0.5.3"
+version = "0.5.4"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },

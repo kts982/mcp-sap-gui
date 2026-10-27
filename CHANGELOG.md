@@ -2,10 +2,13 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
-## Unreleased
+## 0.5.4 — 2026-10-27
+
+A security release for the HTTP transport, a session profile that holds, and the server's own version in `serverInfo`. stdio, the default transport, was not affected by the security issue.
 
 ### Safety
 
+- **The HTTP transport refuses requests a web page could forge** ([GHSA-rqrh-r823-7mqf](https://github.com/kts982/mcp-sap-gui/security/advisories/GHSA-rqrh-r823-7mqf)). With `--transport http`, any `Host` and `Origin` header was accepted, so a page opened in a browser could point its own domain at 127.0.0.1 (DNS rebinding), act as an MCP client and use the bound SAP session, answering the confirmation prompts itself. A request addressed to another host name now gets 421, and a browser request from another origin 403. `--allowed-host` and `--allowed-origin` add names and origins, for example with `--host 0.0.0.0`; such a bind without `--allowed-host` logs a warning. MCP clients send no `Origin` and are not affected. stdio, the default, has no network surface.
 - **A session profile no longer lapses after a day** ([#37](https://github.com/kts982/mcp-sap-gui/pull/37)). `sap_set_policy_profile` hid tools through FastMCP's session state, which expires 24 hours after it was set: the hidden write tools were then listed and callable again, without notice. The server now keeps the profile itself and refuses a tool outside it on every call, also from a `--code-mode` script. The `--profile` floor and the confirmation points were not affected.
 
 ### Fixed
