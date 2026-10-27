@@ -34,6 +34,7 @@ from fastmcp.server.lifespan import lifespan
 from fastmcp.tools import ToolResult
 from mcp.types import ImageContent, TextContent
 
+from . import __version__
 from .audit import AuditMiddleware
 from .confirmation import (
     ATTACH_POINT,
@@ -528,7 +529,9 @@ activated elsewhere, leave it (`/n`) and start it again before testing.
 # Module-level state
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP("mcp-sap-gui", instructions=_INSTRUCTIONS, lifespan=_lifespan)
+# Without version=, FastMCP reports its own version in serverInfo.
+mcp = FastMCP("mcp-sap-gui", version=__version__, instructions=_INSTRUCTIONS,
+              lifespan=_lifespan)
 # The lambda resolves _sap_identity (defined below) in the running module at
 # call time, like the config lambda next to it.
 mcp.add_middleware(AuditMiddleware(identity=lambda ctx: _sap_identity(ctx)))
