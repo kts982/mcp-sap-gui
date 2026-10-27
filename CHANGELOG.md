@@ -2,7 +2,9 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
-## Unreleased
+## 0.5.3 — 2026-10-27
+
+Session commands refused, only the server's own SAP sessions closed, and a choice of the session to attach to. Six of these changes were contributed by [@nelz0n](https://github.com/nelz0n); the session changes were checked live on SAP GUI 8.10 and 8.00.
 
 ### Safety
 

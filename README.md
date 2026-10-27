@@ -6,7 +6,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
 
-Current release: `0.5.2` for local Windows use over MCP `stdio`.
+Current release: `0.5.3` for local Windows use over MCP `stdio`.
 
 [![CI](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml)
 [![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
@@ -19,7 +19,7 @@ Current release: `0.5.2` for local Windows use over MCP `stdio`.
 
 ## What's New
 
-**0.5.2** asks you before a popup answer that may save, as it does for F11, and makes table-control writes after a scroll land on the row you meant. Three of its fixes come from [@nelz0n](https://github.com/nelz0n). Every change, release by release: [CHANGELOG](CHANGELOG.md).
+**0.5.3** refuses session commands such as `/nex` that close SAP windows, closes only the SAP sessions the server opened, and lets you choose the session to attach to. The audit log now names the SAP system of each call and no longer writes a password typed into a field. Six of its changes come from [@nelz0n](https://github.com/nelz0n). Every change, release by release: [CHANGELOG](CHANGELOG.md).
 
 **`sap_preview` — see it before it happens.** The agent can now show you an approval card at any checkpoint: before a batch write, before saving, or whenever you ask (*"before adding country GR, show me the values"*). It carries the current screenshot, session context, and the exact values about to be written — password-shaped values masked. On MCP Apps hosts (VS Code Copilot Chat) it renders as a rich inline card; everywhere else you get the same summary as text plus the screenshot. Saving still goes through the confirmation gate. Details: [Rendered Preview Cards](#rendered-preview-cards).
 
