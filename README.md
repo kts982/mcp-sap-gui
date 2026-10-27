@@ -162,7 +162,7 @@ Useful facts when proposing this to a Basis/security team:
 
 ### From PyPI (recommended for users)
 
-Nothing to clone. `uvx` downloads the latest release and runs it in an isolated environment:
+Nothing to clone. On its first launch, `uvx` downloads the latest release and runs it in an isolated environment:
 
 ```bash
 # Smoke test the published package
@@ -170,6 +170,8 @@ uvx "mcp-sap-gui[screenshots]" --help
 ```
 
 The `[screenshots]` extra adds screenshot optimization (reduces screenshot size by 70-90%) and is recommended. It needs Python 3.11 or newer; on 3.10 it installs nothing and screenshots stay unoptimized. Point your MCP client at `uvx` with argument `mcp-sap-gui[screenshots]` — see [MCP Setup](#mcp-setup) below.
+
+**Updating to a new release:** after the first launch, `uvx` keeps reusing the version it cached, so a new release is not picked up by itself. Run `uvx "mcp-sap-gui[screenshots]@latest" --help` once, then restart your MCP client; its next launch uses the new release. To stay on one release instead, put the version in the client's argument: `mcp-sap-gui[screenshots]==<version>`.
 
 ### From source (for development)
 
