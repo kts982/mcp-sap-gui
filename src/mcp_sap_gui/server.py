@@ -211,6 +211,9 @@ class ServerConfig:
     # Server-level confirmation points (--confirm). Always active, never
     # removable by sap_set_confirmation_points.
     confirmation_floor: List[str] = field(default_factory=list)
+    # --detach-on-exit: server shutdown never closes a session, not even one
+    # this server opened with sap_connect.
+    detach_on_exit: bool = False
     # --strict-errors / MCP_SAP_GUI_STRICT_ERRORS: return a failed result
     # (strict.result_error) as an MCP error (isError true). Off by default.
     strict_errors: bool = False
@@ -284,7 +287,7 @@ async def _lifespan(server: FastMCP):
         if _session_mgr is not None:
             try:
                 _session_mgr.executor.submit(
-                    _session_mgr.release_all
+                    _session_mgr.release_all, not config.detach_on_exit
                 ).result(timeout=10)
             except Exception:
                 pass
@@ -1016,7 +1019,9 @@ def _to_dict(obj):
 # Connection tools
 # ===========================================================================
 
-@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
+# Not read-only (it opens a connection and logs on), but kept in the read tier
+# so the exploration profile can still log on.
+@mcp.tool(annotations=_WRITE, tags=_TAGS_READ)
 async def sap_connect(
     system_description: str,
     ctx: Context,
@@ -2608,13 +2613,16 @@ async def sap_get_transaction_guide(
 # Session lifecycle tools
 # ===========================================================================
 
-@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
+# Read tier, so every profile can detach; but it closes the sessions this
+# server opened, so it does not claim to be read-only.
+@mcp.tool(annotations=_DESTRUCTIVE, tags=_TAGS_READ)
 async def sap_disconnect(ctx: Context) -> dict:
     """Disconnect from the current SAP session and release the binding.
 
-    Sessions opened by this MCP session (via sap_connect) are closed.
-    Sessions that were attached (via sap_connect_existing) are detached
-    but left open so the user can continue working manually."""
+    Closes only the sessions this MCP session opened: the one sap_connect
+    logged on in and any /o window opened from it. Sessions that were
+    attached (via sap_connect_existing), and /o windows opened from them, are
+    detached but left open so the user can continue working manually."""
     key = _session_key(ctx)
     return await _com(lambda: _session_mgr.release(key))
 
@@ -2746,6 +2754,10 @@ def main():
                              "operation categories in every session "
                              f"(choices: {', '.join(SETTABLE_POINTS)}). "
                              "Sessions can add points but never remove these")
+    parser.add_argument("--detach-on-exit", action="store_true",
+                        help="On shutdown, detach from every SAP session and "
+                             "close none, not even sessions this server "
+                             "opened with sap_connect")
     parser.add_argument("--strict-errors", action="store_true",
                         help="Return a failed tool result (an 'error' key, "
                              "or a batch with fields that were not set) as "
@@ -2808,6 +2820,7 @@ def main():
         policy_file_sha256=policy.file_sha256,
         profile=args.profile,
         confirmation_floor=list(args.confirm or []),
+        detach_on_exit=args.detach_on_exit,
         strict_errors=args.strict_errors or strict_errors_from_env(os.environ),
     )
     if config.strict_errors:
