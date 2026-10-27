@@ -414,7 +414,7 @@ These prevent common agent mistakes like guessing element IDs, ignoring popups, 
 
 ## Available Tools
 
-The server currently exposes **60 MCP tools**.
+The server currently exposes **59 MCP tools**.
 
 | Category | Count | What it covers |
 |---|---:|---|
@@ -487,7 +487,7 @@ This server provides powerful automation capabilities. **Use responsibly.**
 
 4. **Transaction Whitelist** - For production use an allowlist: the `strict` policy preset with an `allow` list in the policy file (supports patterns such as `/SCWM/*`). The older `--allowed-transactions T1 T2 ...` flag still works and restricts on top of the policy.
 
-5. **Policy Profiles** - `--profile` controls which tools are visible: `exploration` (read-only), `operator` (read + write), `full` (all, default). Profiles can also be switched per-session via `sap_set_policy_profile` — but the server `--profile` is a floor: a session can restrict itself further, never grant itself more than the server allows
+5. **Policy Profiles** - `--profile` controls which tools are visible: `exploration` (read-only), `operator` (read + write), `full` (all, default).
 
 6. **Tool Tags** - Every tool is tagged `read` or `write` for policy profile filtering. All tools carry MCP `readOnlyHint`/`destructiveHint` annotations so clients can display appropriate UI hints
 

@@ -8,6 +8,10 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 - **A session profile no longer lapses after a day** ([#37](https://github.com/kts982/mcp-sap-gui/pull/37)). `sap_set_policy_profile` hid tools through FastMCP's session state, which expires 24 hours after it was set: the hidden write tools were then listed and callable again, without notice. The server now keeps the profile itself and refuses a tool outside it on every call, also from a `--code-mode` script. The `--profile` floor and the confirmation points were not affected.
 
+### Removed
+
+- **`sap_set_policy_profile`**, 59 tools now. It switched a chat to a smaller set of tools by hiding the others for that session. MCP 2026-07-28 does not allow a tool list that varies per client, and FastMCP 4 keeps such hiding per server process on that protocol, so one chat's choice would hide tools for every chat. The server-level `--profile` stays and applies to every chat; to be asked before writes in one chat, use confirmation points (`sap_set_confirmation_points`). 0.5.4 kept the tool and made its restriction hold ([#37](https://github.com/kts982/mcp-sap-gui/pull/37)).
+
 ### Fixed
 
 - **The server reported FastMCP's version as its own** ([#36](https://github.com/kts982/mcp-sap-gui/pull/36)). The `initialize` answer named the server `mcp-sap-gui` but carried the installed FastMCP's version (0.5.3 reported `3.4.11`). It now reports the package version.

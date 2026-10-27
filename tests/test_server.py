@@ -686,7 +686,7 @@ class TestToolRegistration:
             # Preview
             "sap_preview",
             # Policy
-            "sap_set_policy_profile", "sap_set_confirmation_points",
+            "sap_set_confirmation_points",
             # Workflow guidance
             "sap_get_workflow_guide",
             # Transaction guidance
@@ -764,7 +764,7 @@ class TestToolRegistration:
             "sap_find_tree_node_by_path",
             "sap_search_tree_nodes", "sap_get_screen_elements", "sap_screenshot",
             "sap_preview",
-            "sap_set_policy_profile", "sap_set_confirmation_points",
+            "sap_set_confirmation_points",
             "sap_get_workflow_guide",
             "sap_get_transaction_guide",
         }
@@ -886,99 +886,12 @@ class TestToolTags:
         from mcp_sap_gui.server import _PROFILES
         assert _PROFILES["full"] == {"read", "write", "destructive"}
 
-    def test_set_policy_profile_tool_registered(self, srv):
-        """sap_set_policy_profile tool is registered."""
-        import asyncio
-
-        async def get_tools():
-            return await srv.mcp.list_tools()
-
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
-        names = {t.name for t in tools}
-        assert "sap_set_policy_profile" in names
-
-    def test_set_policy_profile_is_read_tagged(self, srv):
-        """sap_set_policy_profile has 'read' tag so it's visible in all profiles."""
-        import asyncio
-
-        async def get_tools():
-            return await srv.mcp.list_tools()
-
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
-        profile_tool = next(t for t in tools if t.name == "sap_set_policy_profile")
-        assert "read" in profile_tool.tags
-
-
-class TestPolicyProfileFloor:
-    """A session profile may restrict the server --profile floor, never widen it.
-
-    fastmcp session rules override global transforms, so without the
-    intersection in _effective_profile a session could re-expose tools the
-    server hid with --profile.
-    """
-
-    def _ctx(self):
-        ctx = _make_mock_ctx()
-        ctx.enable_components = AsyncMock()
-        ctx.disable_components = AsyncMock()
-        return ctx
-
-    @pytest.mark.asyncio
-    async def test_session_cannot_exceed_server_floor(self, srv):
-        srv.config = srv.ServerConfig(profile="exploration")
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("full", ctx)
-
-        assert result["profile"] == "exploration"
-        assert result["requested_profile"] == "full"
-        assert result["enabled_tags"] == ["read"]
-        ctx.enable_components.assert_awaited_once_with(tags={"read"})
-        ctx.disable_components.assert_awaited_once_with(tags={"write", "destructive"})
-
-    @pytest.mark.asyncio
-    async def test_session_cannot_upgrade_to_operator_above_floor(self, srv):
-        srv.config = srv.ServerConfig(profile="exploration")
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("operator", ctx)
-
-        assert result["profile"] == "exploration"
-        assert "capped" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_session_can_still_restrict(self, srv):
-        srv.config = srv.ServerConfig(profile="operator")
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("exploration", ctx)
-
-        assert result["profile"] == "exploration"
-        assert result["enabled_tags"] == ["read"]
-
-    @pytest.mark.asyncio
-    async def test_operator_floor_caps_full(self, srv):
-        srv.config = srv.ServerConfig(profile="operator")
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("full", ctx)
-
-        assert result["profile"] == "operator"
-        assert result["enabled_tags"] == ["read", "write"]
-
-    @pytest.mark.asyncio
-    async def test_default_full_floor_is_unchanged(self, srv):
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("full", ctx)
-
-        assert result["profile"] == "full"
-        assert result["enabled_tags"] == ["destructive", "read", "write"]
-        assert result["message"] == "Session switched to 'full' profile"
+class TestServerProfile:
+    """The server-level --profile, the only profile since 0.6."""
 
     def test_config_rejects_unknown_profile(self, srv):
-        """Validated at construction so _effective_profile can trust it: an
-        unrecognised profile must not degrade into 'no floor at all'."""
+        """Validated at construction: an unrecognised profile must not
+        degrade into 'no restriction at all'."""
         with pytest.raises(ValueError, match="Unknown policy profile"):
             srv.ServerConfig(profile="superuser")
 

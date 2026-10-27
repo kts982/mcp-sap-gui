@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **60 MCP tools**.
+`mcp-sap-gui` currently exposes **59 MCP tools**.
 
 Two practical rules:
 
@@ -24,7 +24,7 @@ Every tool is tagged `read` or `write`. Three profiles control which tools are v
 | `operator` | `read`, `write` | Normal SAP work: navigate transactions, fill fields, press buttons. The built-in transaction policy still applies, and save-key confirmation may still prompt the user. |
 | `full` | `read`, `write` | All tools. Default. |
 
-Set the default profile at startup with `--profile operator`, or switch per-session with `sap_set_policy_profile`. A session can only restrict the profile, never widen it beyond the server's `--profile` floor.
+Set the profile at startup with `--profile operator`. It applies to every chat the server serves; there is no per-chat profile (MCP 2026-07-28 does not allow a tool list that varies per client). To ask before writes in one chat, use confirmation points.
 
 ## Confirmation Points
 
@@ -60,7 +60,6 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_list_connections` | List all currently open SAP connections and sessions, incl. SAP Business Client; reports `host` and `scripting_disabled`, and per session its system, client, user, transaction, `session_number` and window `title` |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen, plus the SAP GUI release (`sap_gui_version`, e.g. `8.10 PL0`) and whether the server allows only read-only scripting (`scripting_read_only`) |
 | `sap_disconnect` | Disconnect from the current SAP session. Closes only the sessions this server opened (the `sap_connect` session and `/o` windows opened from it); attached sessions are left open |
-| `sap_set_policy_profile` | Switch the active policy profile for this session (exploration, operator, full); capped by the server `--profile` floor |
 | `sap_set_confirmation_points` | Choose which write categories need blocking user approval for this session (see [Confirmation Points](#confirmation-points)) |
 
 ## Navigation

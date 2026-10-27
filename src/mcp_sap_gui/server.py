@@ -31,7 +31,6 @@ from fastmcp import Context, FastMCP
 from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.exceptions import McpError, ToolError
 from fastmcp.server.lifespan import lifespan
-from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import ToolResult
 from mcp.types import ImageContent, TextContent
 from mcp_types import InputRequiredResult
@@ -184,16 +183,12 @@ def _normalize_transaction_list(codes: Optional[List[str]]) -> Optional[List[str
 # ---------------------------------------------------------------------------
 
 # Profile definitions: which tag sets are visible in each profile.
-# Declared here (not next to the profile tool) because ServerConfig validates
-# against it at import time.
+# Declared here because ServerConfig validates against it at import time.
 _PROFILES: dict[str, set[str]] = {
     "exploration": {"read"},
     "operator": {"read", "write"},
     "full": {"read", "write", "destructive"},
 }
-# The tags profiles act on; untagged components (the code-mode meta-tools,
-# prompts, resources) are never hidden or refused by a profile.
-_PROFILE_TAGS = _PROFILES["full"]
 
 
 @dataclass
@@ -213,8 +208,8 @@ class ServerConfig:
     policy_preset: str = DEFAULT_PRESET
     policy_source: str = "preset"
     policy_file_sha256: Optional[str] = None
-    # Server-level policy floor (--profile). A session may restrict below this
-    # but never above it. Modelled on --read-only: no runtime mutator exists.
+    # Server-level policy profile (--profile): the tools every chat can list
+    # and call. Modelled on --read-only: no runtime mutator exists.
     profile: str = "full"
     # Server-level confirmation points (--confirm). Always active, never
     # removable by sap_set_confirmation_points.
@@ -257,8 +252,8 @@ class ServerConfig:
                 f"Valid points: {', '.join(SETTABLE_POINTS)}"
             )
         self.confirmation_floor = sorted(set(self.confirmation_floor))
-        # Validated here so _effective_profile can trust it: an unrecognised
-        # profile must not silently degrade into "no floor at all".
+        # Validated here: an unrecognised profile must not silently degrade
+        # into "no restriction at all".
         if self.profile not in _PROFILES:
             raise ValueError(
                 f"Unknown policy profile: {self.profile!r}. "
@@ -764,44 +759,6 @@ def precheck_before_confirmation(tool_name: str, args,
     except ValueError as exc:
         raise ToolError(f"Error calling tool '{tool_name}': {exc}") from exc
 
-
-class SessionProfileMiddleware(Middleware):
-    """Refuse a tool outside the profile the chat chose with sap_set_policy_profile.
-
-    The tool also hides those tools (ctx.disable_components), but FastMCP
-    keeps that rule in session state with a 24-hour TTL from the last save:
-    a day later the hidden tools were listed and callable again, without
-    notice. The profile is kept in the SessionManager instead, which has no
-    expiry, and checked here on every call; hiding only shapes the tool list.
-
-    Defined in the running module like the gate below, so it reads the live
-    _session_mgr. Registered before the gate, so a refused call is never
-    put to the user.
-    """
-
-    async def on_call_tool(self, context: MiddlewareContext, call_next: CallNext):
-        ctx = context.fastmcp_context
-        profile = None
-        if ctx is not None and _session_mgr is not None:
-            profile = _session_mgr.get_profile(_session_key(ctx))
-        blocked = _PROFILE_TAGS - _PROFILES[profile] if profile else set()
-        if blocked:
-            tool_name = context.message.name
-            try:
-                tool = await ctx.fastmcp.get_tool(tool_name)
-                tags = set(getattr(tool, "tags", None) or ())
-            except Exception:
-                tags = None  # not found or hidden: refuse, fail closed
-            if tags is None or tags & blocked:
-                raise ToolError(
-                    f"'{tool_name}' is outside this session's '{profile}' "
-                    f"profile (set with sap_set_policy_profile). Nothing was "
-                    f"run."
-                )
-        return await call_next(context)
-
-
-mcp.add_middleware(SessionProfileMiddleware())
 
 # Registered here, not next to AuditMiddleware: the gate needs the RUNNING
 # module's helpers injected as callables. Importing the server module by name
@@ -2487,73 +2444,6 @@ async def sap_preview(
             ImageContent(type="image", data=png_b64, mimeType="image/png")
         )
     return ToolResult(content=content)
-
-
-# ===========================================================================
-# Policy profile tools
-# ===========================================================================
-
-# _PROFILES is defined in the Configuration section above: ServerConfig
-# validates its `profile` field against it at import time.
-
-
-def _effective_profile(requested: str) -> tuple[str, set[str]]:
-    """Cap a requested session profile at the server-level --profile floor.
-
-    fastmcp session rules override global transforms, so a session could
-    otherwise re-enable tools the server hid with ``mcp.disable(tags=...)``.
-    Profiles are nested (exploration ⊂ operator ⊂ full), so intersecting the
-    tag sets always lands exactly on one of them.
-    """
-    # ServerConfig.__post_init__ guarantees config.profile is a known profile.
-    tags = _PROFILES[requested] & _PROFILES[config.profile]
-    for name in ("exploration", "operator", "full"):
-        if _PROFILES[name] == tags:
-            return name, tags
-    return requested, tags  # pragma: no cover — profiles are nested
-
-
-@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
-async def sap_set_policy_profile(
-    profile: Literal["exploration", "operator", "full"],
-    ctx: Context,
-) -> dict:
-    """Switch the active policy profile for this session.
-
-    Profiles control which tools are visible:
-    - exploration: read-only tools (discover, inspect, screenshot)
-    - operator: read + write tools (normal SAP interaction)
-    - full: all tools including destructive (transaction execution)
-
-    A session can only restrict, never widen: if the server was started with
-    --profile, a request above that floor is capped to the floor.
-    Default profile is 'full' unless the server was started with --profile."""
-    effective, allowed_tags = _effective_profile(profile)
-    # SessionProfileMiddleware enforces this at call time; the visibility
-    # rules below only shape the tool list (they lapse after FastMCP's TTL).
-    _session_mgr.set_profile(_session_key(ctx), effective)
-    # Subtractive semantics (same as the server-level --profile path): touch
-    # only read/write/destructive-tagged tools. Untagged components — the
-    # code-mode meta-tools (execute/search/get_schema/tags), prompts,
-    # resources — must survive profile switches.
-    await ctx.enable_components(tags=allowed_tags)
-    disallowed = _PROFILE_TAGS - allowed_tags
-    if disallowed:
-        await ctx.disable_components(tags=disallowed)
-    if effective != profile:
-        message = (
-            f"Session profile '{profile}' capped to '{effective}' by the "
-            f"server --profile floor"
-        )
-    else:
-        message = f"Session switched to '{profile}' profile"
-    return {
-        "profile": effective,
-        "requested_profile": profile,
-        "server_profile_floor": config.profile,
-        "enabled_tags": sorted(allowed_tags),
-        "message": message,
-    }
 
 
 # ===========================================================================
