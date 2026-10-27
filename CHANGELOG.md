@@ -2,6 +2,12 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
+## Unreleased
+
+### Fixed
+
+- **The server reported FastMCP's version as its own** ([#36](https://github.com/kts982/mcp-sap-gui/pull/36)). The `initialize` answer named the server `mcp-sap-gui` but carried the installed FastMCP's version (0.5.3 reported `3.4.11`). It now reports the package version.
+
 ## 0.5.3 — 2026-10-27
 
 Session commands refused, only the server's own SAP sessions closed, and a choice of the session to attach to. Six of these changes were contributed by [@nelz0n](https://github.com/nelz0n); the session changes were checked live on SAP GUI 8.10 and 8.00.
