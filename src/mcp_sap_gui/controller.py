@@ -190,7 +190,14 @@ class SAPGUIControllerBase:
         self._application = None
         self._connection = None
         self._session = None
+        # True when the bound session is one this controller opened.
         self._owns_session = False
+        # What disconnect() may close: the connection connect() opened, and
+        # every session this controller opened on it (the logon session plus
+        # any /o window opened from an owned session). Sessions attached with
+        # connect_to_existing_session() are never in this list.
+        self._owned_connection = None
+        self._owned_sessions: List[Any] = []
         # Read once per bind (_read_session_traits): the server's write gate
         # checks scripting_read_only on the event loop, where COM is off limits.
         self.sap_gui_version = ""
@@ -647,6 +654,8 @@ class SAPGUIControllerBase:
 
             if self._session is None:
                 raise SAPGUIError("No session available on the connection")
+            self._owned_connection = self._connection
+            self._owned_sessions = [self._session]
 
             # Fill login credentials if provided
             if client:
@@ -733,6 +742,8 @@ class SAPGUIControllerBase:
             self._application = engine
             self._session = connection.Children(session_index)
             self._owns_session = False
+            self._owned_connection = None
+            self._owned_sessions = []
 
             logger.info(
                 "Connected to existing session %s/%s via %s",
@@ -753,25 +764,47 @@ class SAPGUIControllerBase:
             )
             raise SAPGUIError("Failed to connect to the requested SAP session.")
 
-    def disconnect(self):
+    def disconnect(self, close_owned: bool = True) -> List[str]:
         """Detach from the current SAP session.
 
-        Sessions opened by this controller are closed on disconnect. Sessions
-        attached via connect_to_existing_session() are left open.
+        With ``close_owned`` (the default), the sessions this controller
+        opened are closed: the one connect() logged on in and any /o window
+        opened from it. A session attached via connect_to_existing_session()
+        is never closed, and neither is a session this controller did not
+        open. With ``close_owned=False`` nothing is closed at all.
+
+        Returns the Ids of the sessions that were closed.
         """
-        if self._session and self._owns_session and self._connection:
-            try:
-                self._connection.CloseSession(self._session.Id)
-            except Exception:
-                pass
+        closed: List[str] = []
+        if close_owned and self._owned_connection is not None:
+            # Newest first, so the logon session (whose close also ends the
+            # connection) goes last.
+            for session in reversed(self._owned_sessions):
+                try:
+                    # A session the user already closed raises here; its Id
+                    # may since belong to a new session, so it is skipped.
+                    session_id = session.Id
+                except Exception:
+                    continue
+                try:
+                    self._owned_connection.CloseSession(session_id)
+                    closed.append(session_id)
+                except Exception:
+                    pass
+        elif self._owned_sessions:
+            logger.info("Detached; %d session(s) this server opened left open",
+                        len(self._owned_sessions))
         self._session = None
         self._connection = None
         self._application = None
         self._owns_session = False
+        self._owned_connection = None
+        self._owned_sessions = []
         self.sap_gui_version = ""
         self.scripting_read_only = False
         self.sap_identity = {}
         logger.info("Disconnected")
+        return closed
 
     def _read_session_traits(self) -> None:
         """Cache the SAP GUI release and the server's scripting mode.
@@ -803,42 +836,52 @@ class SAPGUIControllerBase:
             logger.debug("Session identity not readable: %s", e)
             self.sap_identity = {}
 
-    def _find_session_by_id(self, session_id: str):
-        """Locate a session by ID and return its connection plus session object."""
-        app = self._get_application()
-        for connection_index in range(app.Children.Count):
-            connection = app.Children(connection_index)
-            for session_index in range(connection.Children.Count):
-                session = connection.Children(session_index)
-                if getattr(session, "Id", None) == session_id:
-                    return connection, session
-        return None, None
+    # How long a /o command may take to show its new session.
+    _NEW_SESSION_WAIT_S = 2.0
+    _NEW_SESSION_POLL_S = 0.1
 
-    def _rebind_after_new_session(
-        self, previous_session_id: str, previous_session_count: int | None,
-    ) -> None:
-        """Rebind to the newest session after a /o command opens a new window."""
-        try:
-            active_session = self._get_application().ActiveSession
-            active_session_id = getattr(active_session, "Id", None)
-            if active_session_id and active_session_id != previous_session_id:
-                connection, session = self._find_session_by_id(active_session_id)
-                if session is not None:
-                    self._connection = connection
-                    self._session = session
-                    return
-        except Exception:
-            pass
+    @staticmethod
+    def _session_ids(connection) -> set:
+        """Ids of the sessions currently open on *connection*."""
+        ids = set()
+        for index in range(connection.Children.Count):
+            session_id = getattr(connection.Children(index), "Id", None)
+            if session_id:
+                ids.add(session_id)
+        return ids
 
-        if self._connection is None or previous_session_count is None:
-            return
+    def _rebind_after_new_session(self, sessions_before: set) -> bool:
+        """Bind to the session a /o command just opened on the bound connection.
 
-        try:
-            current_session_count = self._connection.Children.Count
-            if current_session_count > previous_session_count:
-                self._session = self._connection.Children(current_session_count - 1)
-        except Exception:
-            pass
+        Only a session that was not on this connection before the command
+        counts. GuiApplication.ActiveSession is not used: it can be a session
+        on another connection, such as the window the user is working in.
+        The last child is not used either: a new session takes the lowest
+        free ses[n], so the last index can be an existing session.
+
+        The new session is owned only if the session it was opened from was
+        owned. Returns True when the binding moved; otherwise it is unchanged.
+        """
+        connection = self._connection
+        if connection is None:
+            return False
+        deadline = time.monotonic() + self._NEW_SESSION_WAIT_S
+        while True:
+            try:
+                for index in range(connection.Children.Count):
+                    session = connection.Children(index)
+                    session_id = getattr(session, "Id", None)
+                    if session_id and session_id not in sessions_before:
+                        if self._owns_session:
+                            self._owned_sessions.append(session)
+                        self._session = session
+                        return True
+            except Exception:
+                pass
+            if time.monotonic() >= deadline:
+                logger.info("No new session appeared after /o; binding unchanged")
+                return False
+            time.sleep(self._NEW_SESSION_POLL_S)
 
     def get_session_info(self) -> SessionInfo:
         """Get information about the current session."""
@@ -988,13 +1031,13 @@ class SAPGUIControllerBase:
             # /o and /* prefixes must use okcd approach (not StartTransaction)
             upper = tcode.upper()
             opens_new_session = upper.startswith("/O")
-            previous_session_id = getattr(self._session, "Id", "")
-            previous_session_count = None
+            sessions_before = None
             if opens_new_session and self._connection is not None:
                 try:
-                    previous_session_count = self._connection.Children.Count
+                    sessions_before = self._session_ids(self._connection)
                 except Exception:
-                    previous_session_count = None
+                    sessions_before = None
+            new_session_bound = False
 
             # A bare /n leaves the current transaction; StartTransaction("")
             # has nothing to start, so it goes through the command field too.
@@ -1003,9 +1046,9 @@ class SAPGUIControllerBase:
             if opens_new_session or leaves_transaction or upper.startswith("/*"):
                 self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
                 self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
-                if opens_new_session and previous_session_id:
-                    self._rebind_after_new_session(
-                        previous_session_id, previous_session_count,
+                if sessions_before is not None:
+                    new_session_bound = self._rebind_after_new_session(
+                        sessions_before,
                     )
             else:
                 # Use StartTransaction for /n prefix (preferred API)
@@ -1017,10 +1060,13 @@ class SAPGUIControllerBase:
                     self._session.findById("wnd[0]/tbar[0]/okcd").text = tcode
                     self._session.findById("wnd[0]").sendVKey(VKey.ENTER)
 
-            return {
+            result = {
                 "transaction": _strip_tcode_prefix(tcode),
                 "screen": self.get_screen_info(),
             }
+            if opens_new_session:
+                result["new_session_bound"] = new_session_bound
+            return result
         except Exception as e:
             return self._error_result(
                 {"transaction": _strip_tcode_prefix(tcode)},

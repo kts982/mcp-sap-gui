@@ -2,7 +2,9 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
-## Unreleased
+## 0.5.3 — 2026-10-27
+
+Session commands refused, only the server's own SAP sessions closed, and a choice of the session to attach to. Six of these changes were contributed by [@nelz0n](https://github.com/nelz0n); the session changes were checked live on SAP GUI 8.10 and 8.00.
 
 ### Safety
 
@@ -11,6 +13,11 @@ Every release and what changed for someone running the server. The [GitHub relea
   - `/nex` (log off, closing every session of the connection without asking), `/nend` and `/i` (close a session; `/i3` closes session 3) passed the `default` and `abap-dev` presets, through `sap_execute_transaction` and through the command field. They are now refused with their own message; a policy file can still allow one (`"allow": ["EX"]`).
   - `sap_set_textedit` on the command field skipped the transaction check, so `/nSU01` got through. It is now checked like `sap_set_field`.
   - A command-field value that starts a transaction but does not parse as a whole (`/*SU01 USR02-BNAME=X`, which skips the first screen with a field filled) was not checked at all. The code it names is now checked, and one the policy cannot check is refused.
+- **The server closes only the SAP sessions it opened** ([#26](https://github.com/kts982/mcp-sap-gui/pull/26), by [@nelz0n](https://github.com/nelz0n)).
+  - After `sap_connect`, an `/o` command moved the binding to `GuiApplication.ActiveSession` (which can be a window the user works in, on any connection) or to the last session of the connection (which can be an existing one), and `sap_disconnect` or server shutdown then closed that session, while the one the server had opened stayed open. The server now keeps the sessions it opened, the `sap_connect` logon session and `/o` windows opened from it, and closes only those, newest first; one the user already closed is skipped.
+  - `/o` binds only a session that was not on the bound connection before the command (it waits up to 2 seconds for it) and reports `new_session_bound`. An `/o` window opened from an attached session is attached too, so it is never closed.
+  - `--detach-on-exit` leaves every session open on shutdown, including the ones the server opened.
+  - `sap_connect` is no longer annotated read-only, and `sap_disconnect` is annotated destructive. Both keep the `read` tag, so every profile can still log on and detach.
 
 ### Added
 
@@ -43,6 +50,12 @@ Every release and what changed for someone running the server. The [GitHub relea
 - `certifi` 2026.6.17 → 2026.10.19 (through httpx) for [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2): eight intermediate CAs under the bundled `emSign ECC Root CA - G3` had compromised keys, and the new bundle drops that root.
 - `opentelemetry-api` 1.43.0 → 1.45.1 (through fastmcp) for [GHSA-xcq7-p3pf-p88h](https://github.com/advisories/GHSA-xcq7-p3pf-p88h) (CVE-2026-114603): a malformed W3C `tracestate` value in an incoming request could cost the server a lot of CPU time. Availability only.
 - `fastmcp` 3.4.7 → 3.4.11. 3.4.10 backports a security fix (component authorization now applies after transforms, and a denied resource can no longer be served through a matching template; this server uses neither component authorization nor resource templates), and 3.4.11 requires the fixed `certifi`.
+- `authlib` 1.7.2 → 1.9.1 (through fastmcp) for seven advisories published on 2026-10-27, among them [GHSA-6v38-4h7w-rj9h](https://github.com/advisories/GHSA-6v38-4h7w-rj9h) (a JWS with an empty signature passed validation) and [GHSA-8m4g-j4wp-wgcg](https://github.com/advisories/GHSA-8m4g-j4wp-wgcg) (an empty HMAC key let anyone sign a JWT). All seven are in JWT, JWS and OAuth handling; this server configures no authentication on either transport and does not load authlib.
+- `dnspython` 2.8.0 → 2.9.0 on Python 3.11 and later (through pydantic's `email` extra, which fastmcp uses) for [GHSA-45c3-73f7-pv4m](https://github.com/advisories/GHSA-45c3-73f7-pv4m): parsing a crafted DNS answer could cost a lot of CPU time. dnspython parses DNS answers only for email-validator's deliverability check, which nothing here runs. 2.9.0 needs Python 3.11 and there is no 2.8.x fix, so Python 3.10 keeps 2.8.0 and the dependency audit skips this advisory.
+
+### Python versions
+
+- Python 3.10 reached end of life on 2026-10-01, and Pillow 13 and dnspython 2.9.0 already need 3.11. 0.5.x is the last line that supports Python 3.10; 0.6 needs Python 3.11 or later.
 
 ## 0.5.2 — 2026-10-18
 

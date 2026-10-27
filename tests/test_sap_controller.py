@@ -1427,8 +1427,10 @@ class TestExecuteTransactionImproved:
         new_session = MagicMock()
         new_session.Id = "ses[1]"
 
+        # ses[1] appears on the bound connection when /o is sent.
         mock_connection = MagicMock()
-        mock_connection.Children.Count = 2
+        child_count = {"value": 1}
+        type(mock_connection.Children).Count = property(lambda self: child_count["value"])
         mock_connection.Children.side_effect = lambda i: [old_session, new_session][i]
         controller._connection = mock_connection
 
@@ -1440,9 +1442,14 @@ class TestExecuteTransactionImproved:
 
         mock_okcd = MagicMock()
         mock_window = MagicMock()
-        old_session.findById.side_effect = (
-            lambda id: mock_okcd if "okcd" in id else mock_window
-        )
+
+        def find_by_id(element_id):
+            if "okcd" in element_id:
+                return mock_okcd
+            child_count["value"] = 2
+            return mock_window
+
+        old_session.findById.side_effect = find_by_id
         controller.get_screen_info = MagicMock(return_value={"transaction": "MM03"})
 
         controller.execute_transaction("/oMM03")
@@ -1723,6 +1730,9 @@ class TestDisconnectOwnership:
         controller._session.Id = "ses[0]"
         controller._owns_session = True
         connection = controller._connection
+        # What connect() records about the session it opened.
+        controller._owned_connection = connection
+        controller._owned_sessions = [controller._session]
 
         controller.disconnect()
 

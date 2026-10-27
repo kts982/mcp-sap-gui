@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-sap-gui"
-version = "0.5.2"
+version = "0.5.3"
 description = "MCP Server for SAP GUI Scripting automation"
 readme = "README.md"
 license = "MIT"
