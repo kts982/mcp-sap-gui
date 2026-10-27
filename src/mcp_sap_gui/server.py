@@ -31,6 +31,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.exceptions import McpError, ToolError
 from fastmcp.server.lifespan import lifespan
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import ToolResult
 from mcp.types import ImageContent, TextContent
 
@@ -187,6 +188,9 @@ _PROFILES: dict[str, set[str]] = {
     "operator": {"read", "write"},
     "full": {"read", "write", "destructive"},
 }
+# The tags profiles act on; untagged components (the code-mode meta-tools,
+# prompts, resources) are never hidden or refused by a profile.
+_PROFILE_TAGS = _PROFILES["full"]
 
 
 @dataclass
@@ -745,6 +749,44 @@ def precheck_before_confirmation(tool_name: str, args,
     except ValueError as exc:
         raise ToolError(f"Error calling tool '{tool_name}': {exc}") from exc
 
+
+class SessionProfileMiddleware(Middleware):
+    """Refuse a tool outside the profile the chat chose with sap_set_policy_profile.
+
+    The tool also hides those tools (ctx.disable_components), but FastMCP
+    keeps that rule in session state with a 24-hour TTL from the last save:
+    a day later the hidden tools were listed and callable again, without
+    notice. The profile is kept in the SessionManager instead, which has no
+    expiry, and checked here on every call; hiding only shapes the tool list.
+
+    Defined in the running module like the gate below, so it reads the live
+    _session_mgr. Registered before the gate, so a refused call is never
+    put to the user.
+    """
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next: CallNext):
+        ctx = context.fastmcp_context
+        profile = None
+        if ctx is not None and _session_mgr is not None:
+            profile = _session_mgr.get_profile(_session_key(ctx))
+        blocked = _PROFILE_TAGS - _PROFILES[profile] if profile else set()
+        if blocked:
+            tool_name = context.message.name
+            try:
+                tool = await ctx.fastmcp.get_tool(tool_name)
+                tags = set(getattr(tool, "tags", None) or ())
+            except Exception:
+                tags = None  # not found or hidden: refuse, fail closed
+            if tags is None or tags & blocked:
+                raise ToolError(
+                    f"'{tool_name}' is outside this session's '{profile}' "
+                    f"profile (set with sap_set_policy_profile). Nothing was "
+                    f"run."
+                )
+        return await call_next(context)
+
+
+mcp.add_middleware(SessionProfileMiddleware())
 
 # Registered here, not next to AuditMiddleware: the gate needs the RUNNING
 # module's helpers injected as callables. Importing the server module by name
@@ -2423,13 +2465,15 @@ async def sap_set_policy_profile(
     --profile, a request above that floor is capped to the floor.
     Default profile is 'full' unless the server was started with --profile."""
     effective, allowed_tags = _effective_profile(profile)
+    # SessionProfileMiddleware enforces this at call time; the visibility
+    # rules below only shape the tool list (they lapse after FastMCP's TTL).
+    _session_mgr.set_profile(_session_key(ctx), effective)
     # Subtractive semantics (same as the server-level --profile path): touch
     # only read/write/destructive-tagged tools. Untagged components — the
     # code-mode meta-tools (execute/search/get_schema/tags), prompts,
     # resources — must survive profile switches.
-    all_tags = {"read", "write", "destructive"}
     await ctx.enable_components(tags=allowed_tags)
-    disallowed = all_tags - allowed_tags
+    disallowed = _PROFILE_TAGS - allowed_tags
     if disallowed:
         await ctx.disable_components(tags=disallowed)
     if effective != profile:
