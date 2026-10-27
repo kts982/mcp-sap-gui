@@ -137,6 +137,18 @@ class SessionManager:
             result["owned_sessions_left_open"] = owned_open
         return result
 
+    def forget(self, session_key: Hashable, close_owned: bool = True) -> None:
+        """Release the binding and drop the points of a session that ended.
+
+        Unlike ``release`` (sap_disconnect, where the chat goes on and its
+        points must stay armed), the client is gone and its key never comes
+        back: an MCP session id is not reused. Safe to call from the COM
+        executor thread.
+        """
+        if session_key in self._sessions:
+            self.release(session_key, close_owned=close_owned)
+        self._confirmation_points.pop(session_key, None)
+
     def release_all(self, close_owned: bool = True) -> None:
         """Release every session.  Called on server shutdown.
 

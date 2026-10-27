@@ -250,6 +250,8 @@ uvx "mcp-sap-gui[screenshots,code-mode]" --code-mode
 uv run python -m mcp_sap_gui.server --debug
 ```
 
+**HTTP and the MCP protocol versions.** Over stdio the server works with every client. Over HTTP it needs a client on the older, session-based protocol (2025-11-25 or earlier, such as VS Code): a request on MCP 2026-07-28 carries no client identity, so the server cannot keep one SAP session per client and refuses it with an error that says so. An HTTP session that ends (the client closes it, or it expires after 30 idle minutes) releases its SAP binding and its confirmation points, and closes the SAP sessions the server opened for it unless the server runs with `--detach-on-exit`.
+
 ### MCP Setup
 
 This server communicates over **stdio** (stdin/stdout JSON-RPC), which is the standard MCP transport. You don't need to configure ports or URLs — the MCP client starts the server process and talks to it directly.

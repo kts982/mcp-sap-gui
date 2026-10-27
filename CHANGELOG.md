@@ -14,6 +14,7 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ### Fixed
 
+- **An HTTP client that went away left its SAP binding behind.** Its binding, its confirmation points and any SAP session the server had opened for it stayed until the server stopped. When an HTTP session ends now, because the client closes it or it expires after 30 idle minutes, the server releases the binding, drops the points, and closes the SAP sessions it opened for that client (left open with `--detach-on-exit`). stdio is unchanged.
 - **The server reported FastMCP's version as its own** ([#36](https://github.com/kts982/mcp-sap-gui/pull/36)). The `initialize` answer named the server `mcp-sap-gui` but carried the installed FastMCP's version (0.5.3 reported `3.4.11`). It now reports the package version.
 
 ### Python versions

@@ -679,9 +679,52 @@ def _session_key(ctx: Context) -> str:
     return "process"
 
 
+# Handshake-era session keys whose end is already watched.
+_watched_session_keys: set = set()
+
+
+def _forget_when_session_ends(ctx: Context, key) -> None:
+    """Drop the binding and points of a handshake-era session when it ends.
+
+    FastMCP has no public hook for that. The MCP SDK's connection exit stack
+    ("push cleanup from handlers or middleware") closes when a handshake-era
+    connection ends: an HTTP client ending its session, an HTTP session that
+    expired after 30 idle minutes, stdio at EOF. Before, a vanished HTTP
+    client's binding, with any SAP window it opened, stayed until the server
+    stopped. On MCP 2026-07-28 the stack closes after every request, so
+    nothing is registered there (stdio uses one "process" key; HTTP is
+    refused). Reached through the SDK's private ``_connection``, as FastMCP
+    itself does; without it nothing is registered and release at shutdown
+    still applies.
+    """
+    if is_modern(ctx) or key in _watched_session_keys:
+        return
+    connection = getattr(getattr(ctx, "session", None), "_connection", None)
+    exit_stack = getattr(connection, "exit_stack", None)
+    if exit_stack is None:
+        return
+    _watched_session_keys.add(key)
+
+    async def session_ended() -> None:
+        _watched_session_keys.discard(key)
+        manager = _session_mgr
+        if manager is None:
+            return
+        close_owned = not config.detach_on_exit
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                manager.executor, lambda: manager.forget(key, close_owned))
+        except Exception:  # shutting down: release_all covers it
+            logger.debug("Releasing ended session %s failed", key, exc_info=True)
+
+    exit_stack.push_async_callback(session_ended)
+
+
 def _ctrl(ctx: Context):
     """Get the SAPGUIController bound to the current MCP session."""
-    return _session_mgr.get_or_create(_session_key(ctx)).controller
+    key = _session_key(ctx)
+    _forget_when_session_ends(ctx, key)
+    return _session_mgr.get_or_create(key).controller
 
 
 def _sap_identity(ctx: Context | None) -> dict:
@@ -2501,6 +2544,7 @@ async def sap_set_confirmation_points(
         requested.add(point)
 
     key = _session_key(ctx)
+    _forget_when_session_ends(ctx, key)
     floor = set(config.confirmation_floor)
     current = _session_mgr.get_confirmation_points(key)
     # Dropping a floor point (or 'save') is a no-op, not a relaxation, so it
