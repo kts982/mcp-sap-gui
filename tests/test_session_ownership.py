@@ -117,7 +117,7 @@ def make_controller(monkeypatch):
 
     def make(engine: FakeEngine) -> SAPGUIControllerBase:
         controller = SAPGUIControllerBase()
-        controller._saplogon_engine = engine
+        controller._rot_engines["SAPGUI"] = engine
         controller.get_screen_info = lambda include_popup=True: {}
         controller._discover_connections = lambda: [
             ("saplogon", "SAPGUI", engine, conn) for conn in engine.connections
