@@ -314,8 +314,9 @@ systems and customizations.
 popup: read it with `sap_get_popup_window` before you go on.
 - **Confirmations.** F11 / Save always asks the user first; \
 `sap_set_confirmation_points` can add `transactions`, `batch_fields`, \
-`field_writes`, `all_writes` and `attach`. A "declined" error is a stop: do not \
-retry or route around it, tell the user. Offer `sap_preview` before significant \
+`field_writes`, `all_writes` and `attach`. A "declined" error means the user \
+said no: do not retry the call or reach its result another way. Tell the user \
+and wait for their next instruction. Offer `sap_preview` before significant \
 writes (batch fills, Save) so the user sees the screen and the pending values.
 
 ## Getting Started
@@ -976,8 +977,9 @@ _SAVE_KEYS = {"F11", "Save"}
 
 async def _elicit_save(ctx: Context, message: str,
                        tool: str = "sap_send_key",
-                       shown: object = None) -> tuple[str, str] | Ask | None:
-    """Ask the user to confirm a save.
+                       shown: object = None,
+                       title: str = "Yes, save") -> tuple[str, str] | Ask | None:
+    """Ask the user to confirm a save. *title* labels the yes box.
 
     Returns ``None`` if a person accepted (caller should proceed), an
     ``Ask`` to return on MCP 2026-07-28, else the action (``decline`` /
@@ -988,7 +990,7 @@ async def _elicit_save(ctx: Context, message: str,
     try:
         # Shown as a checkbox (CLI): tick it and Accept to save.
         answer = await ask_user(ctx, points=SAVE_POINT, tool=tool,
-                                message=message, response_title="Yes, save",
+                                message=message, response_title=title,
                                 gate="save", can_ask=True, shown=shown)
     except McpError as exc:
         log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
@@ -1073,7 +1075,9 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
             + ", which may save changes to the database. "
             "Do you want to proceed?"
         )
-    declined = await _elicit_save(ctx, message, tool, shown=_popup_shown(plan))
+    # The box names the button: "Yes, save" would be wrong for No.
+    declined = await _elicit_save(ctx, message, tool, shown=_popup_shown(plan),
+                                  title=f"Yes, press '{label[:40]}'")
     if declined is None or isinstance(declined, Ask):
         return declined
     action, note = declined

@@ -14,6 +14,9 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ### Fixed
 
+- **After a declined question, an agent could refuse the user's next instruction too.** The server's rules said a declined confirmation "is a stop"; GitHub Copilot in VS Code read that as final and would not run a step the user asked for afterwards. The rule now says what it meant: do not retry the call or reach its result another way, tell the user, and wait for their next instruction.
+- **A no given in VS Code read as "(accept)".** VS Code answers a yes/no question with True or False and Submit, so a no arrived as a submitted form with the box not ticked, and the refusal said "declined by user (accept)". It now says `(no)`, and the result's `action` is `no`.
+- **The question for a popup answer is labelled with its button.** It was labelled "Yes, save" for every answer, also for No on a "Data may be lost." popup; it now reads `Yes, press 'No'`. F11 keeps "Yes, save".
 - **An HTTP client that went away left its SAP binding behind.** Its binding, its confirmation points and any SAP session the server had opened for it stayed until the server stopped. When an HTTP session ends now, because the client closes it or it expires after 30 idle minutes, the server releases the binding, drops the points, and closes the SAP sessions it opened for that client (left open with `--detach-on-exit`). stdio is unchanged.
 
 ### Python versions

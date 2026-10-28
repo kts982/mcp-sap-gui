@@ -941,7 +941,8 @@ class TestInstructionsAndResource:
         rules = instructions.split("## Getting Started")[0]
         assert "Never guess" in rules
         assert "active_window" in rules
-        assert '"declined" error is a stop' in rules
+        assert '"declined" error means the user said no' in rules
+        assert "wait for their next instruction" in rules
 
     def test_resource_registered(self, srv):
         """The docs://sap-gui-guide resource is registered."""
@@ -1922,8 +1923,10 @@ class TestSaveConfirmation:
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             result = await srv.sap_send_key("Save", ctx)
 
+        # VS Code sends a no as "False" and Submit: not "(accept)".
         assert result["status"] == "cancelled"
-        assert result["action"] == "accept"
+        assert result["action"] == "no"
+        assert "declined by user (no)" in result["error"]
         mock_controller.send_vkey.assert_not_called()
 
     @pytest.mark.asyncio

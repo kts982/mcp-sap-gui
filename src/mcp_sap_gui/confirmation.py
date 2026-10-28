@@ -583,7 +583,10 @@ async def ask_user(
             (await _round_state(ctx))["approved"].append(gate or "+".join(point_list))
         return Answer(True, "accept", data, elapsed, "")
     log("declined")
-    return Answer(False, action, data, elapsed, no_dialog_note(elapsed))
+    # A form submitted without the box ticked is a no (VS Code: "False" and
+    # Submit): it must not read as "declined by user (accept)".
+    return Answer(False, "no" if accepted else action, data, elapsed,
+                  no_dialog_note(elapsed))
 
 
 def log_attach_event(session: Mapping[str, Any], chosen_by: str) -> None:

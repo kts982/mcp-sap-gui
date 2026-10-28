@@ -163,6 +163,14 @@ def test_yes_no_prompts_are_labelled(monkeypatch):
     asyncio.run(server._confirm_save(ctx, "F11"))
     assert ctx.titles == ["Yes, save"]
 
+    # A popup answer names its button: "Yes, save" would be wrong for No.
+    ctx = Ctx()
+    plan = {"popup": {"window_id": "wnd[1]", "title": "Data may be lost.",
+                      "texts": []},
+            "button": {"text": "No"}, "unread_question": True}
+    asyncio.run(server._confirm_popup_save(ctx, plan))
+    assert ctx.titles == ["Yes, press 'No'"]
+
     class Controller:
         def set_field(self, field_id, value):
             return {"status": "ok"}
