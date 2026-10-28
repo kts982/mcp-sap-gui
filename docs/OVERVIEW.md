@@ -1,84 +1,53 @@
-# MCP SAP GUI Overview
+# What it can do
 
-## What This Project Is
+`mcp-sap-gui` gives an AI assistant hands and eyes in SAP GUI for Windows. It works on real SAP GUI screens through SAP's Scripting API: no screenshots to guess from, no OCR, no clicking at screen coordinates.
 
-`mcp-sap-gui` is a local MCP server for SAP GUI for Windows.
+## In SAP terms
 
-It gives MCP-capable assistants access to SAP GUI through the SAP GUI Scripting API, so they can:
+- **Look things up:** run display transactions (`MM03`, `VA03`, `SE16`, `/SCWM/MON`), read fields, ALV grids, table controls, classic report lists (`WRITE` output, with line colours) and trees, page through tables of any length, read message long texts.
+- **Fill in and change:** set fields, checkboxes, radio buttons and dropdowns, fill whole forms at once, edit table cells and text editors, use F4 value help (hit lists, restriction dialogs, date and time pickers), work in table maintenance (`SM30`, `SM34` view clusters) and IMG activities.
+- **Navigate:** start transactions, press buttons and function keys, choose menu entries, switch tabs, expand and search trees such as SPRO.
+- **Handle popups:** every action reports a popup it opened, recognised for what it is (a question, a warning, an F4 list, a date picker, an SAP message in any logon language). Only clearly harmless information popups are closed automatically.
+- **Show and record:** take screenshots, inline or saved as a full-resolution file, and show you a preview of the screen and the values about to be written before anything is saved.
 
-- inspect the current SAP screen
-- discover element IDs instead of guessing
-- read and write fields
-- work with tables, ALV grids, and trees
-- handle popups
-- capture screenshots
+Saving always waits for your yes, and you can make other changes wait for it too: [Confirmations](CONFIRMATIONS.md).
 
-This project is intentionally focused on **real SAP GUI automation**, not browser automation, OCR, or generic desktop clicking.
+## Things to ask
 
-## Current Release Shape
+```text
+What's the description of material MAT-001 in DEV?
+Run ME2M for vendor 1000 and give me the open purchase orders as a table.
+Read all rows of this ALV grid and sum the quantity per plant.
+In SM30, show me the entries of V_T005 for country GR.
+Find the IMG activity for defining countries in SPRO and open it.
+Fill in this form with the values below, show me the screen first, then save.
+What does the error in the status bar mean? Open its long text.
+Take a screenshot of this screen and save it to C:\temp\shot.png.
+Ask me before every field write from now on.
+```
 
-The current public release is **`0.5.4`**.
+The assistant works out the steps: it reads the screen, finds the fields, and handles the popups. You can watch it in SAP GUI as it goes.
 
-That means:
+## How the assistant knows SAP GUI
 
-- Windows only
-- SAP GUI for Windows only, including the SAP GUI embedded in SAP Business Client (experimental)
-- MCP `stdio` (default) and `streamable HTTP` transports
-- interactive MCP client usage only
+The server teaches every client how to work with SAP GUI:
 
-The server currently exposes **60 MCP tools** plus built-in MCP instructions and a `docs://sap-gui-guide` resource.
+- **Instructions** that the client puts into the assistant's system prompt: discover element IDs on the screen instead of guessing them, check for a popup after each action, page through tables, find activities in SPRO without reading its whole tree, and what each function key means (F5 is "New Entries" in table maintenance, not refresh).
+- **A reference guide** (`docs://sap-gui-guide`) the assistant can read when it needs more: element types and ID conventions, table types, status bar messages, step-by-step patterns for SPRO and table maintenance.
+- **Workflow guides** for patterns that are easy to get wrong: F4 value help, exporting a whole table, SPRO navigation, the warehouse monitor and table maintenance.
 
-There is also an experimental, opt-in **code mode** (`--code-mode`, requires the `code-mode` extra): it replaces the tool catalog with `search`/`get_schema`/`tags`/`execute` meta-tools so agents script chained SAP flows in a sandbox instead of calling tools one at a time.
+The tool reference, for developers and the curious: [Tools](TOOLS.md).
 
-## Why This Exists
+## What it covers
 
-SAP work is full of repetitive GUI-heavy flows:
+Supported:
 
-- checking configuration
-- navigating SPRO trees
-- reading tables and grids
-- entering data into structured screens
-- capturing screenshots and evidence
+- SAP GUI for Windows, also when embedded in SAP Business Client (experimental): [Preparing SAP](SAP_SETUP.md)
+- Any MCP client that can start a local server: [Clients](CLIENTS.md)
+- Several clients at once, each with its own SAP session
+- Everything the logged-on SAP user is authorized for, and nothing more
 
-This project reduces that work by giving an assistant a structured interface to SAP GUI rather than forcing it to reason from screenshots alone.
+Not covered:
 
-## What It Does Well
-
-The current strengths are:
-
-- strong SAP GUI coverage across fields, tables, ALV grids, classic report lists, trees (including the docked dialog structure of view clusters), menus, and popups
-- responses sized for an agent's context: one element per table control, short element IDs, lists as lines of text; on SAP GUI 7.70 PL3 or later a whole screen is read in one call
-- popups recognised for what they are (F4 hit lists, date and time pickers, SAP messages in any logon language), and only clearly safe ones dismissed automatically
-- discovery-first workflows that reduce brittle hardcoded IDs
-- safety controls: read-only mode, a configurable transaction policy (presets plus a policy file with allow and block patterns), tag-based policy profiles, save confirmation via elicitation-capable clients, and user-defined confirmation points that make whole categories of writes ask before they run
-- built-in MCP guidance so clients start with better navigation patterns
-- unit-tested server and controller behavior
-
-## What It Is Not Trying To Be Yet
-
-`0.5.4` is not yet:
-
-- a remote multi-user SAP automation service
-- a Fiori or browser automation product
-- a central admin console for SAP governance
-- a workflow engine for unattended enterprise execution
-
-Those are roadmap directions, not current release promises.
-
-## Near-Term Direction
-
-The next meaningful improvements are not just “more raw tools.” The higher-value areas are:
-
-- better client and transport support
-- stronger policy and approval controls
-- workflow-level tools on top of the low-level primitives
-- semantic helpers that reduce SAP ID fragility
-- audit and admin tooling
-
-In short: keep the SAP depth, but improve product shape.
-
-## Suggested Reading
-
-- [README.md](../README.md) for install and first use
-- [CLIENTS.md](CLIENTS.md) for client-specific MCP setup
-- [TOOLS.md](TOOLS.md) for the full tool catalog
+- SAP GUI for Java, SAP GUI for HTML, and Fiori or other browser apps
+- Unattended or multi-user automation as a central service: the server runs on the user's own PC, for the user

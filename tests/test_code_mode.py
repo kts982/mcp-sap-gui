@@ -2,11 +2,11 @@
 
 Mock variants of the spike safety gates (see .dev/CODE_MODE_SPIKE.local.md):
 T1 session binding through the sandbox boundary, T2 audit trail of inner
-calls, T3 policy-profile visibility inside execute. Live gates run against
-a real SAP system separately.
+calls (T3, policy-profile visibility inside execute, went with
+sap_set_policy_profile in 0.6). Live gates run against a real SAP system
+separately.
 """
 
-import asyncio
 import json
 import logging
 from unittest.mock import MagicMock, patch
@@ -44,8 +44,8 @@ def _make_code_mode_server():
 
     @srv.tool(tags={"read"})
     async def capture_session(label: str, ctx: Context) -> dict:
-        """Record the session id observed for this call (the key _ctrl uses)."""
-        sessions[label] = ctx.session_id
+        """Record the key _ctrl uses for this call."""
+        sessions[label] = _server_mod._session_key(ctx)
         return {"label": label}
 
     @srv.tool(tags={"read"})
@@ -100,8 +100,8 @@ class TestCodeModeCatalog:
 
 class TestSessionBinding:
     async def test_sandbox_tool_sees_same_ctx_session_as_direct_call(self):
-        """_ctrl(ctx) keys SAP bindings by ctx.session_id; a sandbox-invoked
-        tool must observe the originating client's session id."""
+        """_ctrl(ctx) keys SAP bindings by _session_key(ctx); a sandbox-invoked
+        tool must get the originating client's key."""
         srv, sessions = _make_code_mode_server()
         async with Client(srv) as client:
             await client.call_tool("capture_session", {"label": "direct"})
@@ -187,72 +187,6 @@ class TestPolicyVisibilityInSandbox:
             )
         # Scalar returns surface as text content only (no structured data).
         assert result.content[0].text == "12"
-
-
-class TestPolicyProfileToolWithCodeMode:
-    async def test_profile_switch_preserves_meta_tools(self, mock_win32com):
-        """Regression: sap_set_policy_profile previously used
-        disable_components(match_all=True), which removed the untagged
-        code-mode meta-tools for the session — 'execute' disappeared and
-        never came back. Subtractive semantics must leave them alone."""
-        transform = _server_mod._build_code_mode_transform()
-        _server_mod.mcp.add_transform(transform)
-        try:
-            async with Client(_server_mod.mcp) as client:
-                r = await client.call_tool(
-                    "execute",
-                    {
-                        "code": (
-                            'r = await call_tool("sap_set_policy_profile",'
-                            ' {"profile": "exploration"})\n'
-                            "return r"
-                        )
-                    },
-                )
-                assert r.data["profile"] == "exploration"
-                names = {t.name for t in await client.list_tools()}
-                assert "execute" in names, "meta-tool lost after profile switch"
-                r2 = await client.call_tool(
-                    "execute",
-                    {
-                        "code": (
-                            'r = await call_tool("sap_set_policy_profile",'
-                            ' {"profile": "full"})\n'
-                            "return r"
-                        )
-                    },
-                )
-                assert r2.data["profile"] == "full"
-        finally:
-            # private attr, but the test must not leak the transform into
-            # the shared module-level server used by other test files
-            _server_mod.mcp._transforms.remove(transform)
-
-    async def test_nested_write_refused_after_state_ttl(
-        self, mock_win32com, monkeypatch
-    ):
-        """A call_tool inside execute is checked against the session profile
-        too, also once FastMCP's visibility rules (24 h TTL) have expired."""
-        monkeypatch.setattr(Context, "_STATE_TTL_SECONDS", 1)
-        transform = _server_mod._build_code_mode_transform()
-        _server_mod.mcp.add_transform(transform)
-        try:
-            async with Client(_server_mod.mcp) as client:
-                await client.call_tool("execute", {"code": (
-                    'return await call_tool("sap_set_policy_profile",'
-                    ' {"profile": "exploration"})'
-                )})
-                await asyncio.sleep(1.5)
-                r = await client.call_tool("execute", {"code": (
-                    'return await call_tool("sap_set_field",'
-                    ' {"field_id": "wnd[0]/usr/txtX", "value": "1"})'
-                )}, raise_on_error=False)
-                assert r.is_error
-                assert "outside this session's 'exploration' profile" in (
-                    r.content[0].text
-                )
-        finally:
-            _server_mod.mcp._transforms.remove(transform)
 
 
 # ===========================================================================

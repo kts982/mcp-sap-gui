@@ -389,11 +389,11 @@ def test_handle_popup_save_without_elicitation_fails_closed(tools):
 # Questions the tool cannot read (SAPLSPO1 0500 with the Edge control)
 # ---------------------------------------------------------------------------
 
-# As read live on A4H, SAP GUI 8.10: the question is in an HTML viewer the
+# As read live on a trial system, SAP GUI 8.10: the question is in an HTML viewer the
 # Edge control keeps from scripts, so the read has buttons and a title only.
 UNREAD = {
     "window_id": "wnd[1]",
-    "title": "A4H(1)/001 Exit Editor",
+    "title": "DEV(1)/100 Exit Editor",
     "question_readable": False,
     "buttons": [
         {"id": "wnd[1]/usr/btnBUTTON_1", "text": "Yes", "tooltip": "Yes"},
@@ -404,7 +404,7 @@ UNREAD = {
 
 UNREAD_DE = {
     "window_id": "wnd[1]",
-    "title": "A4H(1)/001 Editor beenden",
+    "title": "DEV(1)/100 Editor beenden",
     "question_readable": False,
     "buttons": [
         {"id": "wnd[1]/usr/btnBUTTON_1", "text": "Ja", "tooltip": "Ja"},

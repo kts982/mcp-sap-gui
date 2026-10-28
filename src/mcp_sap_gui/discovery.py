@@ -282,7 +282,7 @@ class DiscoveryMixin:
                          result: Dict[str, Any]) -> None:
         """Add the text of a popup's HTML viewers to *texts*.
 
-        Live on SAP GUI 8.10 (A4H, any theme, accessibility on or off), the
+        Live on SAP GUI 8.10 (a trial system, any theme, accessibility on or off), the
         question of SAP's confirmation popup ("Program X was changed. Save
         before exiting editor?") is readable with the Internet Explorer
         control only. With Edge, the default, the popup is marked
@@ -314,7 +314,7 @@ class DiscoveryMixin:
                                  icon: str) -> None:
         """Mark SAP's message popup and find its message type.
 
-        The popup has no status message of its own (and on A4H the main
+        The popup has no status message of its own (and on the trial system the main
         window's MessageAsPopup stayed False): the type is the icon of its
         IK1 field. An unknown type keeps the popup out of auto-handling
         (_classify_popup), as a warning could be behind it.

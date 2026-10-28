@@ -31,20 +31,23 @@ from fastmcp import Context, FastMCP
 from fastmcp.apps import UI_EXTENSION_ID
 from fastmcp.exceptions import McpError, ToolError
 from fastmcp.server.lifespan import lifespan
-from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import ToolResult
 from mcp.types import ImageContent, TextContent
+from mcp_types import InputRequiredResult
 
 from . import __version__
 from .audit import AuditMiddleware
 from .confirmation import (
     ATTACH_POINT,
+    NO_DIALOGS_NOTE,
     SAVE_POINT,
     SETTABLE_POINTS,
+    Ask,
     ConfirmationMiddleware,
     ask_user,
     build_relax_prompt,
     effective_points,
+    is_modern,
     log_attach_event,
     log_confirmation_event,
     points_with_provenance,
@@ -181,16 +184,12 @@ def _normalize_transaction_list(codes: Optional[List[str]]) -> Optional[List[str
 # ---------------------------------------------------------------------------
 
 # Profile definitions: which tag sets are visible in each profile.
-# Declared here (not next to the profile tool) because ServerConfig validates
-# against it at import time.
+# Declared here because ServerConfig validates against it at import time.
 _PROFILES: dict[str, set[str]] = {
     "exploration": {"read"},
     "operator": {"read", "write"},
     "full": {"read", "write", "destructive"},
 }
-# The tags profiles act on; untagged components (the code-mode meta-tools,
-# prompts, resources) are never hidden or refused by a profile.
-_PROFILE_TAGS = _PROFILES["full"]
 
 
 @dataclass
@@ -210,8 +209,8 @@ class ServerConfig:
     policy_preset: str = DEFAULT_PRESET
     policy_source: str = "preset"
     policy_file_sha256: Optional[str] = None
-    # Server-level policy floor (--profile). A session may restrict below this
-    # but never above it. Modelled on --read-only: no runtime mutator exists.
+    # Server-level policy profile (--profile): the tools every chat can list
+    # and call. Modelled on --read-only: no runtime mutator exists.
     profile: str = "full"
     # Server-level confirmation points (--confirm). Always active, never
     # removable by sap_set_confirmation_points.
@@ -254,8 +253,8 @@ class ServerConfig:
                 f"Valid points: {', '.join(SETTABLE_POINTS)}"
             )
         self.confirmation_floor = sorted(set(self.confirmation_floor))
-        # Validated here so _effective_profile can trust it: an unrecognised
-        # profile must not silently degrade into "no floor at all".
+        # Validated here: an unrecognised profile must not silently degrade
+        # into "no restriction at all".
         if self.profile not in _PROFILES:
             raise ValueError(
                 f"Unknown policy profile: {self.profile!r}. "
@@ -316,8 +315,9 @@ systems and customizations.
 popup: read it with `sap_get_popup_window` before you go on.
 - **Confirmations.** F11 / Save always asks the user first; \
 `sap_set_confirmation_points` can add `transactions`, `batch_fields`, \
-`field_writes`, `all_writes` and `attach`. A "declined" error is a stop: do not \
-retry or route around it, tell the user. Offer `sap_preview` before significant \
+`field_writes`, `all_writes` and `attach`. A "declined" error means the user \
+said no: do not retry the call or reach its result another way. Tell the user \
+and wait for their next instruction. Offer `sap_preview` before significant \
 writes (batch fills, Save) so the user sees the screen and the pending values.
 
 ## Getting Started
@@ -658,20 +658,75 @@ def _note_cap(result, requested: int, capped: int):
 
 
 def _session_key(ctx: Context) -> str:
-    """Derive a stable key for the current MCP client session.
+    """Derive a stable key for the current MCP client.
 
-    ``ctx.session_id``, not ``id(ctx.session)``: with the MCP Python SDK v2
-    (FastMCP 4) every request gets a new ServerSession object, so ``id()``
-    changes on every call, and confirmation points and the SAP binding
-    silently vanish between calls. ``session_id`` is the same for all calls
-    of one client on FastMCP 3.x and 4.
+    - Handshake-era connection: ``ctx.session_id``. Not ``id(ctx.session)``:
+      the MCP SDK v2 makes a new ServerSession per request, so ``id()``
+      changes on every call and the binding and points silently vanish.
+    - MCP 2026-07-28 over stdio (or in memory): ``"process"``. That protocol
+      has no sessions, and a stdio server process serves one client (the
+      same rule as FastMCP's own session scope, without its private API).
+    - MCP 2026-07-28 over HTTP: nothing identifies the client from one
+      request to the next, so the call is refused rather than shared.
     """
-    return ctx.session_id
+    if not is_modern(ctx):
+        return ctx.session_id
+    if ctx.transport in ("sse", "streamable-http"):
+        raise ValueError(
+            "This request uses MCP 2026-07-28 over HTTP, which carries no "
+            "client identity, so the server cannot keep an SAP session per "
+            "client. Connect over stdio, or with a client that uses the "
+            "older protocol."
+        )
+    return "process"
+
+
+# Handshake-era session keys whose end is already watched.
+_watched_session_keys: set = set()
+
+
+def _forget_when_session_ends(ctx: Context, key) -> None:
+    """Drop the binding and points of a handshake-era session when it ends.
+
+    FastMCP has no public hook for that. The MCP SDK's connection exit stack
+    ("push cleanup from handlers or middleware") closes when a handshake-era
+    connection ends: an HTTP client ending its session, an HTTP session that
+    expired after 30 idle minutes, stdio at EOF. Before, a vanished HTTP
+    client's binding, with any SAP window it opened, stayed until the server
+    stopped. On MCP 2026-07-28 the stack closes after every request, so
+    nothing is registered there (stdio uses one "process" key; HTTP is
+    refused). Reached through the SDK's private ``_connection``, as FastMCP
+    itself does; without it nothing is registered and release at shutdown
+    still applies.
+    """
+    if is_modern(ctx) or key in _watched_session_keys:
+        return
+    connection = getattr(getattr(ctx, "session", None), "_connection", None)
+    exit_stack = getattr(connection, "exit_stack", None)
+    if exit_stack is None:
+        return
+    _watched_session_keys.add(key)
+
+    async def session_ended() -> None:
+        _watched_session_keys.discard(key)
+        manager = _session_mgr
+        if manager is None:
+            return
+        close_owned = not config.detach_on_exit
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                manager.executor, lambda: manager.forget(key, close_owned))
+        except Exception:  # shutting down: release_all covers it
+            logger.debug("Releasing ended session %s failed", key, exc_info=True)
+
+    exit_stack.push_async_callback(session_ended)
 
 
 def _ctrl(ctx: Context):
     """Get the SAPGUIController bound to the current MCP session."""
-    return _session_mgr.get_or_create(_session_key(ctx)).controller
+    key = _session_key(ctx)
+    _forget_when_session_ends(ctx, key)
+    return _session_mgr.get_or_create(key).controller
 
 
 def _sap_identity(ctx: Context | None) -> dict:
@@ -749,44 +804,6 @@ def precheck_before_confirmation(tool_name: str, args,
     except ValueError as exc:
         raise ToolError(f"Error calling tool '{tool_name}': {exc}") from exc
 
-
-class SessionProfileMiddleware(Middleware):
-    """Refuse a tool outside the profile the chat chose with sap_set_policy_profile.
-
-    The tool also hides those tools (ctx.disable_components), but FastMCP
-    keeps that rule in session state with a 24-hour TTL from the last save:
-    a day later the hidden tools were listed and callable again, without
-    notice. The profile is kept in the SessionManager instead, which has no
-    expiry, and checked here on every call; hiding only shapes the tool list.
-
-    Defined in the running module like the gate below, so it reads the live
-    _session_mgr. Registered before the gate, so a refused call is never
-    put to the user.
-    """
-
-    async def on_call_tool(self, context: MiddlewareContext, call_next: CallNext):
-        ctx = context.fastmcp_context
-        profile = None
-        if ctx is not None and _session_mgr is not None:
-            profile = _session_mgr.get_profile(_session_key(ctx))
-        blocked = _PROFILE_TAGS - _PROFILES[profile] if profile else set()
-        if blocked:
-            tool_name = context.message.name
-            try:
-                tool = await ctx.fastmcp.get_tool(tool_name)
-                tags = set(getattr(tool, "tags", None) or ())
-            except Exception:
-                tags = None  # not found or hidden: refuse, fail closed
-            if tags is None or tags & blocked:
-                raise ToolError(
-                    f"'{tool_name}' is outside this session's '{profile}' "
-                    f"profile (set with sap_set_policy_profile). Nothing was "
-                    f"run."
-                )
-        return await call_next(context)
-
-
-mcp.add_middleware(SessionProfileMiddleware())
 
 # Registered here, not next to AuditMiddleware: the gate needs the RUNNING
 # module's helpers injected as callables. Importing the server module by name
@@ -960,44 +977,52 @@ _SAVE_KEYS = {"F11", "Save"}
 
 
 async def _elicit_save(ctx: Context, message: str,
-                       tool: str = "sap_send_key") -> tuple[str, str] | None:
-    """Ask the user to confirm a save.
+                       tool: str = "sap_send_key",
+                       shown: object = None,
+                       title: str = "Yes, save") -> tuple[str, str] | Ask | None:
+    """Ask the user to confirm a save. *title* labels the yes box.
 
-    Returns ``None`` if a person accepted (caller should proceed), else the
-    action (``decline`` / ``cancel``) and a note that is empty unless the
-    client answered without showing a dialog (confirmation.ask_user).
+    Returns ``None`` if a person accepted (caller should proceed), an
+    ``Ask`` to return on MCP 2026-07-28, else the action (``decline`` /
+    ``cancel`` / ``changed``) and a note that is empty unless the client
+    answered without showing a dialog (confirmation.ask_user).
     Raises ``ValueError`` if the client does not support elicitation.
     """
     try:
         # Shown as a checkbox (CLI): tick it and Accept to save.
         answer = await ask_user(ctx, points=SAVE_POINT, tool=tool,
-                                message=message, response_title="Yes, save")
+                                message=message, response_title=title,
+                                gate="save", can_ask=True, shown=shown)
     except McpError as exc:
         log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
         raise ValueError(
             f"Save action requires confirmation but the client does not "
-            f"support elicitation: {exc}"
+            f"support elicitation ({exc}). Nothing was sent to SAP."
+            f"{NO_DIALOGS_NOTE}"
         ) from exc
 
+    if isinstance(answer, Ask):
+        return answer
     if answer.yes:
         return None  # proceed
     return answer.action, answer.note
 
 
-async def _confirm_save(ctx: Context, key: str) -> dict | None:
+async def _confirm_save(ctx: Context, key: str,
+                        shown: object = None) -> dict | Ask | None:
     """Request user confirmation before sending a save key.
 
-    Returns ``None`` if the user accepted (caller should proceed).
-    Returns a cancellation dict if declined/cancelled.
+    Returns ``None`` if the user accepted (caller should proceed), an
+    ``Ask`` to return on MCP 2026-07-28, or a cancellation dict.
     Raises ``ValueError`` if the client does not support elicitation.
     """
     declined = await _elicit_save(ctx, (
         f"You are about to send '{key}' which triggers Save (F11) "
         "in SAP. This can persist changes to the database. "
         "Do you want to proceed?"
-    ))
-    if declined is None:
-        return None
+    ), shown=shown)
+    if declined is None or isinstance(declined, Ask):
+        return declined
     action, note = declined
     return {
         "status": "cancelled",
@@ -1010,13 +1035,28 @@ async def _confirm_save(ctx: Context, key: str) -> dict | None:
     }
 
 
+def _popup_shown(plan: dict) -> dict:
+    """What a popup question shows: the window, its text and the button.
+    On MCP 2026-07-28 the answer counts only if the popup still reads so."""
+    popup = plan.get("popup") or {}
+    btn = plan.get("button") or {}
+    return {
+        "window": popup.get("window_id"),
+        "title": popup.get("title"),
+        "texts": popup.get("texts"),
+        "button": [btn.get("id"), btn.get("text"), btn.get("tooltip")],
+        "unread_question": bool(plan.get("unread_question")),
+    }
+
+
 async def _confirm_popup_save(ctx: Context, plan: dict,
-                              tool: str = "sap_handle_popup") -> dict | None:
+                              tool: str = "sap_handle_popup") -> dict | Ask | None:
     """The Save key's confirmation, for a press on a save-shaped popup or
     an answer to a popup question the tool cannot read.
 
-    Returns ``None`` if the user accepted, else the popup read with
-    ``status: cancelled`` (nothing was pressed).
+    Returns ``None`` if the user accepted, an ``Ask`` to return on MCP
+    2026-07-28, else the popup read with ``status: cancelled`` (nothing was
+    pressed).
     """
     popup = plan["popup"]
     btn = plan.get("button") or {}
@@ -1037,9 +1077,11 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
             + ", which may save changes to the database. "
             "Do you want to proceed?"
         )
-    declined = await _elicit_save(ctx, message, tool)
-    if declined is None:
-        return None
+    # The box names the button: "Yes, save" would be wrong for No.
+    declined = await _elicit_save(ctx, message, tool, shown=_popup_shown(plan),
+                                  title=f"Yes, press '{label[:40]}'")
+    if declined is None or isinstance(declined, Ask):
+        return declined
     action, note = declined
     # The popup is still open and unchanged: keep its buttons for the next
     # step (e.g. press "No").
@@ -1053,6 +1095,13 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
                   f"Nothing was pressed.{note}"),
     })
     return popup
+
+
+def _screen_shown(c) -> dict:
+    """The screen a save question is asked on (COM thread)."""
+    screen = c.get_screen_info(include_popup=False)
+    return {key: screen.get(key) for key in
+            ("active_window", "transaction", "program", "screen_number", "title")}
 
 
 def _to_dict(obj):
@@ -1150,8 +1199,11 @@ _NOT_AN_OPTION = (
 
 
 async def _pick_session(ctx: Context, candidates: list[dict],
-                        message: str) -> dict:
+                        message: str) -> dict | Ask:
     """Ask the user which session to attach to (the 'attach' point).
+
+    On MCP 2026-07-28 the first round returns an ``Ask``; the answer counts
+    only if the sessions listed in the answer round are the ones shown.
 
     Raises ValueError when the user declines, gives an answer that is not
     one of the sessions, or when the client cannot show the dialog (fail
@@ -1181,6 +1233,7 @@ async def _pick_session(ctx: Context, candidates: list[dict],
             ctx, points=ATTACH_POINT, tool="sap_connect_existing",
             message=message, response_type=options,
             response_title="SAP session", is_yes=is_option, is_valid=is_option,
+            gate="attach", can_ask=True, shown=options,
         )
     except McpError as exc:
         log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
@@ -1191,12 +1244,18 @@ async def _pick_session(ctx: Context, candidates: list[dict],
             "system to use, then call sap_connect_existing(system='SID') "
             "(or system='SID/client')."
         ) from exc
+    except ToolError:  # an approval already used: ask_user logged it
+        raise
     except Exception as exc:  # an answer the schema rejects (pydantic)
         log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
                                "invalid_answer")
         raise ValueError(_NOT_AN_OPTION) from exc
+    if isinstance(answer, Ask):
+        return answer
     if answer.action == "invalid":
         raise ValueError(_NOT_AN_OPTION)
+    if answer.action == "changed":
+        raise ValueError(f"Nothing was attached.{answer.note}")
     if not answer.yes:
         raise ValueError(
             f"Attach declined by user ({answer.action}). Nothing was "
@@ -1211,7 +1270,7 @@ async def sap_connect_existing(
     connection_index: int = 0,
     session_index: int = 0,
     system: str | None = None,
-) -> dict:
+) -> dict | InputRequiredResult:
     """Connect to an already open SAP session. Use this when SAP is already logged in.
 
     This is the most common starting point. connection_index=0 and session_index=0
@@ -1261,6 +1320,8 @@ async def sap_connect_existing(
                 f"Several sessions are open on {system}. Attach the agent to "
                 "which one?",
             )
+            if isinstance(pick, Ask):
+                return pick.result
         else:
             raise ValueError(
                 f"{len(matches)} sessions are open on {system}: "
@@ -1277,6 +1338,8 @@ async def sap_connect_existing(
         pick = await _pick_session(
             ctx, candidates, "Attach the agent to which SAP session?",
         )
+        if isinstance(pick, Ask):
+            return pick.result
 
     # The pick is a position from the listing made before the dialog (or the
     # name lookup). If sessions opened or closed meanwhile, that position can
@@ -1371,7 +1434,7 @@ async def sap_send_key(
         "Ctrl+F", "Ctrl+G", "Ctrl+P",
     ],
     ctx: Context,
-) -> dict:
+) -> dict | InputRequiredResult:
     """Press a keyboard key / function key in the SAP window (sendVKey).
 
     Common keys: Enter (confirm), F1 (Help), F3 (Back), F4 (search help /
@@ -1394,7 +1457,12 @@ async def sap_send_key(
         refusal = await _com(lambda: c.check_vkey(vkey))
         if refusal is not None:
             return refusal
-        cancellation = await _confirm_save(ctx, key)
+        # On MCP 2026-07-28 this body runs again with the answer: the save
+        # goes only to the screen the question was asked on.
+        shown = await _com(lambda: _screen_shown(c)) if is_modern(ctx) else None
+        cancellation = await _confirm_save(ctx, key, shown)
+        if isinstance(cancellation, Ask):
+            return cancellation.result
         if cancellation is not None:
             return cancellation
         confirmed = True
@@ -1470,7 +1538,7 @@ async def sap_set_field(field_id: str, value: str, ctx: Context) -> dict:
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
-async def sap_press_button(button_id: str, ctx: Context) -> dict:
+async def sap_press_button(button_id: str, ctx: Context) -> dict | InputRequiredResult:
     """Press (click) a pushbutton or toolbar button on the current SAP screen.
 
     Returns screen info after the press so you can detect navigation or popups.
@@ -1498,6 +1566,8 @@ async def sap_press_button(button_id: str, ctx: Context) -> dict:
     if result is not None:
         return result
     cancellation = await _confirm_popup_save(ctx, plan, "sap_press_button")
+    if isinstance(cancellation, Ask):
+        return cancellation.result
     if cancellation is not None:
         return cancellation
 
@@ -1939,7 +2009,7 @@ async def sap_handle_popup(
     ctx: Context,
     action: Literal["read", "confirm", "cancel", "press", "auto"] = "read",
     button_text: str = "",
-) -> dict:
+) -> dict | InputRequiredResult:
     """Read and optionally act on the current popup/modal dialog.
 
     Use when active_window shows wnd[1] or higher. Combines popup
@@ -1977,6 +2047,8 @@ async def sap_handle_popup(
     if result is not None:
         return result
     cancellation = await _confirm_popup_save(ctx, plan)
+    if isinstance(cancellation, Ask):
+        return cancellation.result
     if cancellation is not None:
         return cancellation
     result = await _com(lambda: c.apply_popup_plan(plan, recheck=True))
@@ -2426,73 +2498,6 @@ async def sap_preview(
 
 
 # ===========================================================================
-# Policy profile tools
-# ===========================================================================
-
-# _PROFILES is defined in the Configuration section above: ServerConfig
-# validates its `profile` field against it at import time.
-
-
-def _effective_profile(requested: str) -> tuple[str, set[str]]:
-    """Cap a requested session profile at the server-level --profile floor.
-
-    fastmcp session rules override global transforms, so a session could
-    otherwise re-enable tools the server hid with ``mcp.disable(tags=...)``.
-    Profiles are nested (exploration ⊂ operator ⊂ full), so intersecting the
-    tag sets always lands exactly on one of them.
-    """
-    # ServerConfig.__post_init__ guarantees config.profile is a known profile.
-    tags = _PROFILES[requested] & _PROFILES[config.profile]
-    for name in ("exploration", "operator", "full"):
-        if _PROFILES[name] == tags:
-            return name, tags
-    return requested, tags  # pragma: no cover — profiles are nested
-
-
-@mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
-async def sap_set_policy_profile(
-    profile: Literal["exploration", "operator", "full"],
-    ctx: Context,
-) -> dict:
-    """Switch the active policy profile for this session.
-
-    Profiles control which tools are visible:
-    - exploration: read-only tools (discover, inspect, screenshot)
-    - operator: read + write tools (normal SAP interaction)
-    - full: all tools including destructive (transaction execution)
-
-    A session can only restrict, never widen: if the server was started with
-    --profile, a request above that floor is capped to the floor.
-    Default profile is 'full' unless the server was started with --profile."""
-    effective, allowed_tags = _effective_profile(profile)
-    # SessionProfileMiddleware enforces this at call time; the visibility
-    # rules below only shape the tool list (they lapse after FastMCP's TTL).
-    _session_mgr.set_profile(_session_key(ctx), effective)
-    # Subtractive semantics (same as the server-level --profile path): touch
-    # only read/write/destructive-tagged tools. Untagged components — the
-    # code-mode meta-tools (execute/search/get_schema/tags), prompts,
-    # resources — must survive profile switches.
-    await ctx.enable_components(tags=allowed_tags)
-    disallowed = _PROFILE_TAGS - allowed_tags
-    if disallowed:
-        await ctx.disable_components(tags=disallowed)
-    if effective != profile:
-        message = (
-            f"Session profile '{profile}' capped to '{effective}' by the "
-            f"server --profile floor"
-        )
-    else:
-        message = f"Session switched to '{profile}' profile"
-    return {
-        "profile": effective,
-        "requested_profile": profile,
-        "server_profile_floor": config.profile,
-        "enabled_tags": sorted(allowed_tags),
-        "message": message,
-    }
-
-
-# ===========================================================================
 # Confirmation point tools
 # ===========================================================================
 
@@ -2501,7 +2506,7 @@ async def sap_set_confirmation_points(
     points: list[Literal["batch_fields", "field_writes", "transactions",
                          "all_writes", "attach"]],
     ctx: Context,
-) -> dict:
+) -> dict | InputRequiredResult:
     """Choose which SAP operations need the user's explicit approval first.
 
     Replaces this session's set of confirmation points. When a point is
@@ -2547,6 +2552,7 @@ async def sap_set_confirmation_points(
         requested.add(point)
 
     key = _session_key(ctx)
+    _forget_when_session_ends(ctx, key)
     floor = set(config.confirmation_floor)
     current = _session_mgr.get_confirmation_points(key)
     # Dropping a floor point (or 'save') is a no-op, not a relaxation, so it
@@ -2555,6 +2561,7 @@ async def sap_set_confirmation_points(
 
     declined: list[str] = []
     note = ""
+    changed = False
     if removals:
         try:
             answer = await ask_user(
@@ -2563,6 +2570,7 @@ async def sap_set_confirmation_points(
                 tool="sap_set_confirmation_points",
                 message=build_relax_prompt(removals),
                 response_title="Yes, turn it off",
+                gate="relax", can_ask=True, shown=removals,
             )
         except McpError as exc:
             # Fail closed: the points stay active. Swallowing this would make
@@ -2572,20 +2580,26 @@ async def sap_set_confirmation_points(
                                        "unsupported_client")
             raise ValueError(
                 f"Disabling a confirmation point requires confirmation but the "
-                f"client does not support elicitation: {exc}"
+                f"client does not support elicitation ({exc}). The points stay "
+                f"on.{NO_DIALOGS_NOTE}"
             ) from exc
 
+        if isinstance(answer, Ask):
+            return answer.result
         if not answer.yes:
             declined = removals
             note = answer.note
+            # An out-of-date answer is no decline (CHANGED_NOTE says why).
+            changed = answer.action == "changed"
 
     stored = (requested | set(declined)) - floor
     _session_mgr.set_confirmation_points(key, stored)
 
     active = sorted(effective_points(floor, stored))
     if declined:
+        lead = "Not disabled" if changed else "User declined to disable"
         message = (
-            f"User declined to disable: {', '.join(declined)}. "
+            f"{lead}: {', '.join(declined)}. "
             f"Active confirmation points: {', '.join(active)}"
             + (f".{note}" if note else "")
         )
@@ -2728,7 +2742,7 @@ def _build_code_mode_transform():
         sandbox_provider=MontySandboxProvider(
             # Defaults (30 s / 50 calls) are too tight for table pagination
             # loops over slow SAP screens.
-            limits={"max_duration_secs": 120, "max_memory": 100_000_000},
+            limits={"max_feed_duration_secs": 120, "max_memory": 100_000_000},
         ),
         discovery_tools=[GetTags(), Search(default_detail="detailed"), GetSchemas()],
         max_tool_calls=200,

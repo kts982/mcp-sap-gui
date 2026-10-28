@@ -334,9 +334,10 @@ class TestConfirmationPointTool:
             side_effect=mcp_error(INVALID_REQUEST, "Elicitation not supported")
         )
 
-        with pytest.raises(ValueError, match="does not support elicitation"):
+        with pytest.raises(ValueError, match="does not support elicitation") as exc:
             await srv.sap_set_confirmation_points([], ctx)
 
+        assert "The points stay on." in str(exc.value)
         assert srv._session_mgr.get_confirmation_points(
             srv._session_key(ctx)
         ) == {"field_writes"}
@@ -696,6 +697,18 @@ class TestTagLookupFailsClosed:
 
         assert await _confirm_mod._tool_tags(ctx, "sap_read_field") == {"write"}
 
+    async def test_tool_tags_returns_write_for_an_unknown_tool(self):
+        # FastMCP 4 returns None instead of raising.
+        ctx = MagicMock()
+        ctx.fastmcp.get_tool = AsyncMock(return_value=None)
+
+        assert await _confirm_mod._tool_tags(ctx, "no_such_tool") == {"write"}
+
+    def test_a_hashed_name_is_gated_under_the_tools_own_name(self):
+        # FastMCP 4 also routes a tool an MCP App may call as <hash>_<name>.
+        assert _confirm_mod._local_name("0123456789ab_sap_set_field") == "sap_set_field"
+        assert _confirm_mod._local_name("sap_set_field") == "sap_set_field"
+
     async def test_all_writes_still_prompts_when_the_lookup_raises(self, srv):
         """Driven at the middleware directly: patching mcp.get_tool through a
         Client would break tool dispatch itself."""
@@ -753,6 +766,11 @@ class TestFailClosed:
 
         assert result.is_error
         assert "does not support elicitation" in _text(result)
+        # Live (Claude desktop Chat, Cowork): what to tell the user, and that
+        # turning the point off is no way out.
+        assert "Nothing was executed" in _text(result)
+        assert "cannot be turned off here either" in _text(result)
+        assert "use a client that shows MCP confirmation dialogs" in _text(result)
         controller.set_field.assert_not_called()
 
     async def test_save_gate_still_fails_closed(self, srv):
@@ -768,6 +786,8 @@ class TestFailClosed:
 
         assert result.is_error
         assert "does not support elicitation" in _text(result)
+        assert "Nothing was sent to SAP" in _text(result)
+        assert "use a client that shows MCP confirmation dialogs" in _text(result)
         controller.send_vkey.assert_not_called()
 
 
@@ -871,12 +891,14 @@ class TestPolicyOrdering:
 
 
 def _confirmation_records(caplog):
+    """Confirmation outcomes. On MCP 2026-07-28 the question round also logs
+    an "asked" line; it is left out here so one list fits both eras."""
     records = []
     for record in caplog.records:
         if record.name != "mcp_sap_gui.audit":
             continue
         payload = json.loads(record.message)
-        if payload.get("event") == "confirmation":
+        if payload.get("event") == "confirmation" and payload.get("outcome") != "asked":
             records.append(payload)
     return records
 
@@ -998,9 +1020,11 @@ class TestConfirmationAudit:
             json.loads(r.message) for r in caplog.records
             if r.name == "mcp_sap_gui.audit"
         ]
+        # On MCP 2026-07-28 the question round has its own line first.
         errored = [
             e for e in tool_calls
             if e.get("event") == "tool_call" and e.get("tool") == "sap_set_field"
+            and e.get("status") != "input_required"
         ]
         assert errored and errored[0]["status"] == "error"
 

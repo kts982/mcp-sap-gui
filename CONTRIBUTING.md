@@ -17,6 +17,8 @@ Larger ideas (new tool families, changes to the safety gates or the transaction 
 ## Development Setup
 
 ```bash
+git clone https://github.com/kts982/mcp-sap-gui.git
+cd mcp-sap-gui
 uv sync --extra dev --extra screenshots --extra code-mode --extra apps
 ```
 
@@ -26,11 +28,30 @@ Real SAP GUI integration work requires:
 
 - Windows
 - SAP GUI for Windows
-- SAP GUI Scripting enabled
+- SAP GUI Scripting enabled ([Preparing SAP](docs/SAP_SETUP.md))
 
 The unit test suite is mocked and can run in CI without a live SAP system.
 
 Working with a coding agent? [AGENTS.md](AGENTS.md) has the technical ground rules (layout, checks, safety gates, SAP GUI Scripting pitfalls).
+
+## Running from a Source Checkout
+
+Point an MCP client at the checkout instead of the PyPI package:
+
+```text
+Command:   uv
+Arguments: run --directory <path-to-mcp-sap-gui> python -m mcp_sap_gui.server
+Transport: stdio
+```
+
+`--directory` lets `uv` find the project's environment whatever working directory the client starts it in. Options go at the end, as with `uvx` ([Configuration](docs/CONFIGURATION.md)). Opening the repository in Claude Code picks up the committed `.mcp.json`, which starts the server from the checkout. In a checkout, `sap_connect` also reads `SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT` and `SAP_LANGUAGE` from a `.env` file in the repository root (copy `.env.example`).
+
+**Windows locks:** while a server started from the checkout runs, its process holds the native DLLs in `.venv` (pywin32, watchfiles). `uv sync` or a dependency upgrade can then fail with "Access is denied" or leave `.venv` half-updated: stop the MCP client first, then sync. If two clients (for example Claude Code and VS Code) start the server from the same checkout, give the second one its own environment:
+
+```text
+Command:   uv
+Arguments: run --isolated --no-project --with "mcp-sap-gui[screenshots,apps] @ file:///<path-to-checkout>" python -m mcp_sap_gui.server
+```
 
 ## Before Opening a PR
 
@@ -51,7 +72,7 @@ python scripts/check_docs.py
 uv build
 ```
 
-CI runs them on Windows with Python 3.10 to 3.14.
+CI runs them on Windows with Python 3.11 to 3.14.
 
 Notes:
 
@@ -63,8 +84,8 @@ Notes:
 
 - Add or update tests for bug fixes and behavior changes where practical.
 - Preserve the default safety posture around blocked transactions and read-only mode.
-- If you add, remove, or rename MCP tools, update `docs/TOOLS.md` and any README counts or examples that mention them.
-- Keep examples client-agnostic where possible; Claude can be used as an example, but the server should remain usable from Codex, Copilot, Gemini CLI, and other MCP clients.
+- If you add, remove, or rename MCP tools, update `docs/TOOLS.md` and the tool count at its top.
+- Keep examples client-agnostic where possible; Claude can be used as an example, but the server should remain usable from Codex, Copilot, Google Antigravity, and other MCP clients.
 - Prefer clear errors over silent fallbacks when SAP GUI state is ambiguous.
 
 ## Pull Requests

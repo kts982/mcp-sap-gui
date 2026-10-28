@@ -6,15 +6,13 @@ on:
       - main
       - master
     paths:
-      - "README.md"
-      - "CHANGELOG.md"
+      - "*.md"
       - "docs/**"
       - "scripts/check_docs.py"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
-      - "README.md"
-      - "CHANGELOG.md"
+      - "*.md"
       - "docs/**"
       - "scripts/check_docs.py"
       - ".github/workflows/docs.yml"

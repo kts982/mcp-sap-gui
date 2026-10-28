@@ -177,7 +177,7 @@ class TestTransactionBlocking:
         ctx = _make_mock_ctx()
         with pytest.raises(ValueError, match="blocked by security policy"):
             import asyncio
-            asyncio.new_event_loop().run_until_complete(
+            asyncio.run(
                 srv.sap_execute_transaction("SU01", ctx)
             )
 
@@ -192,7 +192,7 @@ class TestTransactionBlocking:
         ctx = _make_mock_ctx()
 
         with pytest.raises(ValueError, match="not in the allowed transaction list"):
-            asyncio.new_event_loop().run_until_complete(
+            asyncio.run(
                 _srv.sap_execute_transaction("VA03", ctx)
             )
 
@@ -640,7 +640,7 @@ class TestToolRegistration:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         tool_names = {t.name for t in tools}
 
         expected = {
@@ -686,7 +686,7 @@ class TestToolRegistration:
             # Preview
             "sap_preview",
             # Policy
-            "sap_set_policy_profile", "sap_set_confirmation_points",
+            "sap_set_confirmation_points",
             # Workflow guidance
             "sap_get_workflow_guide",
             # Transaction guidance
@@ -702,7 +702,7 @@ class TestToolRegistration:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         send_key = next(t for t in tools if t.name == "sap_send_key")
         key_schema = send_key.parameters["properties"]["key"]
 
@@ -718,7 +718,7 @@ class TestToolRegistration:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         handle_popup = next(t for t in tools if t.name == "sap_handle_popup")
         action_schema = handle_popup.parameters["properties"]["action"]
 
@@ -732,7 +732,7 @@ class TestToolRegistration:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         connect_tool = next(t for t in tools if t.name == "sap_connect")
         properties = connect_tool.parameters["properties"]
 
@@ -750,7 +750,7 @@ class TestToolRegistration:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
 
         read_only_tools = {
             "sap_connect_existing", "sap_list_connections",
@@ -764,7 +764,7 @@ class TestToolRegistration:
             "sap_find_tree_node_by_path",
             "sap_search_tree_nodes", "sap_get_screen_elements", "sap_screenshot",
             "sap_preview",
-            "sap_set_policy_profile", "sap_set_confirmation_points",
+            "sap_set_confirmation_points",
             "sap_get_workflow_guide",
             "sap_get_transaction_guide",
         }
@@ -774,16 +774,16 @@ class TestToolRegistration:
         for tool in tools:
             assert tool.annotations is not None, f"{tool.name} missing annotations"
             if tool.name in read_only_tools:
-                assert tool.annotations.readOnlyHint is True, (
+                assert tool.annotations.read_only_hint is True, (
                     f"{tool.name} should be readOnly"
                 )
             elif tool.name in destructive_tools:
-                assert tool.annotations.destructiveHint is True, (
+                assert tool.annotations.destructive_hint is True, (
                     f"{tool.name} should be destructive"
                 )
             else:
                 # Write tools
-                assert tool.annotations.readOnlyHint is False, (
+                assert tool.annotations.read_only_hint is False, (
                     f"{tool.name} should NOT be readOnly"
                 )
 
@@ -807,7 +807,7 @@ class TestToolTags:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         valid_tags = {"read", "write", "destructive"}
         for tool in tools:
             assert tool.tags & valid_tags, (
@@ -821,9 +821,9 @@ class TestToolTags:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         for tool in tools:
-            if tool.annotations and tool.annotations.readOnlyHint:
+            if tool.annotations and tool.annotations.read_only_hint:
                 assert "read" in tool.tags, (
                     f"{tool.name} is readOnly but missing 'read' tag"
                 )
@@ -835,14 +835,14 @@ class TestToolTags:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         for tool in tools:
             if tool.name in self.TIER_NOT_ANNOTATION:
                 assert tool.tags == self.TIER_NOT_ANNOTATION[tool.name]
                 continue
             if (tool.annotations
-                    and not tool.annotations.readOnlyHint
-                    and not tool.annotations.destructiveHint):
+                    and not tool.annotations.read_only_hint
+                    and not tool.annotations.destructive_hint):
                 assert "write" in tool.tags, (
                     f"{tool.name} is write but missing 'write' tag"
                 )
@@ -854,12 +854,12 @@ class TestToolTags:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         for tool in tools:
             if tool.name in self.TIER_NOT_ANNOTATION:
                 assert tool.tags == self.TIER_NOT_ANNOTATION[tool.name]
                 continue
-            if tool.annotations and tool.annotations.destructiveHint:
+            if tool.annotations and tool.annotations.destructive_hint:
                 assert "destructive" in tool.tags, (
                     f"{tool.name} is destructive but missing 'destructive' tag"
                 )
@@ -886,99 +886,12 @@ class TestToolTags:
         from mcp_sap_gui.server import _PROFILES
         assert _PROFILES["full"] == {"read", "write", "destructive"}
 
-    def test_set_policy_profile_tool_registered(self, srv):
-        """sap_set_policy_profile tool is registered."""
-        import asyncio
-
-        async def get_tools():
-            return await srv.mcp.list_tools()
-
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
-        names = {t.name for t in tools}
-        assert "sap_set_policy_profile" in names
-
-    def test_set_policy_profile_is_read_tagged(self, srv):
-        """sap_set_policy_profile has 'read' tag so it's visible in all profiles."""
-        import asyncio
-
-        async def get_tools():
-            return await srv.mcp.list_tools()
-
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
-        profile_tool = next(t for t in tools if t.name == "sap_set_policy_profile")
-        assert "read" in profile_tool.tags
-
-
-class TestPolicyProfileFloor:
-    """A session profile may restrict the server --profile floor, never widen it.
-
-    fastmcp session rules override global transforms, so without the
-    intersection in _effective_profile a session could re-expose tools the
-    server hid with --profile.
-    """
-
-    def _ctx(self):
-        ctx = _make_mock_ctx()
-        ctx.enable_components = AsyncMock()
-        ctx.disable_components = AsyncMock()
-        return ctx
-
-    @pytest.mark.asyncio
-    async def test_session_cannot_exceed_server_floor(self, srv):
-        srv.config = srv.ServerConfig(profile="exploration")
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("full", ctx)
-
-        assert result["profile"] == "exploration"
-        assert result["requested_profile"] == "full"
-        assert result["enabled_tags"] == ["read"]
-        ctx.enable_components.assert_awaited_once_with(tags={"read"})
-        ctx.disable_components.assert_awaited_once_with(tags={"write", "destructive"})
-
-    @pytest.mark.asyncio
-    async def test_session_cannot_upgrade_to_operator_above_floor(self, srv):
-        srv.config = srv.ServerConfig(profile="exploration")
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("operator", ctx)
-
-        assert result["profile"] == "exploration"
-        assert "capped" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_session_can_still_restrict(self, srv):
-        srv.config = srv.ServerConfig(profile="operator")
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("exploration", ctx)
-
-        assert result["profile"] == "exploration"
-        assert result["enabled_tags"] == ["read"]
-
-    @pytest.mark.asyncio
-    async def test_operator_floor_caps_full(self, srv):
-        srv.config = srv.ServerConfig(profile="operator")
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("full", ctx)
-
-        assert result["profile"] == "operator"
-        assert result["enabled_tags"] == ["read", "write"]
-
-    @pytest.mark.asyncio
-    async def test_default_full_floor_is_unchanged(self, srv):
-        ctx = self._ctx()
-
-        result = await srv.sap_set_policy_profile("full", ctx)
-
-        assert result["profile"] == "full"
-        assert result["enabled_tags"] == ["destructive", "read", "write"]
-        assert result["message"] == "Session switched to 'full' profile"
+class TestServerProfile:
+    """The server-level --profile, the only profile since 0.6."""
 
     def test_config_rejects_unknown_profile(self, srv):
-        """Validated at construction so _effective_profile can trust it: an
-        unrecognised profile must not degrade into 'no floor at all'."""
+        """Validated at construction: an unrecognised profile must not
+        degrade into 'no restriction at all'."""
         with pytest.raises(ValueError, match="Unknown policy profile"):
             srv.ServerConfig(profile="superuser")
 
@@ -1028,7 +941,8 @@ class TestInstructionsAndResource:
         rules = instructions.split("## Getting Started")[0]
         assert "Never guess" in rules
         assert "active_window" in rules
-        assert '"declined" error is a stop' in rules
+        assert '"declined" error means the user said no' in rules
+        assert "wait for their next instruction" in rules
 
     def test_resource_registered(self, srv):
         """The docs://sap-gui-guide resource is registered."""
@@ -1037,7 +951,7 @@ class TestInstructionsAndResource:
         async def get_resources():
             return await srv.mcp.list_resources()
 
-        resources = asyncio.new_event_loop().run_until_complete(get_resources())
+        resources = asyncio.run(get_resources())
         uris = [str(r.uri) for r in resources]
         assert "docs://sap-gui-guide" in uris
 
@@ -1062,7 +976,7 @@ class TestPrompts:
         async def get_prompts():
             return await srv.mcp.list_prompts()
 
-        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        prompts = asyncio.run(get_prompts())
         names = {p.name for p in prompts}
         assert "sap_search_help" in names
         assert "sap_table_export" in names
@@ -1075,7 +989,7 @@ class TestPrompts:
         async def get_prompts():
             return await srv.mcp.list_prompts()
 
-        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        prompts = asyncio.run(get_prompts())
         prompt = next(p for p in prompts if p.name == "sap_search_help")
         arg_names = [a.name for a in prompt.arguments]
         assert "field_id" in arg_names
@@ -1087,7 +1001,7 @@ class TestPrompts:
         async def get_prompts():
             return await srv.mcp.list_prompts()
 
-        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        prompts = asyncio.run(get_prompts())
         prompt = next(p for p in prompts if p.name == "sap_table_export")
         arg_names = [a.name for a in prompt.arguments]
         assert "table_id" in arg_names
@@ -1099,7 +1013,7 @@ class TestPrompts:
         async def get_prompts():
             return await srv.mcp.list_prompts()
 
-        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        prompts = asyncio.run(get_prompts())
         prompt = next(p for p in prompts if p.name == "sap_spro_navigate")
         arg_names = [a.name for a in prompt.arguments]
         assert "activity_name" in arg_names
@@ -1112,7 +1026,7 @@ class TestPrompts:
             prompt = await srv.mcp.get_prompt("sap_search_help")
             return await prompt.render({"field_id": "wnd[0]/usr/ctxtMATNR"})
 
-        result = asyncio.new_event_loop().run_until_complete(render())
+        result = asyncio.run(render())
         text = result.messages[0].content.text
         assert "sap_set_focus" in text
         assert "sap_send_key" in text
@@ -1127,7 +1041,7 @@ class TestPrompts:
             prompt = await srv.mcp.get_prompt("sap_spro_navigate")
             return await prompt.render({"activity_name": "Define Storage Types"})
 
-        result = asyncio.new_event_loop().run_until_complete(render())
+        result = asyncio.run(render())
         text = result.messages[0].content.text
         assert "click_tree_link" in text
         assert "Do NOT use" in text or "do NOT use" in text or "CRITICAL" in text
@@ -1147,7 +1061,7 @@ class TestWorkflowGuideTool:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         names = {t.name for t in tools}
         assert "sap_get_workflow_guide" in names
 
@@ -1158,9 +1072,9 @@ class TestWorkflowGuideTool:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         tool = next(t for t in tools if t.name == "sap_get_workflow_guide")
-        assert tool.annotations.readOnlyHint is True
+        assert tool.annotations.read_only_hint is True
 
     def test_tool_has_read_tag(self, srv):
         """sap_get_workflow_guide has the 'read' tag."""
@@ -1169,7 +1083,7 @@ class TestWorkflowGuideTool:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         tool = next(t for t in tools if t.name == "sap_get_workflow_guide")
         assert "read" in tool.tags
 
@@ -1180,7 +1094,7 @@ class TestWorkflowGuideTool:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         tool = next(t for t in tools if t.name == "sap_get_workflow_guide")
         workflow_schema = tool.parameters["properties"]["workflow"]
         assert set(workflow_schema["enum"]) == {
@@ -1250,7 +1164,7 @@ class TestWorkflowGuideTool:
         async def get_prompts():
             return await srv.mcp.list_prompts()
 
-        prompts = asyncio.new_event_loop().run_until_complete(get_prompts())
+        prompts = asyncio.run(get_prompts())
         names = {p.name for p in prompts}
         assert "sap_search_help" in names
         assert "sap_table_export" in names
@@ -1264,7 +1178,7 @@ class TestWorkflowGuideTool:
             prompt = await srv.mcp.get_prompt("sap_table_export")
             return await prompt.render({"table_id": "wnd[0]/usr/tbl"})
 
-        result = asyncio.new_event_loop().run_until_complete(render_table_export())
+        result = asyncio.run(render_table_export())
         text = result.messages[0].content.text
         assert "columns_only" in text
         assert "wnd[0]/usr/tbl" in text
@@ -1323,7 +1237,7 @@ class TestTransactionGuideTool:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         names = {t.name for t in tools}
         assert "sap_get_transaction_guide" in names
 
@@ -1334,9 +1248,9 @@ class TestTransactionGuideTool:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         tool = next(t for t in tools if t.name == "sap_get_transaction_guide")
-        assert tool.annotations.readOnlyHint is True
+        assert tool.annotations.read_only_hint is True
         assert "read" in tool.tags
 
     def test_tool_schema_transaction_is_string(self, srv):
@@ -1346,7 +1260,7 @@ class TestTransactionGuideTool:
         async def get_tools():
             return await srv.mcp.list_tools()
 
-        tools = asyncio.new_event_loop().run_until_complete(get_tools())
+        tools = asyncio.run(get_tools())
         tool = next(t for t in tools if t.name == "sap_get_transaction_guide")
         transaction_schema = tool.parameters["properties"]["transaction"]
         assert transaction_schema.get("type") == "string"
@@ -1763,7 +1677,7 @@ class TestAuditMiddleware:
                 result.content = []
                 return result
 
-            asyncio.new_event_loop().run_until_complete(
+            asyncio.run(
                 mw.on_call_tool(ctx, fake_next)
             )
 
@@ -1807,7 +1721,7 @@ class TestAuditMiddleware:
                 raise ValueError("Element not found")
 
             with pytest.raises(ValueError, match="Element not found"):
-                asyncio.new_event_loop().run_until_complete(
+                asyncio.run(
                     mw.on_call_tool(ctx, fail_next)
                 )
 
@@ -1849,7 +1763,7 @@ class TestAuditMiddleware:
                 result.content = []
                 return result
 
-            asyncio.new_event_loop().run_until_complete(
+            asyncio.run(
                 mw.on_call_tool(ctx, fake_next)
             )
 
@@ -2009,8 +1923,10 @@ class TestSaveConfirmation:
         with patch.object(srv, "_ctrl", return_value=mock_controller):
             result = await srv.sap_send_key("Save", ctx)
 
+        # VS Code sends a no as "False" and Submit: not "(accept)".
         assert result["status"] == "cancelled"
-        assert result["action"] == "accept"
+        assert result["action"] == "no"
+        assert "declined by user (no)" in result["error"]
         mock_controller.send_vkey.assert_not_called()
 
     @pytest.mark.asyncio

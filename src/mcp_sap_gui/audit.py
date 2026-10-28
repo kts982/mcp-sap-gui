@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping, Optional
 
 import mcp.types
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools import ToolResult
+from fastmcp.tools import InputRequiredToolResult, ToolResult
 
 from .strict import result_error
 
@@ -83,6 +83,10 @@ class AuditMiddleware(Middleware):
     bound to, from ``identity(fastmcp_context)``: the binding after the call
     (an attach names the system it attached), or before it when the call
     ended the binding. Left out while nothing is bound.
+
+    ``protocol`` is the MCP protocol version of the request and
+    ``mcp_client`` the client's name and version as it reports them; each is
+    left out when unknown.
     """
 
     def __init__(
@@ -90,6 +94,31 @@ class AuditMiddleware(Middleware):
         identity: Optional[Callable[[Any], Mapping[str, str]]] = None,
     ) -> None:
         self._identity = identity
+
+    @staticmethod
+    def _protocol(context: MiddlewareContext) -> str | None:
+        """The MCP protocol version of this request (2026-07-28 asks by
+        MRTR, older versions by elicitation requests)."""
+        rc = getattr(context.fastmcp_context, "request_context", None)
+        version = getattr(rc, "protocol_version", None)
+        return version if isinstance(version, str) else None
+
+    @staticmethod
+    def _mcp_client(context: MiddlewareContext) -> str | None:
+        """The MCP client's name and version as the client reports them
+        (``clientInfo``), e.g. 'claude-code 2.1.312'. On MCP 2026-07-28 a
+        client may leave it out."""
+        try:
+            params = context.fastmcp_context.session.client_params
+        except Exception:  # no session: the audit never fails a tool call
+            return None
+        info = getattr(params, "client_info", None)
+        name = getattr(info, "name", None)
+        if not isinstance(name, str) or not name:
+            return None
+        version = getattr(info, "version", None)
+        text = f"{name} {version}" if isinstance(version, str) and version else name
+        return text[:100]
 
     def _sap(self, context: MiddlewareContext) -> dict[str, str]:
         if self._identity is None:
@@ -110,6 +139,8 @@ class AuditMiddleware(Middleware):
         safe_args = _mask_secrets(raw_args)
         ts = context.timestamp.isoformat()
         sap_before = self._sap(context)
+        protocol = self._protocol(context)
+        mcp_client = self._mcp_client(context)
 
         start = time.perf_counter()
         try:
@@ -126,18 +157,26 @@ class AuditMiddleware(Middleware):
             failed = error_msg is not None or (
                 isinstance(result, ToolResult) and result.is_error
             )
+            # On MCP 2026-07-28 a call that asks the user returns the
+            # question and is called again with the answer: one line per round.
+            status = ("input_required" if isinstance(result, InputRequiredToolResult)
+                      else "error" if failed else "ok")
             line: dict[str, Any] = {
                 "event": "tool_call",
                 "ts": ts,
                 "tool": tool_name,
                 "args": safe_args,
-                "status": "error" if failed else "ok",
+                "status": status,
                 "duration_ms": duration_ms,
             }
             if error_msg is not None:
                 line["error_msg"] = error_msg
             if sap:
                 line["sap"] = sap
+            if protocol:
+                line["protocol"] = protocol
+            if mcp_client:
+                line["mcp_client"] = mcp_client
             (logger.warning if failed else logger.info)(
                 json.dumps(line, default=str),
             )
@@ -158,5 +197,9 @@ class AuditMiddleware(Middleware):
             sap = self._sap(context) or sap_before
             if sap:
                 line["sap"] = sap
+            if protocol:
+                line["protocol"] = protocol
+            if mcp_client:
+                line["mcp_client"] = mcp_client
             logger.warning(json.dumps(line, default=str))
             raise

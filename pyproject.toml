@@ -10,7 +10,7 @@ version = "0.5.4"
 description = "MCP Server for SAP GUI Scripting automation"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "mcp-sap-gui contributors" }
 ]
@@ -22,7 +22,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -32,18 +31,15 @@ classifiers = [
 ]
 dependencies = [
     # FastMCP permits breaking changes in minor releases; patches are safe.
-    # Ceiling bumps (3.5, 3.6, ...) are deliberate, validated steps.
-    "fastmcp>=3.4.7,<3.5",
+    # Ceiling bumps (4.2, 4.3, ...) are deliberate, validated steps.
+    "fastmcp>=4.1.3,<4.2",
     "pywin32>=306; platform_system == 'Windows'",
     "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
 screenshots = [
-    # Pillow 13.0.0 fixes the 2026-10 CVE batch and needs Python 3.11+; no
-    # 12.x backport exists. On 3.10 the extra installs nothing: screenshots
-    # still work, only the PNG downscale and optimization are skipped.
-    "pillow>=13.0.0; python_version >= '3.11'",
+    "pillow>=13.0.0",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -52,10 +48,10 @@ dev = [
     "ruff>=0.1.0",
 ]
 code-mode = [
-    "fastmcp[code-mode]>=3.4.7,<3.5",
+    "fastmcp[code-mode]>=4.1.3,<4.2",
 ]
 apps = [
-    "fastmcp[apps]>=3.4.7,<3.5",
+    "fastmcp[apps]>=4.1.3,<4.2",
     # prefab-ui docs warn of frequent breaking changes - pin exact (like monty in code-mode)
     "prefab-ui==0.20.2",
 ]
@@ -73,7 +69,7 @@ packages = ["src/mcp_sap_gui"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
@@ -83,7 +79,7 @@ select = ["E", "F", "I", "N", "W"]
 "tests/test_sap_controller.py" = ["N802"]  # COM-API fakes mirror SAP GUI naming
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true

@@ -40,6 +40,12 @@ class FakeController:
     def check_vkey(self, vkey, window="wnd[0]"):
         return None
 
+    def get_screen_info(self, include_popup=True):
+        # Read again when the answer to a save question arrives (MCP
+        # 2026-07-28): the save goes only to the screen it was asked on.
+        return {"active_window": "wnd[0]", "transaction": "SU3",
+                "program": "SAPLSUU5", "screen_number": 100, "title": "Maintain User Profile"}
+
     def send_vkey(self, vkey, window="wnd[0]"):
         self.sent.append(vkey)
         return {"vkey": vkey, "screen": {"active_window": "wnd[0]"}}
@@ -66,6 +72,9 @@ def call(tool, args, elicitation_handler=None):
 
 
 def audit_lines(caplog, event="tool_call"):
+    """Audit lines of one kind. On MCP 2026-07-28 a call that asks the user
+    also logs its question round (input_required, asked); those are left out
+    so one list fits both protocols."""
     lines = []
     for record in caplog.records:
         if record.name != "mcp_sap_gui.audit":
@@ -74,7 +83,8 @@ def audit_lines(caplog, event="tool_call"):
             line = json.loads(record.getMessage())
         except ValueError:
             continue
-        if line.get("event") == event:
+        if (line.get("event") == event and line.get("status") != "input_required"
+                and line.get("outcome") != "asked"):
             lines.append(line)
     return lines
 

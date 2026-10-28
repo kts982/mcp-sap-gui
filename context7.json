@@ -15,7 +15,7 @@
     "Start with sap_connect_existing when SAP GUI is already logged on; pass system (for example 'DEV') when the user named the SAP system.",
     "Discover element IDs with sap_get_screen_elements, sap_get_toolbar_buttons or sap_read_table(columns_only=true) before reading or writing; never guess element IDs.",
     "Check screen.active_window after every action: wnd[1] or higher is a popup, read it with sap_get_popup_window.",
-    "Saves (F11, the Save button, popup answers that may save) need the user's confirmation through an MCP elicitation dialog, so use a client that shows those dialogs; treat a declined confirmation as a stop.",
+    "Saves (F11, the Save button, popup answers that may save) need the user's confirmation through an MCP elicitation dialog, so use a client that shows those dialogs. A declined confirmation means the user said no: do not retry the call or reach its result another way; tell the user and wait for their next instruction.",
     "Read large tables in pages: an ALV grid with start_row until total_rows, a table control with start_row=next_start_row while has_more is true."
   ]
 }

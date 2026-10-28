@@ -19,6 +19,7 @@ import base64
 import json
 import re
 import struct
+from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -351,7 +352,7 @@ class TestSaveScreenshot:
         controller._session.ActiveWindow = MagicMock(Id="wnd[0]")
         window = MagicMock()
         window.HardCopy.side_effect = (
-            lambda path, _fmt: open(path, "wb").write(payload)
+            lambda path, _fmt: Path(path).write_bytes(payload)
         )
         controller._session.findById.return_value = window
         return controller, window
@@ -444,7 +445,7 @@ class TestScreenshotTool:
         mock_ctrl.save_screenshot.assert_not_called()
         assert [block.type for block in result.content] == ["image"]
         assert result.content[0].data == "QUJD"
-        assert result.content[0].mimeType == "image/png"
+        assert result.content[0].mime_type == "image/png"
 
     async def test_save_path_reports_the_file_and_keeps_the_image(self, srv):
         ctx = _make_mock_ctx()
@@ -1895,7 +1896,7 @@ class TestPopupHtmlQuestion:
             buttons.append(button)
         usr = _child(f"{self._WND1}/usr", "GuiUserArea",
                      children=[subscreen, icon, *buttons])
-        return _child(self._WND1, "GuiModalWindow", text=f"A4H(1)/001 {title}",
+        return _child(self._WND1, "GuiModalWindow", text=f"DEV(1)/100 {title}",
                       children=[usr])
 
     def test_edge_question_is_marked_unreadable(self, discovery_path):

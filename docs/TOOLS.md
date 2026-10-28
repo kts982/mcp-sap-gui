@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **60 MCP tools**.
+`mcp-sap-gui` currently exposes **59 MCP tools**. This page is the reference for developers and for anyone who wants to know what the assistant can call; how to use the server is in [Getting started](GETTING_STARTED.md).
 
 Two practical rules:
 
@@ -16,19 +16,11 @@ ID handling:
 
 ## Policy Profiles
 
-Every tool is tagged `read` or `write`. Three profiles control which tools are visible:
-
-| Profile | Tags | What the agent can do |
-|---|---|---|
-| `exploration` | `read` | Observe only: inspect screens, read tables, take screenshots. Cannot interact or navigate. |
-| `operator` | `read`, `write` | Normal SAP work: navigate transactions, fill fields, press buttons. The built-in transaction policy still applies, and save-key confirmation may still prompt the user. |
-| `full` | `read`, `write` | All tools. Default. |
-
-Set the default profile at startup with `--profile operator`, or switch per-session with `sap_set_policy_profile`. A session can only restrict the profile, never widen it beyond the server's `--profile` floor.
+Every tool is tagged `read` or `write`, and `--profile exploration|operator|full` decides which ones the assistant sees: [Profiles](CONFIGURATION.md#profiles). The profile applies to every chat the server serves; there is no per-chat profile (MCP 2026-07-28 does not allow a tool list that varies per client).
 
 ## Confirmation Points
 
-A confirmation point is a category of write operations that requires blocking user approval (MCP elicitation) before the server executes it. The gate is server-side middleware, so it holds regardless of what the agent does, including inside the `--code-mode` sandbox.
+A confirmation point is a category of write operations that waits for the user's approval (MCP elicitation) before the server executes it. The gate is server-side middleware, so it holds regardless of what the agent does, including inside the `--code-mode` sandbox. How the questions work, for users: [Confirmations](CONFIRMATIONS.md).
 
 | Point | Gated tools |
 |---|---|
@@ -41,13 +33,11 @@ A confirmation point is a category of write operations that requires blocking us
 
 Activate points per session with `sap_set_confirmation_points`, or for every session with `--confirm POINT [POINT ...]`. Adding a point is silent; removing a session point asks the user first and a declined removal keeps it. Points set by `--confirm` and the `save` point can never be removed.
 
-An accepted call's result carries `confirmed_by_user: true`, so the agent, which never sees the prompt, can tell an approved write from an ungated one. Declining a confirmation returns an error and nothing is executed. Clients without elicitation support fail closed — the gated call errors rather than running unconfirmed, matching the save gate. Removal fails closed on those clients too, so a point activated there cannot be turned off again and blocks that whole category for the rest of the session. Confirmation outcomes (`accepted`, `declined`, `unsupported_client`) are written to the audit log.
-
-**The client has to show the dialog.** Confirmations (and the `save` prompt) are MCP elicitation requests. The Claude Code CLI shows them. The Claude Code desktop app (Code tab, tested 2026-10-19 with its bundled Claude Code 2.1.299) answered every request with "decline" within milliseconds and showed nothing, in auto and in manual permission mode: there, nothing gated can be approved, and saves through the server are refused. An answer faster than a person can give one (under 250 ms) came from the client: a "no" still counts and the error says that no dialog was shown; a "yes" is refused, because no person approved it. The audit line has `no_dialog: true` next to `elapsed_ms`, and `client_answer: "accept"` for a refused yes.
+An accepted call's result carries `confirmed_by_user: true`, so the agent, which never sees the prompt, can tell an approved write from an ungated one. Declining returns an error and nothing is executed. Clients without elicitation support fail closed: the gated call errors rather than running unconfirmed, and a point activated there cannot be removed again. Which clients show the questions, the rules for answers that come too fast or after the screen changed, and the audit outcomes: [Confirmations](CONFIRMATIONS.md).
 
 Points are scoped to the MCP session, not the SAP connection: they survive `sap_disconnect` and a later reconnect.
 
-Known gap: menu paths (System → Save) and ALV / application-toolbar Save buttons are not mapped to the `save` point, because those IDs are positional and locale-dependent.
+Known gap: menu paths (Table View → Save) and ALV / application-toolbar Save buttons are not mapped to the `save` point, because those IDs are positional and locale-dependent.
 
 ## Connection
 
@@ -60,14 +50,13 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_list_connections` | List all currently open SAP connections and sessions, incl. SAP Business Client; reports `host` and `scripting_disabled`, and per session its system, client, user, transaction, `session_number` and window `title` |
 | `sap_get_session_info` | Get current session metadata like system, client, user, transaction, and screen, plus the SAP GUI release (`sap_gui_version`, e.g. `8.10 PL0`) and whether the server allows only read-only scripting (`scripting_read_only`) |
 | `sap_disconnect` | Disconnect from the current SAP session. Closes only the sessions this server opened (the `sap_connect` session and `/o` windows opened from it); attached sessions are left open |
-| `sap_set_policy_profile` | Switch the active policy profile for this session (exploration, operator, full); capped by the server `--profile` floor |
 | `sap_set_confirmation_points` | Choose which write categories need blocking user approval for this session (see [Confirmation Points](#confirmation-points)) |
 
 ## Navigation
 
 | Tool | Description |
 |------|-------------|
-| `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active transaction policy (presets and policy file: see the README's Security Considerations). A bare `/n` leaves the current transaction |
+| `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active [transaction policy](SECURITY_GUIDE.md#transaction-policy). A bare `/n` leaves the current transaction |
 | `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, `Save`, or `Ctrl+F` / `Ctrl+G` / `Ctrl+P`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients. A key the screen does not accept is not sent: the response lists `available_keys` |
 | `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window. `message_has_long_text` / `message_as_popup` appear when set, and so do `subscreens` (the sub-screens on the window as `program:dynnr`, outer first: an RF step, a tab page or a detail area, which `program` / `screen_number` do not show) and `cursor` (the ID of the field the cursor is in; a redisplay without a message, e.g. for an empty required field, moves it). Every action response carries the same screen info |
 
@@ -173,8 +162,7 @@ confirmation, which stays enforced in `sap_send_key`. Every client receives the
 written summary plus the screenshot as an image block. Clients that support the
 MCP Apps UI extension instead receive a rendered card carrying the screenshot
 and the pending-values table (requires the optional `apps` extra; see
-[Rendered Preview Cards](../README.md#rendered-preview-cards) for offline
-deployments). Values whose field name looks sensitive (`PWD`, `BCODE`,
+[Preview cards](CONFIGURATION.md#preview-cards) for offline deployments). Values whose field name looks sensitive (`PWD`, `BCODE`,
 `PASSWORD`) are rendered as `***` in both.
 
 ## Workflow Guidance
@@ -218,9 +206,10 @@ deployments). Values whose field name looks sensitive (`PWD`, `BCODE`,
 
 ### SPRO Or Tree Navigation
 
-1. `sap_read_tree`
-2. `sap_search_tree_nodes`
-3. `sap_expand_tree_node` or `sap_click_tree_link`
+1. Never `sap_read_tree` the SPRO tree: it has more than 1,000 nodes. `sap_read_tree` suits small trees.
+2. Expand the parents with `sap_get_tree_node_children(expand=true)`, then `sap_search_tree_nodes`, which searches expanded nodes only.
+3. Run an IMG activity with `sap_click_tree_link(tree_id, node_key, "2")`; a double-click opens its documentation instead.
+4. In a view cluster (SM34), switch views with `sap_double_click_tree_item(tree_id, node_key, "Column1")`.
 
 ## Workflow Prompts
 
@@ -240,5 +229,7 @@ correct tool sequence for patterns that are easy to get wrong.
 
 ## Related
 
-- [Client Setup Guide](CLIENTS.md)
-- [Overview](OVERVIEW.md)
+- [What it can do](OVERVIEW.md)
+- [Confirmations](CONFIRMATIONS.md)
+- [Configuration](CONFIGURATION.md)
+- [Clients](CLIENTS.md)

@@ -46,10 +46,6 @@ class SessionManager:
         # tool call, and get_or_create would eagerly build a SAPGUIController
         # for calls that never touch SAP.
         self._confirmation_points: Dict[Hashable, set] = {}
-        # Profiles chosen with sap_set_policy_profile, keyed the same way and
-        # for the same reason. FastMCP's own copy (the visibility rules) sits
-        # in session state with a 24 h TTL; this one does not expire.
-        self._profiles: Dict[Hashable, str] = {}
         self._executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
@@ -98,14 +94,6 @@ class SessionManager:
         self._confirmation_points[session_key] = stored
         return set(stored)
 
-    def get_profile(self, session_key: Hashable) -> Optional[str]:
-        """The profile this session chose, or None if it never chose one."""
-        return self._profiles.get(session_key)
-
-    def set_profile(self, session_key: Hashable, profile: str) -> None:
-        """Record the profile this session chose (already capped by the floor)."""
-        self._profiles[session_key] = profile
-
     def release(self, session_key: Hashable, close_owned: bool = True) -> Dict[str, Any]:
         """Release and clean up a managed session.
 
@@ -149,6 +137,18 @@ class SessionManager:
             result["owned_sessions_left_open"] = owned_open
         return result
 
+    def forget(self, session_key: Hashable, close_owned: bool = True) -> None:
+        """Release the binding and drop the points of a session that ended.
+
+        Unlike ``release`` (sap_disconnect, where the chat goes on and its
+        points must stay armed), the client is gone and its key never comes
+        back: an MCP session id is not reused. Safe to call from the COM
+        executor thread.
+        """
+        if session_key in self._sessions:
+            self.release(session_key, close_owned=close_owned)
+        self._confirmation_points.pop(session_key, None)
+
     def release_all(self, close_owned: bool = True) -> None:
         """Release every session.  Called on server shutdown.
 
@@ -178,9 +178,8 @@ class SessionManager:
     def shutdown(self) -> None:
         """Shut down the COM executor.  Call *after* ``release_all``.
 
-        The only place confirmation points and session profiles are cleared:
-        they outlive SAP connect/disconnect cycles and die with the server.
+        The only place confirmation points are cleared: they outlive SAP
+        connect/disconnect cycles and die with the server.
         """
         self._confirmation_points.clear()
-        self._profiles.clear()
         self._executor.shutdown(wait=False)
