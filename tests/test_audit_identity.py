@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastmcp import Client
 from fastmcp.server.middleware import MiddlewareContext
+from mcp.types import Implementation
 
 from mcp_sap_gui import server
 from mcp_sap_gui.audit import AuditMiddleware
@@ -168,3 +169,27 @@ async def test_server_writes_the_bound_system_into_each_line(monkeypatch, caplog
     assert "sap" not in first  # nothing bound yet
     assert second["sap"] == DEV  # get_session_info cached it during the call
     assert third["sap"] == DEV
+
+
+# ---------------------------------------------------------------------------
+# The MCP client
+# ---------------------------------------------------------------------------
+
+
+async def test_line_names_the_mcp_client(monkeypatch, caplog):
+    monkeypatch.setattr(server, "config", server.ServerConfig())
+    caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")
+    info = Implementation(name="test-client", version="1.2.3")
+
+    async with Client(server.mcp, client_info=info) as client:
+        await client.call_tool("sap_get_session_info", {}, raise_on_error=False)
+
+    [line] = _audit_lines(caplog)
+    assert line["mcp_client"] == "test-client 1.2.3"
+    assert line["protocol"]
+
+
+async def test_no_mcp_client_key_without_a_session(caplog):
+    caplog.set_level(logging.INFO, logger="mcp_sap_gui.audit")
+    await _run(AuditMiddleware(), _ok)
+    assert "mcp_client" not in _audit_lines(caplog)[0]
