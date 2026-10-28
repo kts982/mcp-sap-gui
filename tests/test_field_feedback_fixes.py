@@ -19,6 +19,7 @@ import base64
 import json
 import re
 import struct
+from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -351,7 +352,7 @@ class TestSaveScreenshot:
         controller._session.ActiveWindow = MagicMock(Id="wnd[0]")
         window = MagicMock()
         window.HardCopy.side_effect = (
-            lambda path, _fmt: open(path, "wb").write(payload)
+            lambda path, _fmt: Path(path).write_bytes(payload)
         )
         controller._session.findById.return_value = window
         return controller, window

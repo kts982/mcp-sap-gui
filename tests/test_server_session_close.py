@@ -43,15 +43,15 @@ def _tool(name: str):
 def test_disconnect_stays_visible_everywhere_but_is_not_read_only():
     tool = _tool("sap_disconnect")
     assert tool.tags == {"read"}
-    assert tool.annotations.readOnlyHint is False
-    assert tool.annotations.destructiveHint is True
+    assert tool.annotations.read_only_hint is False
+    assert tool.annotations.destructive_hint is True
 
 
 def test_connect_is_not_read_only():
     tool = _tool("sap_connect")
     assert tool.tags == {"read"}
-    assert tool.annotations.readOnlyHint is False
-    assert tool.annotations.destructiveHint is False
+    assert tool.annotations.read_only_hint is False
+    assert tool.annotations.destructive_hint is False
 
 
 def test_disconnect_closes_owned_sessions(bound):

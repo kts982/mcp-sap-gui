@@ -491,7 +491,7 @@ class TestT13AuditContract:
                 result.content = []
                 return result
 
-            asyncio.new_event_loop().run_until_complete(
+            asyncio.run(
                 mw.on_call_tool(ctx, fake_next)
             )
 
@@ -537,7 +537,7 @@ class TestT13AuditContract:
                 result.content = []
                 return result
 
-            asyncio.new_event_loop().run_until_complete(
+            asyncio.run(
                 mw.on_call_tool(ctx, fake_next)
             )
 
