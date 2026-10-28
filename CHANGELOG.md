@@ -2,7 +2,7 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
-## Unreleased
+## 0.6.0 — 2026-10-28
 
 Support for MCP 2026-07-28 next to the earlier protocol versions, with confirmation questions that hold on both; Python 3.11 or later; documentation reorganised by task.
 

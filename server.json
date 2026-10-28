@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.kts982/mcp-sap-gui",
-  "description": "SAP GUI for Windows automation for AI agents - 60 structured tools via SAP GUI Scripting API",
+  "description": "SAP GUI for Windows automation for AI agents - 59 structured tools via SAP GUI Scripting API",
   "repository": {
     "url": "https://github.com/kts982/mcp-sap-gui",
     "source": "github"
   },
-  "version": "0.5.4",
+  "version": "0.6.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "mcp-sap-gui",
-      "version": "0.5.4",
+      "version": "0.6.0",
       "transport": {
         "type": "stdio"
       }
