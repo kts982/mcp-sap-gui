@@ -19,14 +19,16 @@ Please include:
 
 ## Scope Notes
 
-`mcp-sap-gui` is currently an alpha project focused on local Windows use over MCP `stdio`.
+`mcp-sap-gui` is an alpha project for local use on Windows. stdio, the default transport, has no network surface; the optional HTTP transport binds to 127.0.0.1 and refuses requests for other host names and from other web origins, but has no authentication of its own.
 
 Important current constraints:
 
-- do not expose the server to untrusted users
+- do not expose the server, over HTTP or otherwise, to untrusted users
 - prefer `sap_connect_existing` for already authenticated SAP sessions
 - avoid sharing screenshots, traces, or logs that contain SAP business data
-- use transaction allowlists and read-only mode when appropriate
+- use the transaction policy (an allowlist where you can), read-only mode and the audit log when appropriate
+
+The safeguards and a recommended setup: [Security guide](docs/SECURITY_GUIDE.md).
 
 ## Disclosure
 

@@ -4,13 +4,20 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ## Unreleased
 
+Support for MCP 2026-07-28 next to the earlier protocol versions, with confirmation questions that hold on both; Python 3.11 or later; documentation reorganised by task.
+
 ### Added
 
+- **MCP 2026-07-28.** The server runs on FastMCP 4 and serves the newest MCP protocol version next to the earlier ones: each client gets the version it asks for. The confirmation questions work on both. On 2026-07-28 a question is a round of its own: the tool runs again when the answer arrives, and the answer counts only if what the question showed (the screen for a save, the popup and its button, the list of sessions, the points to remove) is still the same; otherwise nothing is done and the agent is told to look again. An answer counts once, and an answer faster than a person (under 250 ms) is refused as before. Tested on 2026-10-28 with the Claude Code CLI, the GitHub Copilot CLI, VS Code with GitHub Copilot and the Codex CLI: [Clients](docs/CLIENTS.md). Over HTTP a 2026-07-28 request is refused, because it carries no client identity and the server could not keep one SAP session per client; stdio works with every version.
 - **The audit log names the MCP client and protocol.** Every `tool_call` line carries `protocol` (the MCP protocol version of the request, for example `2026-07-28`) and `mcp_client` (the client's name and version as the client reports them, for example `claude-code 2.1.312`). A question to the user on MCP 2026-07-28 is a round of its own: the call returns `status: input_required`, and the call with the answer is a second line.
 
 ### Removed
 
 - **`sap_set_policy_profile`**, 59 tools now. It switched a chat to a smaller set of tools by hiding the others for that session. MCP 2026-07-28 does not allow a tool list that varies per client, and FastMCP 4 keeps such hiding per server process on that protocol, so one chat's choice would hide tools for every chat. The server-level `--profile` stays and applies to every chat; to be asked before writes in one chat, use confirmation points (`sap_set_confirmation_points`). 0.5.4 kept the tool and made its restriction hold ([#37](https://github.com/kts982/mcp-sap-gui/pull/37)).
+
+### Changed
+
+- **The documentation is reorganised by task.** The README is a short front page, and its links now work on the PyPI project page too (they were broken there). New pages: [Getting started](docs/GETTING_STARTED.md), [Confirmations](docs/CONFIRMATIONS.md), [Configuration](docs/CONFIGURATION.md) (every option and environment variable in one place), [Security guide](docs/SECURITY_GUIDE.md) (with a reference of the audit log fields), [Preparing SAP](docs/SAP_SETUP.md) and [Troubleshooting](docs/TROUBLESHOOTING.md); [Clients](docs/CLIENTS.md) starts with which clients show the confirmation questions. Corrected on the way: Claude Code's user-wide setup is `claude mcp add --scope user` (there is no `~/.claude/.mcp.json`); the SPRO advice no longer suggests reading the whole SPRO tree; and the `SAP_*` logon variables are read from a `.env` file only in a source checkout, so with `uvx` they go into the client's `env` setting.
 
 ### Fixed
 
@@ -139,7 +146,7 @@ The SAP GUI Scripting API, used to the full. This round went through the 8.10 Sc
 - **Safer popups.** SAP's message popups are recognised in any logon language, and only an information message is ever auto-confirmed: a warning standing between you and a save is always left to you.
 - **Keys that mean what they say.** `sap_send_key` refuses a key the screen does not accept and lists the ones it does, and `Ctrl+F` / `Ctrl+G` / `Ctrl+P` now send Find / Find next / Print (they sent Ctrl+F8 to Ctrl+F10 before).
 - **More of SAP's own metadata.** Session info reports the SAP GUI release and whether the server only allows read-only scripting (write tools then refuse up front); ALV cells report their type, error or warning state, F4 help and hotspots; an ALV toolbar menu lists its items when it opens; a status message with a long text says so, and pressing the status bar opens it.
-- **SAP Business Client (experimental).** Sessions of Business Client's embedded SAP GUI are discovered next to SAP Logon's. Details: [SAP Business Client](README.md#sap-business-client-experimental).
+- **SAP Business Client (experimental).** Sessions of Business Client's embedded SAP GUI are discovered next to SAP Logon's. Details: [SAP Business Client](docs/SAP_SETUP.md#sap-business-client-experimental).
 
 Changed behaviour when upgrading: discovery elements no longer carry `visible` (SAP GUI Scripting has no such property, so it was always true); F4 hit lists are classified `list` instead of `information`; a key the screen does not accept returns an error with `available_keys` instead of a COM error.
 
@@ -150,10 +157,10 @@ Shaped by two days of real agent work on a live system. The lesson was that toke
 - **Lighter responses.** A table control is one discovery element instead of one per cell (an SM30 screen went from 231 elements to 3), element IDs come back in the short `wnd[0]/...` form, and batch fills and popup actions report what matters instead of echoing everything.
 - **`sap_read_list`** reads a classic report list (`WRITE` output, F4 hit lists) as lines of text with list colours and paging — 43 lines instead of 492 label elements, and no screenshot needed.
 - **View clusters work.** Docking containers (`wnd[0]/shellcont`) are valid IDs and discovery points to them, so the dialog structure of SM34 and most IMG activities can be navigated. A new `SM30` transaction guide covers table maintenance and view clusters end to end.
-- **Your transaction policy.** Presets (`default`, `abap-dev`, `strict`) plus a policy file with glob patterns replace the hard-coded blocklist. Details: [Security Considerations](README.md#security-considerations).
+- **Your transaction policy.** Presets (`default`, `abap-dev`, `strict`) plus a policy file with glob patterns replace the hard-coded blocklist. Details: [Transaction policy](docs/SECURITY_GUIDE.md#transaction-policy).
 - **Popups announce pre-filled values.** When an action opens a popup, its response already says what the popup is and which inputs hold values you never chose — such as a customizing request pre-filled with another project's request.
 - **Screenshots to a file.** `sap_screenshot(save_path=...)` writes a full-resolution PNG for documents and never overwrites a file.
 
 ## 0.3.0 and earlier
 
-See the [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases). 0.3.0 (2026-08-30) brought `sap_preview` approval cards and confirmation points: see [What's New](README.md#whats-new) in the README.
+See the [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases). 0.3.0 (2026-08-30) brought `sap_preview` approval cards and confirmation points: see [Confirmations](docs/CONFIRMATIONS.md).

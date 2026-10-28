@@ -13,10 +13,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MARKDOWN_FILES = [
     ROOT / "README.md", ROOT / "CHANGELOG.md", ROOT / "AGENTS.md", ROOT / "CONTRIBUTING.md",
-    *sorted((ROOT / "docs").rglob("*.md")),
+    ROOT / "SECURITY.md", *sorted((ROOT / "docs").rglob("*.md")),
 ]
 
 LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+# The README is also the PyPI project page, where relative links break, so it
+# links to this repository by absolute URL. Such links are checked against the
+# local files: on master they point to the files of the commit being checked.
+REPO_URL_RE = re.compile(
+    r"^https://(?:github\.com/kts982/mcp-sap-gui/(?:blob|tree)/master/"
+    r"|raw\.githubusercontent\.com/kts982/mcp-sap-gui/master/)(?P<path>.*)$"
+)
+IMAGE_RE = re.compile(r"<img\s[^>]*src=\"([^\"]+)\"")
 HEADER_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*$")
 SKIP_EXTERNAL_PREFIXES = ("mailto:",)
 
@@ -51,7 +59,8 @@ def clean_link_target(raw: str) -> str:
 
 def iter_links(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8")
-    return [clean_link_target(match.group(1)) for match in LINK_RE.finditer(text)]
+    links = [clean_link_target(match.group(1)) for match in LINK_RE.finditer(text)]
+    return links + [match.group(1) for match in IMAGE_RE.finditer(text)]
 
 
 def check_internal_links() -> list[str]:
@@ -62,11 +71,13 @@ def check_internal_links() -> list[str]:
         for link in iter_links(md_file):
             if not link or link.startswith("#"):
                 continue
-            if urllib.parse.urlparse(link).scheme:
+            repo = REPO_URL_RE.match(link)
+            if not repo and urllib.parse.urlparse(link).scheme:
                 continue
 
-            target, _, anchor = link.partition("#")
-            resolved = (md_file.parent / urllib.parse.unquote(target)).resolve()
+            target, _, anchor = (repo.group("path") if repo else link).partition("#")
+            base = ROOT if repo else md_file.parent
+            resolved = (base / urllib.parse.unquote(target)).resolve()
 
             if not resolved.exists():
                 errors.append(f"{md_file.relative_to(ROOT)} -> missing target: {link}")
@@ -91,6 +102,8 @@ def check_external_links() -> list[str]:
                 continue
             parsed = urllib.parse.urlparse(link)
             if parsed.scheme not in {"http", "https"}:
+                continue
+            if REPO_URL_RE.match(link):  # checked against the local files
                 continue
             if link in seen or link.startswith(SKIP_EXTERNAL_PREFIXES):
                 continue

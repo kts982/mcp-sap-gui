@@ -2,723 +2,89 @@
 
 <!-- mcp-name: io.github.kts982/mcp-sap-gui -->
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that enables AI assistants to interact with SAP GUI for Windows through the SAP GUI Scripting API.
-
-It is client-agnostic: if your MCP client can launch a local `stdio` server, it can use this project. Examples in this README use Claude because the setup is easy to demonstrate, but the same server can be used from Codex, GitHub Copilot, Gemini CLI, and similar MCP-capable tools.
-
-Current release: `0.5.4` for local Windows use over MCP `stdio`.
-
 [![CI](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/ci.yml)
 [![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
 [![Release](https://img.shields.io/github/v/release/kts982/mcp-sap-gui)](https://github.com/kts982/mcp-sap-gui/releases)
 
-## Status
+An [MCP](https://modelcontextprotocol.io/) server that lets AI assistants work in **SAP GUI for Windows**: ask in plain language, and the assistant reads screens and tables, fills in fields, runs transactions and handles popups, through SAP's own Scripting API. Saving always waits for your yes.
 
-- GitHub workflows are included for `CI`, `Docs`, `Dependency Audit`, and tag-based `Release`.
-- Primary repository: GitHub (`kts982/mcp-sap-gui`).
+It works with any MCP client that can start a local server: Claude Code, GitHub Copilot, Codex, Gemini CLI and others.
 
-## What's New
+<img src="https://raw.githubusercontent.com/kts982/mcp-sap-gui/master/docs/images/sap-preview-card.png" alt="sap_preview card in VS Code Copilot Chat: the SAP screen and the values about to be written" width="640">
 
-**0.5.4** is a security release for the HTTP transport: it now refuses requests a web page could forge through DNS rebinding ([advisory](https://github.com/kts982/mcp-sap-gui/security/advisories/GHSA-rqrh-r823-7mqf)). stdio, the default, was not affected. It also keeps a `sap_set_policy_profile` restriction from lapsing after a day, and reports the server's own version. Every change, release by release: [CHANGELOG](CHANGELOG.md).
+## What it does
 
-**`sap_preview` — see it before it happens.** The agent can now show you an approval card at any checkpoint: before a batch write, before saving, or whenever you ask (*"before adding country GR, show me the values"*). It carries the current screenshot, session context, and the exact values about to be written — password-shaped values masked. On MCP Apps hosts (VS Code Copilot Chat) it renders as a rich inline card; everywhere else you get the same summary as text plus the screenshot. Saving still goes through the confirmation gate. Details: [Rendered Preview Cards](#rendered-preview-cards).
+- **Looks things up:** display transactions, fields, ALV grids, table controls, classic report lists and trees, read in full however long they are.
+- **Fills in and changes:** fields, checkboxes, dropdowns, whole forms, table cells, F4 value help, table maintenance and IMG activities.
+- **Navigates:** transactions, buttons, function keys, menus, tabs, SPRO and other trees.
+- **Handles popups**, recognising questions, warnings, F4 lists and SAP messages in any logon language.
+- **Shows before it saves:** a preview of the screen and the values about to be written, and screenshots on request.
 
-<img src="docs/images/sap-preview-card.png" alt="sap_preview approval card rendered inline in VS Code Copilot Chat" width="640">
-
-**Confirmation points — nothing is written without you.** Tell the agent once (*"ask me before every field write"*) and the server enforces it: `sap_set_confirmation_points` activates categories of write operations that pause for your explicit approval before anything reaches SAP. Enforced server-side by middleware — declining blocks the call no matter what the agent does, removing a gate asks you first, and admins can pin gates for every session with `--confirm`. Details: [Security Considerations](#security-considerations).
-
-## What This Does
-
-This server allows AI assistants to:
-- Connect to SAP systems (like double-clicking in SAP Logon Pad)
-- Execute transactions (MM03, VA01, /SCWM/MON, etc.)
-- Read and write screen fields, checkboxes, radio buttons, comboboxes, and tabs
-- Use F4 value help: hit lists, restriction dialogs, date and time pickers
-- Select menu items from the menu bar (Table View, Edit, Selection, etc.)
-- Navigate through SAP screens using keyboard keys and buttons
-- Extract data from ALV grids (GuiGridView) and classic table controls (GuiTableControl)
-- Read classic report lists (`WRITE` output) as text, including the colour of a line
-- Interact with ALV toolbar buttons and context menus
-- Read and interact with tree controls (TableTree, ColumnTree, SimpleTree), including the docked dialog structure of view clusters
-- Take screenshots of SAP windows, inline or saved as a full-resolution file
-- Discover screen elements for automation
-- Show you previews before writing, and pause for your approval at confirmation points you choose
-
-## Example Conversation
-
-```
-User: "What's the description for material MAT-001 in system D01?"
-
-Assistant: [connects to D01]
-           [executes MM03]
-           [enters material number]
-           [reads description field]
-
-"The material MAT-001 is described as 'High-Grade Steel Plate 10mm'
-in system D01."
-```
-
-## Quick Start
-
-1. Install [uv](https://docs.astral.sh/uv/) (it ships with `uvx`), if not already installed:
-
-```bash
-pip install uv
-```
-
-2. Start SAP Logon Pad and open an SAP GUI session, or at least have SAP Logon running.
-
-3. Configure your MCP client to launch this server. No clone or manual install needed — `uvx` fetches the [released package from PyPI](https://pypi.org/project/mcp-sap-gui/) and runs it in an isolated environment:
-
-```text
-Command:   uvx
-Arguments: mcp-sap-gui[screenshots]
-Transport: stdio
-```
-
-(Working from a source checkout instead? See [Installation](#installation).)
-
-4. Try one of these prompts:
-
-```text
-Connect to my open SAP session and tell me what system I'm on
-Show me the current screen info
-List all editable fields on this screen
-Read the first 20 rows of the visible table
-```
-
-`sap_connect` intentionally does not accept a password parameter. The safer pattern is to log in through SAP GUI first and then attach with `sap_connect_existing`.
+More, with example prompts: [What it can do](https://github.com/kts982/mcp-sap-gui/blob/master/docs/OVERVIEW.md).
 
 ## Requirements
 
-- **Windows** (SAP GUI only runs on Windows)
-- **SAP GUI for Windows** installed
-  - Live compatibility verified with SAP GUI for Windows 8.10 64-bit Patch 0. SAP supports 8.10 until 30 June 2029 and 8.00 until 12 January 2027 (restricted support until 31 July 2027); 7.70 and older are out of SAP support and run best effort. Dates, sources and what needs which release: [SAP GUI Versions](docs/SAP_GUI_VERSIONS.md)
-  - 7.70 Patch Level 3 or later reads a whole screen, popup, list page or table control in one call (`GetObjectTree`); older releases fall back to reading element by element, which is much slower on large screens (seconds instead of a fraction of a second for a full list page)
-- **SAP Logon Pad** running, or a SAP GUI session hosted by **SAP Business Client** (experimental, see [below](#sap-business-client-experimental)) or another embedded SAP GUI (for COM connections)
-- **SAP GUI Scripting enabled** on your SAP systems
-- **Python 3.11+**
-- **[uv](https://docs.astral.sh/uv/)** (recommended Python package manager)
+- Windows with SAP GUI for Windows (8.10 verified, 8.00 works; [SAP GUI versions](https://github.com/kts982/mcp-sap-gui/blob/master/docs/SAP_GUI_VERSIONS.md)), and SAP Logon running.
+- SAP GUI Scripting allowed in SAP GUI and on the SAP system: [Preparing SAP](https://github.com/kts982/mcp-sap-gui/blob/master/docs/SAP_SETUP.md).
+- [uv](https://docs.astral.sh/uv/), which runs the server from PyPI.
+- An MCP client. To approve saves, one that shows the server's confirmation questions (listed below).
 
-### SAP Business Client (experimental)
+## Quick start
 
-- Classic transactions in SAP Business Client run in embedded SAP GUI for Windows, so the server-side scripting parameter is still required. `sapgui/nwbc_scripting` gives read-only scripting (same effect as `sapgui/user_scripting` + `sapgui/user_scripting_set_readonly`): write tools refuse, and grids cannot be scrolled, so a table read stops at the rows on screen.
-- Sessions are discovered through the SAP GUI server process's COM Running Object Table entries (`SAPGUISERVER-<pid>`), next to the usual SAP Logon entry. `sap_list_connections` reports `host: "sapguiserver"` for them.
-- Tabs of one Business Client window are sessions of one connection; a second system is a second connection.
-- Business Client connections have no SAP Logon description; the list shows the system and client instead (e.g. `DEV (100)`).
-- Pressing Back repeatedly closes the tab instead of landing on the SAP Easy Access menu (SAP Business Client FAQ).
-- Fiori Launchpad connections may render a transaction as SAP GUI for HTML; such a transaction is invisible to scripting.
+1. Install uv: `winget install --id=astral-sh.uv -e`
+2. Add the server to your MCP client:
 
-## Supported Scope
+   ```text
+   Command:   uvx
+   Arguments: mcp-sap-gui[screenshots]
+   Transport: stdio
+   ```
 
-Supported:
-- SAP GUI for Windows via the SAP GUI Scripting COM API
-- MCP `stdio` (default) and `streamable HTTP` transports
-- Per-client session isolation (multiple MCP clients can hold independent SAP sessions)
-- Interactive use from MCP-compatible clients
-- Read and write SAP GUI automation within the permissions of the logged-in SAP user
+   In the Claude Code CLI, for example: `claude mcp add sap-gui --scope user -- uvx "mcp-sap-gui[screenshots]"`. Every client: [Clients](https://github.com/kts982/mcp-sap-gui/blob/master/docs/CLIENTS.md).
+3. Log on to SAP in SAP Logon, then ask: *"Connect to my open SAP session and tell me what system I'm on."*
 
-Not yet available:
-- SAP GUI for Java or SAP GUI for HTML
-- Browser-based Fiori automation
-- Unattended multi-user production orchestration
+Step by step, including updating to a new release: [Getting started](https://github.com/kts982/mcp-sap-gui/blob/master/docs/GETTING_STARTED.md).
 
-### Enabling SAP GUI Scripting
+## Safety
 
-SAP GUI Scripting must be enabled both client-side and server-side:
+- **Saves wait for your yes**, and you can make other changes wait too, for example every field write: [Confirmations](https://github.com/kts982/mcp-sap-gui/blob/master/docs/CONFIRMATIONS.md).
+- **A transaction policy** decides which transactions the assistant may start; read-only mode and profiles limit it further.
+- **An audit log** records every call, question and answer.
+- **Everything runs as the logged-on SAP user**, under that user's authorizations, which remain the real boundary.
 
-**Client-side** (SAP GUI Options):
-1. Open SAP GUI → Options → Accessibility & Scripting → Scripting
-2. Check "Enable scripting"
-3. Optionally uncheck "Notify when a script..." for smoother automation
+Details for admins, Basis and security teams: [Security guide](https://github.com/kts982/mcp-sap-gui/blob/master/docs/SECURITY_GUIDE.md).
 
-**Server-side** (SAP System):
-- Transaction `RZ11` → Parameter `sapgui/user_scripting` → Set to `TRUE`
-- Requires SAP Basis administrator access
+## Which clients show the confirmation questions
 
-### Deploying Where Scripting Is Restricted
+Tested on 2026-10-28: the **Claude Code CLI**, the **GitHub Copilot CLI**, **VS Code with GitHub Copilot** and the **Codex CLI** show them. The **Claude desktop app** does not (its Code tab declines without showing anything, its Chat and Cowork tabs do not support them), so a save is refused there: use it for reading. The full table: [Clients](https://github.com/kts982/mcp-sap-gui/blob/master/docs/CLIENTS.md#which-clients-show-the-confirmation-questions).
 
-Many organizations disable SAP GUI Scripting globally as a hardening default. Enabling it does not have to be all-or-nothing: SAP ships graduated server-side controls that let a Basis team enable scripting narrowly — typically for named users on a development system — while keeping it off for everyone else.
+## Documentation
 
-| Profile parameter (`RZ11`/`RZ10`) | Effect |
+| Page | For |
 |---|---|
-| `sapgui/user_scripting = TRUE` | Master switch; required for any scripting |
-| `sapgui/user_scripting_per_user = TRUE` | Scripting works only for users holding authorization object `S_SCR` (class `BC_A`, activity 16); all other users stay blocked (SAP Note 983990) |
-| `sapgui/user_scripting_set_readonly = TRUE` | Scripts may read screen state but cannot send anything that changes server state (SAP Note 692245) |
-| `sapgui/user_scripting_force_notification = TRUE` | Users always see a notification/consent dialog when a script attaches; cannot be suppressed in local SAP GUI options (SAP Note 3591984) |
-| `sapgui/user_scripting_disable_recording = TRUE` | Blocks recording of new scripts; playback still works |
-
-Useful facts when proposing this to a Basis/security team:
-
-- Per-user and read-only modes are **combinable** since SAP GUI 7.40 PL17 / 7.50 PL4: full API for `S_SCR` holders, read-only for everyone else (SAP Note 2565390).
-- On a read-only session this server reports `scripting_read_only: true` in the session info and refuses every write tool up front with the reason, instead of letting each action fail inside SAP GUI. All read tools keep working.
-- A dynamic `RZ11` change to `sapgui/user_scripting` is **not persistent** — it reverts at the next application server restart, which suits a time-boxed evaluation on a development system.
-- Server-side, scripted actions run under the SAP user's normal authorizations and appear in logs as ordinary user activity. The user's authorization profile is the effective security boundary — pair a dedicated minimal-authorization account with this server's transaction policy (`--policy-preset`, `--policy-file`), `--profile`, and `--audit-log` options for defense in depth.
-- Authoritative reference: [SAP GUI Scripting Security Guide](https://help.sap.com/doc/97d2d0bc2ed248a4a85a0bec608704f8/800.13/en-US/sap_gui_scripting_sec_guide.pdf) (help.sap.com).
-
-**Why the Scripting API is required at all:** SAP GUI for Windows draws dynpro screens on a custom canvas that exposes no usable structure to Windows UI Automation or other accessibility APIs — the Scripting API is the only structured way to read and drive SAP GUI screens. Commercial RPA products have the same dependency and fall back to screenshot/OCR-based automation when scripting is disabled; this project deliberately avoids that approach because it is imprecise and brittle.
-
-## Installation
-
-### From PyPI (recommended for users)
-
-Nothing to clone. On its first launch, `uvx` downloads the latest release and runs it in an isolated environment:
-
-```bash
-# Smoke test the published package
-uvx "mcp-sap-gui[screenshots]" --help
-```
-
-The `[screenshots]` extra adds screenshot optimization (reduces screenshot size by 70-90%) and is recommended. Point your MCP client at `uvx` with argument `mcp-sap-gui[screenshots]` — see [MCP Setup](#mcp-setup) below.
-
-**Updating to a new release:** after the first launch, `uvx` keeps reusing the version it cached, so a new release is not picked up by itself. Run `uvx "mcp-sap-gui[screenshots]@latest" --help` once, then restart your MCP client; its next launch uses the new release. To stay on one release instead, put the version in the client's argument: `mcp-sap-gui[screenshots]==<version>`.
-
-### From source (for development)
-
-```bash
-# Clone the repository
-git clone https://github.com/kts982/mcp-sap-gui.git
-cd mcp-sap-gui
-
-# Install uv (if not already installed)
-pip install uv
-
-# Install all dependencies (creates .venv automatically)
-uv sync
-
-# With screenshot optimization (recommended - reduces screenshot size by 70-90%)
-uv sync --extra screenshots
-
-# With dev dependencies (for testing, linting, type checking)
-uv sync --extra dev --extra screenshots
-
-```
-
-**Windows note for source checkouts:** while an MCP server launched from this checkout is running, its process holds locks on native DLLs in `.venv` (pywin32, watchfiles). Running `uv sync` or upgrading dependencies during that time can fail with "Access is denied" or leave `.venv` half-updated — stop or restart the MCP client first, then sync. If two MCP clients (e.g. Claude Code and VS Code) launch the server from the same checkout, point the second one at an isolated environment instead of the shared `.venv`:
-
-```text
-Command:   uv
-Arguments: run --isolated --no-project --with "mcp-sap-gui[screenshots,apps] @ file:///<path-to-checkout>" python -m mcp_sap_gui.server
-```
-
-(`uvx mcp-sap-gui` users are unaffected — every `uvx` launch uses its own cached environment.)
-
-## Usage
-
-Connection recommendation: prefer `sap_connect_existing` for already authenticated sessions. Use `sap_connect` mainly for SSO flows or to open the SAP login screen before the user completes manual login.
-
-### Running the MCP Server Directly
-
-```bash
-# Standard mode (stdio, default)
-uv run python -m mcp_sap_gui.server
-
-# Read-only mode (safer for exploration)
-uv run python -m mcp_sap_gui.server --read-only
-
-# With transaction whitelist
-uv run python -m mcp_sap_gui.server --allowed-transactions MM03 VA03 ME23N
-
-# HTTP transport (binds to 127.0.0.1). Requests addressed to another host
-# name (DNS rebinding) or sent by a web page from another origin are refused.
-uv run python -m mcp_sap_gui.server --transport http
-
-# HTTP on another address: name the host clients use for this machine
-# (--allowed-origin adds a browser origin that may call the server)
-uv run python -m mcp_sap_gui.server --transport http --host 0.0.0.0 --port 9000 --allowed-host sap-box
-
-# Policy profile (restrict visible tools)
-uv run python -m mcp_sap_gui.server --profile exploration
-
-# Confirmation points (ask the user before these categories run, every session)
-uv run python -m mcp_sap_gui.server --confirm field_writes transactions
-
-# Audit log to file (JSON lines)
-uv run python -m mcp_sap_gui.server --audit-log sap_audit.jsonl
-
-# On shutdown, leave every SAP session open, even the ones sap_connect opened
-uv run python -m mcp_sap_gui.server --detach-on-exit
-
-# EXPERIMENTAL: code mode — replaces the tool catalog with search/get_schema/
-# tags/execute meta-tools; agents script chained SAP flows in a sandbox.
-# Faster and cheaper on long chained flows (e.g. full table dumps), slower on
-# quick one-shot questions. Requires: uv sync --extra code-mode
-uv run --extra code-mode python -m mcp_sap_gui.server --code-mode
-
-# Same, from the published PyPI package (no checkout needed)
-uvx "mcp-sap-gui[screenshots,code-mode]" --code-mode
-
-# Debug mode
-uv run python -m mcp_sap_gui.server --debug
-```
-
-**HTTP and the MCP protocol versions.** Over stdio the server works with every client. Over HTTP it needs a client on the older, session-based protocol (2025-11-25 or earlier, such as VS Code): a request on MCP 2026-07-28 carries no client identity, so the server cannot keep one SAP session per client and refuses it with an error that says so. An HTTP session that ends (the client closes it, or it expires after 30 idle minutes) releases its SAP binding and its confirmation points, and closes the SAP sessions the server opened for it unless the server runs with `--detach-on-exit`.
-
-### MCP Setup
-
-This server communicates over **stdio** (stdin/stdout JSON-RPC), which is the standard MCP transport. You don't need to configure ports or URLs — the MCP client starts the server process and talks to it directly.
-
-For any client, the core launch configuration is the same:
-
-```text
-Command:   uvx
-Arguments: mcp-sap-gui[screenshots]
-Transport: stdio
-```
-
-Running from a source checkout instead of PyPI? Use
-`uv run --directory <path-to-mcp-sap-gui> python -m mcp_sap_gui.server`
-as the command.
-
-### Client Setup Links
-
-- **Claude Code / Claude Desktop**: setup examples are included below
-- **Codex**: configure an MCP server in Codex and point it at the command above. Official MCP docs: https://developers.openai.com/learn/docs-mcp
-- **GitHub Copilot**: configure a local MCP server in Copilot Chat / agent mode. Official docs: https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp
-- **Gemini CLI**: add the server under `mcpServers` in your Gemini CLI settings. Official docs: https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md
-
-Below are full examples for the most common local SAP GUI setup paths.
-
-For a client-by-client setup guide, see **[docs/CLIENTS.md](docs/CLIENTS.md)**.
-
----
-
-#### Option 1: Claude Code (Recommended for development)
-
-The repository includes a `.mcp.json` at the project root. When you open this project in **Claude Code**, the MCP server is automatically discovered — no manual configuration needed.
-
-To use it:
-
-```bash
-cd mcp-sap-gui
-claude
-```
-
-Claude Code will detect `.mcp.json` and start the SAP GUI MCP server automatically.
-
-If you want to configure it globally for Claude Code (available in any project), add it to your user settings at `~/.claude/.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "sap-gui": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["mcp-sap-gui[screenshots]"]
-    }
-  }
-}
-```
-
----
-
-#### Option 2: Claude Desktop
-
-Add to your Claude Desktop config file:
-
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-**Standard mode:**
-
-```json
-{
-  "mcpServers": {
-    "sap-gui": {
-      "command": "uvx",
-      "args": ["mcp-sap-gui[screenshots]"]
-    }
-  }
-}
-```
-
-> **Note:** Running from a source checkout instead of PyPI? Use
-> `"command": "uv"` with
-> `"args": ["run", "--directory", "<path-to-mcp-sap-gui>", "python", "-m", "mcp_sap_gui.server"]`
-> — the `--directory` flag is required so `uv` finds the project's virtual
-> environment regardless of the working directory Claude Desktop uses.
-
-**Read-only mode** (recommended when exploring/querying data):
-
-```json
-{
-  "mcpServers": {
-    "sap-gui": {
-      "command": "uvx",
-      "args": ["mcp-sap-gui[screenshots]", "--read-only"]
-    }
-  }
-}
-```
-
-**With transaction whitelist** (only allow specific transactions):
-
-```json
-{
-  "mcpServers": {
-    "sap-gui": {
-      "command": "uvx",
-      "args": [
-        "mcp-sap-gui[screenshots]",
-        "--allowed-transactions", "MM03", "VA03", "ME23N"
-      ]
-    }
-  }
-}
-```
-
-After editing the config, restart Claude Desktop for changes to take effect.
-
----
-
-#### Option 3: Any MCP-compatible client
-
-The server uses stdio transport. Point any MCP client at:
-
-```
-Command:   uvx mcp-sap-gui[screenshots]
-Arguments: [--read-only] [--profile exploration|operator|full] [--confirm POINT ...] [--audit-log FILE] [--detach-on-exit] [--debug] [--policy-preset default|abap-dev|strict] [--policy-file FILE] [--allowed-transactions T1 T2 ...]
-Transport: stdio
-```
-
-For a source checkout, use `uv run --directory <path-to-mcp-sap-gui> python -m mcp_sap_gui.server` instead.
-
----
-
-### Verifying the Setup
-
-Once configured, you can verify the MCP server is working by asking Claude:
-
-```
-"List all available SAP GUI tools"
-```
-
-Claude should respond with the full list of `sap_*` tools. If SAP GUI is running, try:
-
-```
-"Connect to my open SAP session and tell me what system I'm on"
-```
-
-Then try:
-
-```
-"Show me the current screen info"
-"List all editable fields on this screen"
-"Read the first 20 rows from the visible table"
-```
-
-## Built-in Agent Guidance
-
-The server includes built-in navigation knowledge that helps any MCP client (Claude Code, Copilot, Cursor, Cline, etc.) use SAP GUI effectively:
-
-- **MCP Instructions** — Injected into every client's system prompt during initialization. Covers screen discovery workflow, popup handling, table pagination, SPRO tree navigation, key reference, and common mistakes to avoid.
-- **`docs://sap-gui-guide` Resource** — Detailed reference guide available on-demand via `resources/read`. Covers element types, ID naming conventions, transaction code formats, table type comparison, status bar messages, and step-by-step patterns for SPRO and table maintenance views.
-
-These prevent common agent mistakes like guessing element IDs, ignoring popups, pressing F5 (="New Entries") when meaning to refresh, using `double_click_tree_node` in SPRO (which opens docs instead of executing the activity) or in a view cluster (where it does nothing), or reading a classic report list from a screenshot instead of with `sap_read_list`.
-
-## Available Tools
-
-The server currently exposes **59 MCP tools**.
-
-| Category | Count | What it covers |
-|---|---:|---|
-| Connection & Policy | 7 | Connect to SAP, attach to open sessions, inspect sessions, disconnect, set policy profile, set confirmation points |
-| Navigation | 3 | Execute transactions, send keys, inspect current screen |
-| Fields & UI | 13 | Read/write fields, buttons, tabs, comboboxes, textedit, focus |
-| Tables & Grids | 17 | ALV grids, TableControls, row selection, column info, cell ops |
-| Popup / Toolbar / Shell / Lists | 5 | Popup inspection and handling, toolbar discovery, shell content, classic report lists |
-| Trees | 10 | Read/search/expand/select/click SAP tree controls |
-| Discovery | 2 | Screen element discovery and screenshots |
-| Preview | 1 | Show the user the current screen plus the values the agent is about to write |
-| Workflow Guidance | 1 | Return step-by-step guidance for known multi-tool SAP workflows |
-| Transaction Guidance | 1 | Return a generic, read-first guide for supported SAP transactions |
-
-The most important patterns:
-- `sap_get_screen_elements` to discover IDs instead of guessing
-- `sap_read_table` to start with any SAP table/grid
-- `sap_read_list` when a report prints a plain list instead of an ALV grid
-- Every action response carries a short `popup` digest when a popup opened (classification, texts, button labels, and `prefilled_inputs` with a notice when inputs already hold values or options are preselected); `sap_get_popup_window` gives the full details and suggests a safe next step
-- `sap_handle_popup(action="auto")` when you want the server to dismiss only clearly safe informational popups and otherwise leave the dialog untouched
-- `sap_preview` before significant writes (batch field fills, `F11` / Save) so the user sees the screen and the pending values first
-- `sap_set_confirmation_points` to make categories of writes ask the user for approval before they run
-- `sap_get_workflow_guide` when you want the proven sequence for a known workflow
-- `sap_get_transaction_guide` when you want a generic guide for a supported transaction: `/SCWM/MON` (also `warehouse monitor`), or `SM30` for table/view maintenance and view clusters (also `SM34`, `view cluster`)
-- `sap_read_tree` plus search/expand helpers for SPRO-style navigation
-
-For the full tool catalog, grouped by category with short descriptions, see **[docs/TOOLS.md](docs/TOOLS.md)**.
-
-### Rendered Preview Cards
-
-`sap_preview` is read-only and always returns a written summary plus the screenshot as an image, so it works in every MCP client. Clients that support the MCP Apps UI extension (for example VS Code Copilot) instead get a rendered card with the screenshot and a pending-values table. Install the optional extra to enable the card:
-
-```bash
-uv sync --extra apps          # or: uvx "mcp-sap-gui[screenshots,apps]"
-```
-
-**Restricted or offline networks:** by default the card renderer is loaded from the jsDelivr CDN, so the card silently fails to render on workstations without outbound internet access. Set `PREFAB_BUNDLED_RENDERER=1` in the server's environment to make the renderer self-contained (a ~6.3 MB inline resource, no third-party domains):
-
-```json
-{
-  "mcpServers": {
-    "sap-gui": {
-      "command": "uvx",
-      "args": ["mcp-sap-gui[screenshots,apps]"],
-      "env": { "PREFAB_BUNDLED_RENDERER": "1" }
-    }
-  }
-}
-```
-
-## Security Considerations
-
-This server provides powerful automation capabilities. **Use responsibly.**
-
-### Built-in Safeguards
-
-1. **Transaction Policy** - Which transactions an agent may start. What is dangerous depends on who runs the server and against which system, so it is configurable:
-   - `--policy-preset default` (the default) blocks user and role administration (`SU01`, `SU10`, `SU01D`, `PFCG`, `SU53`), logs and dumps (`SM21`, `ST22`), development and program execution (`SE38`, `SA38`, `SE80`, `SE37`, `SE16N`), and system administration (`STMS`, `SCC4`, `RZ10`, `RZ11`, `SM36`, `SM49`, `SM69`, `SM59`, `STRUST`, `SICF`, `SM01`, `SM18`, `SM19`). Customizing and display work (`SM30`, `SM34`, `SPRO`, `SE16`, `SE11`) stays open
-   - `--policy-preset abap-dev` additionally allows `SA38`, `SE11` and `SE80`, for developers testing their own programs
-   - `--policy-preset strict` blocks everything the policy file does not allow
-   - `--policy-file policy.json` adds to the preset: `{"preset": "abap-dev", "block": ["ZHR*"], "allow": ["SM59"]}`. Entries are codes or glob patterns (`SU*`, `/SCWM/*`); `allow` always wins over `block`. Without the flag the server reads `$MCP_SAP_GUI_POLICY_FILE`, else `%APPDATA%\mcp-sap-gui\policy.json` if it exists. Keep the file outside the agent's workspace
-   - Two examples ship in `examples/`: `policy.example.json` starts from `default`, additionally blocks a customer namespace (`ZHR*`) and `SE16`, and allows `ST22` for dump analysis; `policy.strict.example.json` is an allowlist for a display-only agent. To make one your per-user policy on Windows: `New-Item -ItemType Directory -Force "$env:APPDATA\mcp-sap-gui"; Copy-Item examples\policy.example.json "$env:APPDATA\mcp-sap-gui\policy.json"`
-   - The policy is read once at startup and written to the audit log (with the file's SHA-256). No tool can change it, and a policy file that cannot be read stops the server instead of falling back to something more permissive
-   - Case-insensitive matching; handles `/n`, `/o`, `/*` prefixes and whitespace
-   - It is a guardrail against agent mistakes, not a security boundary: a blocked transaction can often be reached another way (a menu path, a screen you left open). The SAP user's authorizations are the boundary
-
-2. **OK-Code Bypass Prevention** - Setting likely SAP command fields such as `tbar[0]/okcd`, `txtOK_CODE`, or similar command-code aliases to a blocked transaction is also blocked, preventing circumvention of the transaction policy
-
-3. **Read-Only Mode** - `--read-only` flag disables all mutating operations (field writes, button presses, transaction execution, key sends, tree/table interactions)
-
-4. **Transaction Whitelist** - For production use an allowlist: the `strict` policy preset with an `allow` list in the policy file (supports patterns such as `/SCWM/*`). The older `--allowed-transactions T1 T2 ...` flag still works and restricts on top of the policy.
-
-5. **Policy Profiles** - `--profile` controls which tools are visible: `exploration` (read-only), `operator` (read + write), `full` (all, default).
-
-6. **Tool Tags** - Every tool is tagged `read` or `write` for policy profile filtering. All tools carry MCP `readOnlyHint`/`destructiveHint` annotations so clients can display appropriate UI hints
-
-7. **Save Confirmation** - `sap_send_key("F11")` and `sap_send_key("Save")` now require explicit user confirmation via MCP elicitation. If the client does not support elicitation, the save is blocked instead of proceeding silently.
-
-8. **Confirmation Points** - Named categories of write operations that require blocking user approval before the server executes them. `save` (the `F11` / `Save` key and the `wnd[0]/tbar[0]/btn[11]` Save toolbar button) is always on. `transactions`, `batch_fields`, `field_writes`, `all_writes` and `attach` can be activated per session with `sap_set_confirmation_points`, or for every session with `--confirm POINT [POINT ...]`. `attach` is a choice, not a yes/no: `sap_connect_existing` lets the user pick the SAP session the agent works in (`--confirm attach` turns it on for every chat).
-
-   The gate is enforced server-side by middleware, so it applies no matter what the agent does — including inside the experimental `--code-mode` sandbox. Adding a point is silent; *removing* a session point asks the user first, and points set by `--confirm` cannot be removed at all. Declining returns an error and nothing is executed, and clients without elicitation support fail closed (the gated call errors instead of running unconfirmed). Every confirmation is written to the audit log with its outcome (`accepted`, `declined`, `unsupported_client`).
-
-   The client has to show these prompts. The Claude Code CLI does; the Claude Code desktop app (tested 2026-10-19) declined every one within milliseconds without showing it, so saves through the server cannot be approved there. The server then says that no dialog was shown, instead of reporting that you declined. See [Confirmation Points](docs/TOOLS.md#confirmation-points).
-
-   On a client without elicitation support, removal fails closed too: a point activated there cannot be turned off again, so it blocks that whole category for the rest of the session. Points survive `sap_disconnect` — their lifetime is the MCP session, not the SAP connection.
-
-   `all_writes` covers every write-tagged tool, including selection, scrolling and navigation helpers that change no business data — it is deliberately strict and noisy, and under it `sap_send_key("F11")` prompts twice (once for the category, once for the unchanged save gate).
-
-9. **Audit Logging** - `--audit-log FILE` writes every tool call (name, arguments, timing, outcome, the SAP system, client and user the chat is bound to, and the MCP client and protocol version) as JSON lines. Secrets in arguments are masked automatically
-
-10. **Secure Credential Resolution** - `sap_connect` resolves credentials from a `.env` file (`SAP_USER`, `SAP_PASSWORD`, `SAP_CLIENT`, `SAP_LANGUAGE`). Passwords are never accepted as MCP tool parameters and never appear in client logs, tool-call history, or audit logs. Copy `.env.example` to `.env` to get started
-
-11. **ID Validation And Normalization** - User-supplied SAP window and element IDs are validated before `findById()` is called. Standard IDs like `wnd[0]/usr/...` are accepted, and full session paths like `/app/con[0]/ses[0]/wnd[0]/usr/...` are normalized to the short form automatically.
-
-12. **HTTP Host and Origin Checks** - With `--transport http`, a request addressed to a host name other than localhost, 127.0.0.1, the bound address or an `--allowed-host` is refused (421), so a web page cannot point its own name at this machine (DNS rebinding) and use the server. A browser request from another origin is refused too (403) unless it is listed with `--allowed-origin`; pages on localhost count as local. MCP clients send no `Origin` and are not affected. stdio, the default transport, has no network surface.
-
-### Recommendations for Production Use
-
-- **Never expose to untrusted users**
-- **Use read-only mode** for exploration/queries
-- **Implement transaction whitelists** for automation
-- **Enable audit logging** on SAP side
-- **Use dedicated service accounts** with minimal authorizations
-- **Enable scripting per-user, not globally** — `sapgui/user_scripting_per_user` with the `S_SCR` authorization limits scripting to named users (see [Deploying Where Scripting Is Restricted](#deploying-where-scripting-is-restricted))
-- **Run on isolated systems** (test/sandbox, not production)
-
-### SAP Licensing
-
-Consult your SAP licensing agreement regarding:
-- Automated access and scripting
-- Indirect access considerations
-- Named vs. concurrent user licensing
-
-## Example Workflows
-
-### Display Material Master
-
-```python
-# Claude would execute these tools:
-sap_connect("D01 - Development System")
-sap_execute_transaction("MM03")
-sap_set_field("wnd[0]/usr/ctxtRMMG1-MATNR", "MAT-001")
-sap_send_key("Enter")
-# Select views...
-sap_send_key("Enter")
-description = sap_read_field("wnd[0]/usr/txtMAKT-MAKTX")
-```
-
-### Extract Purchase Order List
-
-```python
-sap_execute_transaction("ME2M")
-sap_set_field("wnd[0]/usr/ctxtEN_LIFNR-LOW", "1000")  # Vendor
-sap_send_key("Execute")  # F8
-data = sap_read_table("wnd[0]/usr/cntlGRID1/shellcont/shell", max_rows=50)
-```
-
-### Navigate Sales Order
-
-```python
-sap_execute_transaction("VA03")
-sap_set_field("wnd[0]/usr/ctxtVBAK-VBELN", "12345")
-sap_send_key("Enter")
-# Read header data
-customer = sap_read_field("wnd[0]/usr/subSUBSCREEN.../txtVBAK-KUNNR")
-# Navigate to items
-sap_press_button("wnd[0]/usr/tabsTAXI_TABSTRIP.../tabpT\\01")
-items = sap_read_table("wnd[0]/usr/.../cntlGRID1/shellcont/shell")
-```
-
-### Filter Customizing Table (GuiTableControl)
-
-```python
-# In SPRO or SM30 table maintenance view
-# Use Selection -> By Contents to filter
-sap_select_menu("wnd[0]/mbar/menu[3]/menu[0]")    # Selection > By Contents
-# Select the field to filter on, enter value
-sap_select_table_row("wnd[1]/usr/tblSAPLSVIXTCTRL_SEL_FLDS", 0)
-sap_send_key("Enter")
-sap_set_field("wnd[1]/usr/.../txtQUERY_TAB-BUFFER[3,0]", "EXTSYS001")
-sap_send_key("Execute")
-# Read the filtered table
-data = sap_read_table("wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS")
-```
-
-### Batch Fill And Validate A Form
-
-```python
-sap_set_batch_fields(
-    {
-        "wnd[0]/usr/ctxtFIELD1": "VALUE1",
-        "wnd[0]/usr/txtFIELD2": "VALUE2",
-    },
-    validate=True,
-    skip_readonly=True,
-)
-# Returns per-field results plus post-Enter screen feedback
-```
-
-### Show The User What Is About To Change
-
-> "Before adding country GR, show me the values."
-
-```python
-# Read-only: renders the current screen plus the pending values.
-sap_preview(
-    note="About to add country GR to V_T005",
-    pending_fields={
-        "Country Key (V_T005-LAND1)": "GR",
-        "Name": "Greece",
-        "Currency": "EUR",
-    },
-)
-# The user confirms in chat, then the agent writes and saves:
-sap_set_batch_fields({...}, validate=True)
-sap_send_key("Save")   # still requires explicit confirmation via elicitation
-```
-
-## Project Structure
-
-```
-mcp-sap-gui/
-├── docs/
-│   ├── CLIENTS.md             # Client-specific MCP setup notes
-│   ├── OVERVIEW.md            # Product overview and roadmap direction
-│   └── TOOLS.md               # Full MCP tool catalog
-├── scripts/
-│   └── check_docs.py          # Markdown link checker used by docs workflows
-├── src/
-│   └── mcp_sap_gui/
-│       ├── __init__.py        # Package exports
-│       ├── server.py          # MCP server implementation (tool definitions)
-│       ├── session_manager.py # Per-client SAP session isolation
-│       ├── sap_controller.py  # Facade class (composes all mixins)
-│       ├── models.py          # VKey enum, SessionInfo, exceptions
-│       ├── controller.py      # Base controller (connection, navigation, screen info)
-│       ├── fields.py          # FieldsMixin (read/write fields, buttons, combos)
-│       ├── tables.py          # TablesMixin (ALV grid + TableControl operations)
-│       ├── trees.py           # TreesMixin (tree read, expand, select, click)
-│       ├── discovery.py       # DiscoveryMixin (popups, toolbars, screenshots)
-│       ├── confirmation.py    # Confirmation points + blocking-confirmation middleware
-│       └── preview.py         # sap_preview text + Prefab card builders
-├── tests/
-│   ├── test_sap_controller.py # Controller unit tests
-│   ├── test_confirmation.py   # Confirmation points: gate, tool, CLI floor
-│   ├── test_preview.py        # sap_preview builders + card/text branches
-│   └── test_server.py         # Server security & routing tests
-├── examples/
-│   └── basic_usage.py         # Direct controller example
-├── .mcp.json                  # MCP server config (auto-detected by Claude Code)
-├── CONTRIBUTING.md            # Contribution guidelines for public changes
-├── LICENSE                    # MIT license
-├── pyproject.toml
-├── uv.lock                    # Dependency lock file (managed by uv)
-└── README.md
-```
-
-## Troubleshooting
-
-### "Cannot connect to SAP GUI"
-- Ensure SAP Logon Pad, SAP Business Client or another SAP GUI session is running
-- Check that SAP GUI Scripting is enabled in SAP GUI options
-
-### "Scripting disabled" error
-- `sap_list_connections` reports such systems with `scripting_disabled: true` and no sessions
-- Enable scripting server-side: `RZ11` → `sapgui/user_scripting` = `TRUE`
-- Requires SAP Basis administrator
-- Organization won't enable scripting globally? See [Deploying Where Scripting Is Restricted](#deploying-where-scripting-is-restricted) for per-user and read-only enablement options
-
-### "Element not found"
-- Use `sap_get_screen_elements()` to discover available field IDs
-- Field IDs vary between SAP systems due to customization
-
-### COM errors on startup
-- Ensure dependencies are installed: `uv sync`
-- Run `uv run python -m win32com.client.makepy` if COM registration issues occur
-
-### "No SAP tools appear in my MCP client"
-- Confirm the client is launching the server from the project root
-- Restart the MCP client after changing its MCP configuration
-- Run `uv sync` first so the environment and dependencies exist
-
-### SAP Logon exits during a read
-- On SAP GUI 8.00 with 0.5.0, table-control and classic-list reads can take SAP Logon down: upgrade to 0.5.1 ([issue #22](https://github.com/kts982/mcp-sap-gui/issues/22))
-- Another SAP GUI build that fails on the one-call read: turn it off per call site with `MCP_SAP_GUI_DISABLE_OBJECT_TREE`, and find the call with `MCP_SAP_GUI_TRACE_FILE`. See [Switches for a misbehaving SAP GUI build](docs/SAP_GUI_VERSIONS.md#switches-for-a-misbehaving-sap-gui-build)
-
-### "The tool is available, but the action is blocked"
-- Check whether the server is running with `--read-only`
-- Check whether the transaction policy blocks it: the error names the active preset. Allow the transaction in a policy file (`--policy-file`, see [Security Considerations](#security-considerations)) or pick another `--policy-preset`, then restart the server. The policy cannot be changed from inside a session
-- Check whether you started the server with `--allowed-transactions`
-
-## Development
-
-```bash
-# Install all dependencies (dev + screenshots)
-uv sync --extra dev --extra screenshots
-
-# Run tests
-uv run pytest
-
-# Type checking
-uv run mypy src/
-
-# Linting
-uv run ruff check src/
-```
-
-## Related
-
-- [SAP GUI Scripting API Documentation](https://help.sap.com/docs/sap_gui_for_windows)
-- [MCP Specification](https://modelcontextprotocol.io/docs)
-- [Contributing Guide](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
-- [Client Setup Guide](docs/CLIENTS.md)
-- [Tool Catalog](docs/TOOLS.md)
-- [Project Overview](docs/OVERVIEW.md)
+| [Getting started](https://github.com/kts982/mcp-sap-gui/blob/master/docs/GETTING_STARTED.md) | Installing it and the first questions |
+| [What it can do](https://github.com/kts982/mcp-sap-gui/blob/master/docs/OVERVIEW.md) | What to ask, and what is covered |
+| [Clients](https://github.com/kts982/mcp-sap-gui/blob/master/docs/CLIENTS.md) | Setup per MCP client, and which ones show the confirmation questions |
+| [Confirmations](https://github.com/kts982/mcp-sap-gui/blob/master/docs/CONFIRMATIONS.md) | What asks, and what each answer does |
+| [Troubleshooting](https://github.com/kts982/mcp-sap-gui/blob/master/docs/TROUBLESHOOTING.md) | When something does not work |
+| [Preparing SAP](https://github.com/kts982/mcp-sap-gui/blob/master/docs/SAP_SETUP.md) | Enabling scripting, also for named users or read-only; SAP Business Client |
+| [Configuration](https://github.com/kts982/mcp-sap-gui/blob/master/docs/CONFIGURATION.md) | Every option and environment variable; profiles, HTTP, code mode |
+| [Security guide](https://github.com/kts982/mcp-sap-gui/blob/master/docs/SECURITY_GUIDE.md) | Safeguards, the transaction policy, the audit log, a recommended setup |
+| [SAP GUI versions](https://github.com/kts982/mcp-sap-gui/blob/master/docs/SAP_GUI_VERSIONS.md) | Which SAP GUI releases work, and how |
+| [Tools](https://github.com/kts982/mcp-sap-gui/blob/master/docs/TOOLS.md) | Every tool the assistant can call |
+| [CHANGELOG](https://github.com/kts982/mcp-sap-gui/blob/master/CHANGELOG.md) | What changed in each release |
+
+## What's new
+
+**0.6.0** supports MCP 2026-07-28, the newest protocol version, next to the earlier ones, and the confirmation questions work on both. It needs Python 3.11 or later, retires `sap_set_policy_profile`, names the MCP client in the audit log, and comes with reorganised documentation. Every change: [CHANGELOG](https://github.com/kts982/mcp-sap-gui/blob/master/CHANGELOG.md).
+
+## Contributing
+
+Bug reports and pull requests are welcome: [CONTRIBUTING](https://github.com/kts982/mcp-sap-gui/blob/master/CONTRIBUTING.md). Security issues: [SECURITY](https://github.com/kts982/mcp-sap-gui/blob/master/SECURITY.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/kts982/mcp-sap-gui/blob/master/LICENSE).
 
 ## Disclaimer
 
