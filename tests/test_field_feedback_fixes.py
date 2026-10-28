@@ -1896,7 +1896,7 @@ class TestPopupHtmlQuestion:
             buttons.append(button)
         usr = _child(f"{self._WND1}/usr", "GuiUserArea",
                      children=[subscreen, icon, *buttons])
-        return _child(self._WND1, "GuiModalWindow", text=f"A4H(1)/001 {title}",
+        return _child(self._WND1, "GuiModalWindow", text=f"DEV(1)/100 {title}",
                       children=[usr])
 
     def test_edge_question_is_marked_unreadable(self, discovery_path):
