@@ -1244,6 +1244,8 @@ async def _pick_session(ctx: Context, candidates: list[dict],
             "system to use, then call sap_connect_existing(system='SID') "
             "(or system='SID/client')."
         ) from exc
+    except ToolError:  # an approval already used: ask_user logged it
+        raise
     except Exception as exc:  # an answer the schema rejects (pydantic)
         log_confirmation_event(ATTACH_POINT, "sap_connect_existing",
                                "invalid_answer")
@@ -2559,6 +2561,7 @@ async def sap_set_confirmation_points(
 
     declined: list[str] = []
     note = ""
+    changed = False
     if removals:
         try:
             answer = await ask_user(
@@ -2586,14 +2589,17 @@ async def sap_set_confirmation_points(
         if not answer.yes:
             declined = removals
             note = answer.note
+            # An out-of-date answer is no decline (CHANGED_NOTE says why).
+            changed = answer.action == "changed"
 
     stored = (requested | set(declined)) - floor
     _session_mgr.set_confirmation_points(key, stored)
 
     active = sorted(effective_points(floor, stored))
     if declined:
+        lead = "Not disabled" if changed else "User declined to disable"
         message = (
-            f"User declined to disable: {', '.join(declined)}. "
+            f"{lead}: {', '.join(declined)}. "
             f"Active confirmation points: {', '.join(active)}"
             + (f".{note}" if note else "")
         )

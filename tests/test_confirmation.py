@@ -697,6 +697,18 @@ class TestTagLookupFailsClosed:
 
         assert await _confirm_mod._tool_tags(ctx, "sap_read_field") == {"write"}
 
+    async def test_tool_tags_returns_write_for_an_unknown_tool(self):
+        # FastMCP 4 returns None instead of raising.
+        ctx = MagicMock()
+        ctx.fastmcp.get_tool = AsyncMock(return_value=None)
+
+        assert await _confirm_mod._tool_tags(ctx, "no_such_tool") == {"write"}
+
+    def test_a_hashed_name_is_gated_under_the_tools_own_name(self):
+        # FastMCP 4 also routes a tool an MCP App may call as <hash>_<name>.
+        assert _confirm_mod._local_name("0123456789ab_sap_set_field") == "sap_set_field"
+        assert _confirm_mod._local_name("sap_set_field") == "sap_set_field"
+
     async def test_all_writes_still_prompts_when_the_lookup_raises(self, srv):
         """Driven at the middleware directly: patching mcp.get_tool through a
         Client would break tool dispatch itself."""

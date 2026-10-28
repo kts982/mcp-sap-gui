@@ -7,6 +7,7 @@ session list for the attach picker, the points for a removal. These tests
 change SAP between the question round and the answer round.
 """
 
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -16,7 +17,7 @@ from fastmcp.client.elicitation import ElicitResult
 from mcp_types import ElicitResult as WireElicitResult
 from mcp_types import InputRequiredResult
 
-from mcp_sap_gui import server
+from mcp_sap_gui import confirmation, server
 from tests.conftest import MCP_TEST_ERA
 from tests.test_attach import DEV_1, DEV_2, FakeController, _connections
 
@@ -91,6 +92,43 @@ async def test_save_is_not_sent_after_the_screen_changed(default_config):
     controller.send_vkey.assert_not_called()
 
 
+def _slow_answer_round(controller):
+    """check_vkey takes 300 ms when the answer round reads SAP again."""
+    calls = []
+
+    def check_vkey(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > 1:
+            time.sleep(0.3)
+
+    controller.check_vkey.side_effect = check_vkey
+
+
+async def test_a_yes_is_timed_without_the_servers_own_work(default_config, monkeypatch):
+    # The client answers at once; only the server's SAP reads in the answer
+    # round take time. That must not make the yes look like a person's.
+    monkeypatch.setattr(confirmation, "NO_DIALOG_MS", 250.0)
+    controller = _save_controller(["Maintain User Profile"] * 2)
+    _slow_answer_round(controller)
+    with patch.multiple(server, _ctrl=MagicMock(return_value=controller), _com=_inline):
+        async with Client(server.mcp, elicitation_handler=_accept) as client:
+            _, done = await _rounds(client.session, "sap_send_key", {"key": "F11"}, YES)
+    assert done.structured_content["status"] == "cancelled"
+    assert "answered yes in" in done.structured_content["error"]
+    controller.send_vkey.assert_not_called()
+
+
+async def test_a_person_who_takes_their_time_still_saves(default_config, monkeypatch):
+    monkeypatch.setattr(confirmation, "NO_DIALOG_MS", 250.0)
+    controller = _save_controller(["Maintain User Profile"] * 2)
+    with patch.multiple(server, _ctrl=MagicMock(return_value=controller), _com=_inline):
+        async with Client(server.mcp, elicitation_handler=_accept) as client:
+            _, done = await _rounds(client.session, "sap_send_key", {"key": "F11"}, YES,
+                                    between=lambda: time.sleep(0.3))
+    assert done.structured_content["confirmed_by_user"] is True
+    controller.send_vkey.assert_called_once()
+
+
 async def test_declined_save_over_mrtr(default_config):
     controller = _save_controller(["Maintain User Profile"] * 2)
     with patch.multiple(server, _ctrl=MagicMock(return_value=controller), _com=_inline):
@@ -139,6 +177,39 @@ async def test_popup_answer_for_the_same_popup_is_pressed(default_config):
                 client.session, "sap_handle_popup", {"action": "confirm"}, YES,
             )
     assert done.structured_content["confirmed_by_user"] is True
+    controller.apply_popup_plan.assert_called_once()
+
+
+async def test_an_approval_from_an_earlier_round_counts_once(monkeypatch):
+    # all_writes asks first, then the body asks about the save. Sending the
+    # second round's sealed state again must not press another popup.
+    monkeypatch.setattr(server, "config", server.ServerConfig(confirmation_floor=["all_writes"]))
+    controller = MagicMock(Busy=False)
+    plans = iter([_popup_plan(["Save changes?"])] * 2
+                 + [dict(_popup_plan(["Continue?"]), save_risk=False)])
+    controller.plan_popup_action.side_effect = lambda action, button_text: next(plans)
+    controller.apply_popup_plan.return_value = {"action": "pressed"}
+    args = {"action": "confirm"}
+    with patch.multiple(server, _ctrl=MagicMock(return_value=controller), _com=_inline):
+        async with Client(server.mcp, elicitation_handler=_accept) as client:
+            session = client.session
+            first = await session.call_tool("sap_handle_popup", args,
+                                            allow_input_required=True)
+            assert list(first.input_requests) == ["point:all_writes"]
+            second = await session.call_tool(
+                "sap_handle_popup", args, input_responses={"point:all_writes": YES},
+                request_state=first.request_state, allow_input_required=True)
+            assert list(second.input_requests) == ["save"]
+            done = await session.call_tool(
+                "sap_handle_popup", args, input_responses={"save": YES},
+                request_state=second.request_state, allow_input_required=True)
+            assert done.structured_content["confirmed_by_user"] is True
+
+            replay = await session.call_tool(
+                "sap_handle_popup", args, request_state=second.request_state,
+                allow_input_required=True)
+    assert replay.is_error
+    assert "already used" in replay.content[0].text
     controller.apply_popup_plan.assert_called_once()
 
 

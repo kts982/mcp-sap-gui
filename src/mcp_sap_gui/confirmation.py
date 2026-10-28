@@ -39,6 +39,7 @@ import mcp.types
 from fastmcp.exceptions import McpError, ToolError
 from fastmcp.server.elicitation import handle_elicit_accept, parse_elicit_response_type
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.server.providers.addressing import parse_hashed_backend_name
 from fastmcp.tools import InputRequiredToolResult, ToolResult
 from mcp_types import ElicitRequest, ElicitRequestFormParams, InputRequiredResult
 from mcp_types.version import MODERN_PROTOCOL_VERSIONS
@@ -447,8 +448,25 @@ _OUTER_TOOL: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 
+#: When the outermost call reached ConfirmationMiddleware. On MCP 2026-07-28
+#: an answer is timed from the question to the arrival of the call that
+#: carries it, not to the point where the re-run tool reaches the question:
+#: its SAP reads and any wait for the COM thread are the server's time, and
+#: would let an instant yes from the client pass as a person's.
+_ARRIVED: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "mcp_sap_gui_arrived", default=None,
+)
+
+
 def _outer_tool(ctx: Any) -> str | None:
     return _OUTER_TOOL.get()
+
+
+def _local_name(name: str) -> str:
+    """The tool's own name. A tool an MCP App may call is also reachable as
+    ``<hash>_<name>``; it is gated under its own name."""
+    hashed = parse_hashed_backend_name(name)
+    return hashed[1] if hashed else name
 
 
 def _client_can_elicit(ctx: Any) -> bool:
@@ -483,6 +501,14 @@ async def _modern_answer(
 
     state = await _round_state(ctx)
     if gate in state["approved"]:
+        # Approved in the round before this one, which then asked another
+        # question. It counts in this round only: the same sealed state sent
+        # again must not repeat the call without a question.
+        key = (state.get("round", state["nonce"]), f"approved:{gate}")
+        if key in _CONSUMED:
+            log("replayed")
+            raise ToolError(f"{tool}: this approval was already used. Nothing was executed.")
+        _CONSUMED.add(key)
         return "accept", True, None
     cfg = parse_elicit_response_type(response_type, response_title=response_title)
     answer = (getattr(ctx, "input_responses", None) or {}).get(gate)
@@ -492,7 +518,8 @@ async def _modern_answer(
             log("replayed")
             raise ToolError(f"{tool}: this approval was already used. Nothing was executed.")
         _CONSUMED.add(key)
-        elapsed = (time.time() - state["asked"][gate]) * 1000
+        arrived = _ARRIVED.get() or time.time()
+        elapsed = (arrived - state["asked"][gate]) * 1000
         if state.get("shown", {}).get(gate) != _canonical(shown):
             return "changed", None, elapsed
         action = getattr(answer, "action", None)
@@ -504,6 +531,7 @@ async def _modern_answer(
         log("unsolicited_answer")  # an answer to a question we did not ask
     state["asked"][gate] = time.time()
     state.setdefault("shown", {})[gate] = _canonical(shown)
+    state["round"] = uuid.uuid4().hex  # names this state for its approvals
     log("asked")
     return Ask(InputRequiredResult(
         result_type="input_required",
@@ -651,6 +679,8 @@ async def _tool_tags(ctx: Any, tool_name: str) -> set[str]:
         tool = await ctx.fastmcp.get_tool(tool_name)
     except Exception:
         return {"write"}
+    if tool is None:  # FastMCP 4 returns None for an unknown tool
+        return {"write"}
     return set(getattr(tool, "tags", None) or ())
 
 
@@ -679,10 +709,12 @@ class ConfirmationMiddleware(Middleware):
     ) -> ToolResult:
         if _OUTER_TOOL.get() is not None:  # called from a script
             return await self._gate(context, call_next)
-        token = _OUTER_TOOL.set(context.message.name)
+        token = _OUTER_TOOL.set(_local_name(context.message.name))
+        arrived = _ARRIVED.set(time.time())
         try:
             return await self._gate(context, call_next)
         finally:
+            _ARRIVED.reset(arrived)
             _OUTER_TOOL.reset(token)
 
     async def _gate(
@@ -694,7 +726,7 @@ class ConfirmationMiddleware(Middleware):
         if ctx is None:
             return await call_next(context)
 
-        tool_name = context.message.name
+        tool_name = _local_name(context.message.name)
         args = context.message.arguments or {}
 
         active = self._active_points(ctx)
