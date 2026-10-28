@@ -85,7 +85,7 @@ Notes:
 - Add or update tests for bug fixes and behavior changes where practical.
 - Preserve the default safety posture around blocked transactions and read-only mode.
 - If you add, remove, or rename MCP tools, update `docs/TOOLS.md` and the tool count at its top.
-- Keep examples client-agnostic where possible; Claude can be used as an example, but the server should remain usable from Codex, Copilot, Gemini CLI, and other MCP clients.
+- Keep examples client-agnostic where possible; Claude can be used as an example, but the server should remain usable from Codex, Copilot, Google Antigravity, and other MCP clients.
 - Prefer clear errors over silent fallbacks when SAP GUI state is ambiguous.
 
 ## Pull Requests

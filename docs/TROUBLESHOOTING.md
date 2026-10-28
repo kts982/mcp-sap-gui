@@ -34,7 +34,7 @@ Element IDs differ between SAP systems, releases and customizing. The assistant 
 
 ## SAP Logon exits during a read
 
-The SAP Logon crash on SAP GUI 8.00 in [issue #22](https://github.com/kts982/mcp-sap-gui/issues/22) is fixed since 0.5.1. On another SAP GUI build that fails on one-call reads, switch them off per call site with `MCP_SAP_GUI_DISABLE_OBJECT_TREE` and find the call with `MCP_SAP_GUI_TRACE_FILE`: [Switches for a misbehaving SAP GUI build](SAP_GUI_VERSIONS.md#switches-for-a-misbehaving-sap-gui-build).
+A SAP GUI build can fail on the server's one-call reads (`GetObjectTree`). Switch them off per call site with `MCP_SAP_GUI_DISABLE_OBJECT_TREE`, and find the call that fails with `MCP_SAP_GUI_TRACE_FILE`: [Switches for a misbehaving SAP GUI build](SAP_GUI_VERSIONS.md#switches-for-a-misbehaving-sap-gui-build).
 
 ## A new release is not picked up
 

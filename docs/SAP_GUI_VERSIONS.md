@@ -71,14 +71,3 @@ Two environment variables, set in the MCP client's server definition
   }
 }
 ```
-
-## Known issues
-
-- **SAP GUI 8.00: SAP Logon exits during a table-control or list read**
-  ([issue #22](https://github.com/kts982/mcp-sap-gui/issues/22)). On 8.00
-  (seen on PL14 and PL16), a `GetObjectTree` call that asks for the
-  `Selected` property fails, and SAP Logon often exits with every session in
-  it. 0.5.0 asked for it when reading table controls (`sap_read_table`) and
-  classic lists (`sap_read_list`). 0.5.1 never asks for it and reads
-  checkboxes one by one instead. On 0.5.0 with SAP GUI 8.00, avoid those two
-  reads or stay on 0.4.0.

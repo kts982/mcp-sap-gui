@@ -15,7 +15,7 @@ Tested on 2026-10-28:
 | Claude desktop app, Code tab | 2.1.308 (bundled Claude Code) | 2026-07-28 | Not shown: the app declines at once, without showing anything |
 | Claude desktop app, Chat and Cowork | | 2025-11-25 | Not supported |
 
-In a client that does not show them, everything that reads works, but a save, a popup answer that may save and any call at a confirmation point are refused, and the refusal says why. Nothing is ever done without an answer. In such a client, start the server with `--read-only` so the assistant does not try. Clients not listed here (Gemini CLI, Cursor and others) are untested: try a save on a test system and see whether the question appears.
+In a client that does not show them, everything that reads works, but a save, a popup answer that may save and any call at a confirmation point are refused, and the refusal says why. Nothing is ever done without an answer. In such a client, start the server with `--read-only` so the assistant does not try. Clients not listed here (Google Antigravity, Cursor and others) are untested: try a save on a test system and see whether the question appears.
 
 ## The launch definition
 
@@ -120,17 +120,16 @@ The app has three tabs, and none of them shows the confirmation questions (see t
   Quit the app from the tray icon and start it again after editing the file.
 - **Code** is Claude Code: it uses the same configuration as the Claude Code CLI above.
 
-## Gemini CLI
+## Google Antigravity
 
-Add the server under `mcpServers` in Gemini CLI's `settings.json`:
+The Antigravity CLI, IDE and app share one MCP configuration: `~/.gemini/config/mcp_config.json` for every project, or `.agents/mcp_config.json` in a workspace.
 
 ```json
 {
   "mcpServers": {
     "sap-gui": {
       "command": "uvx",
-      "args": ["mcp-sap-gui[screenshots]"],
-      "trust": false
+      "args": ["mcp-sap-gui[screenshots]"]
     }
   }
 }
@@ -153,4 +152,4 @@ Running the server from a source checkout instead of PyPI: [CONTRIBUTING](../CON
 - Claude Code: https://code.claude.com/docs/en/mcp
 - GitHub Copilot: https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp
 - Codex: https://developers.openai.com/learn/docs-mcp
-- Gemini CLI: https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md
+- Google Antigravity: https://antigravity.google/docs/mcp/

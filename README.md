@@ -8,7 +8,7 @@
 
 An [MCP](https://modelcontextprotocol.io/) server that lets AI assistants work in **SAP GUI for Windows**: ask in plain language, and the assistant reads screens and tables, fills in fields, runs transactions and handles popups, through SAP's own Scripting API. Saving always waits for your yes.
 
-It works with any MCP client that can start a local server: Claude Code, GitHub Copilot, Codex, Gemini CLI and others.
+It works with any MCP client that can start a local server: Claude Code, GitHub Copilot, Codex, Google Antigravity and others.
 
 <img src="https://raw.githubusercontent.com/kts982/mcp-sap-gui/master/docs/images/sap-preview-card.png" alt="sap_preview card in VS Code Copilot Chat: the SAP screen and the values about to be written" width="640">
 
