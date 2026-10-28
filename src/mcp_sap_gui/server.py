@@ -39,6 +39,7 @@ from . import __version__
 from .audit import AuditMiddleware
 from .confirmation import (
     ATTACH_POINT,
+    NO_DIALOGS_NOTE,
     SAVE_POINT,
     SETTABLE_POINTS,
     Ask,
@@ -996,7 +997,8 @@ async def _elicit_save(ctx: Context, message: str,
         log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
         raise ValueError(
             f"Save action requires confirmation but the client does not "
-            f"support elicitation: {exc}"
+            f"support elicitation ({exc}). Nothing was sent to SAP."
+            f"{NO_DIALOGS_NOTE}"
         ) from exc
 
     if isinstance(answer, Ask):
@@ -2575,7 +2577,8 @@ async def sap_set_confirmation_points(
                                        "unsupported_client")
             raise ValueError(
                 f"Disabling a confirmation point requires confirmation but the "
-                f"client does not support elicitation: {exc}"
+                f"client does not support elicitation ({exc}). The points stay "
+                f"on.{NO_DIALOGS_NOTE}"
             ) from exc
 
         if isinstance(answer, Ask):

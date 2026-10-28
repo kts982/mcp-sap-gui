@@ -298,6 +298,17 @@ def no_dialog_note(elapsed_ms: float) -> str:
     )
 
 
+# For a client without elicitation (the Claude desktop app's Chat and Cowork
+# tabs): without it the agent guessed which clients work, and offered to turn
+# the point off, which needs the same dialog (a --confirm point never goes).
+NO_DIALOGS_NOTE = (
+    " This client cannot show MCP confirmation dialogs, so the user cannot "
+    "approve this here, and a confirmation point cannot be turned off here "
+    "either. Tell the user, and use a client that shows MCP confirmation "
+    "dialogs."
+)
+
+
 def fast_yes_note(elapsed_ms: float) -> str:
     """The sentence for a yes that came back too fast for a person.
 
@@ -719,7 +730,8 @@ class ConfirmationMiddleware(Middleware):
             log_confirmation_event(point, tool_name, "unsupported_client")
             raise ToolError(
                 f"{tool_name} is gated by confirmation point '{point}' but the "
-                f"client does not support elicitation: {exc}"
+                f"client does not support elicitation ({exc}). Nothing was "
+                f"executed.{NO_DIALOGS_NOTE}"
             ) from exc
 
         if isinstance(answer, Ask):

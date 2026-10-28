@@ -334,9 +334,10 @@ class TestConfirmationPointTool:
             side_effect=mcp_error(INVALID_REQUEST, "Elicitation not supported")
         )
 
-        with pytest.raises(ValueError, match="does not support elicitation"):
+        with pytest.raises(ValueError, match="does not support elicitation") as exc:
             await srv.sap_set_confirmation_points([], ctx)
 
+        assert "The points stay on." in str(exc.value)
         assert srv._session_mgr.get_confirmation_points(
             srv._session_key(ctx)
         ) == {"field_writes"}
@@ -753,6 +754,11 @@ class TestFailClosed:
 
         assert result.is_error
         assert "does not support elicitation" in _text(result)
+        # Live (Claude desktop Chat, Cowork): what to tell the user, and that
+        # turning the point off is no way out.
+        assert "Nothing was executed" in _text(result)
+        assert "cannot be turned off here either" in _text(result)
+        assert "use a client that shows MCP confirmation dialogs" in _text(result)
         controller.set_field.assert_not_called()
 
     async def test_save_gate_still_fails_closed(self, srv):
@@ -768,6 +774,8 @@ class TestFailClosed:
 
         assert result.is_error
         assert "does not support elicitation" in _text(result)
+        assert "Nothing was sent to SAP" in _text(result)
+        assert "use a client that shows MCP confirmation dialogs" in _text(result)
         controller.send_vkey.assert_not_called()
 
 
