@@ -358,7 +358,7 @@ lines; `empty_rows_from` is where the data ends. To jump to an entry use the \
 Never `sap_read_tree` SPRO (1000+ nodes). `sap_search_tree_nodes` searches \
 expanded nodes only: expand parents with \
 `sap_get_tree_node_children(expand=true)`. Run an activity with \
-`sap_click_tree_link(tree_id, node_key, "2")`; a double-click opens its \
+`sap_click_tree_link(tree_id, node_key, "2")`; column "1" opens its \
 documentation. In a view cluster (SM34) use `double_click_tree_item` with the \
 column name (usually "Column1").
 
@@ -461,7 +461,8 @@ SPRO (transaction SPRO) is SAP's customizing tree with 1000+ nodes.
 4. Navigate to the node using `sap_get_tree_node_children` with `expand=true`
 5. Execute the activity: `sap_click_tree_link(tree_id, node_key, "2")`
    - Column "2" is the execute/activity icon in SPRO trees
-   - Do NOT use `double_click_tree_node` — that opens documentation
+   - Do NOT use `double_click_tree_node` — it does not run the activity
+   - Column "1" opens the activity's documentation
 6. Handle the resulting screen (often a popup selection screen or table maintenance view)
 
 ## Table Maintenance Views (SM30-style)
@@ -516,8 +517,9 @@ top-level area of a window (title, menu bar, toolbars, user area, status bar, \
 docking containers)
 - Read the structure with `sap_read_tree`; switch to a node's view with \
 `sap_double_click_tree_item(tree_id, node_key, "Column1")` (take the column name \
-from `column_names`). `sap_double_click_tree_node` reports success there but does \
-NOT switch the view — check that the window title changed
+from `column_names`). The tree reacts only to item double-clicks, so \
+`sap_double_click_tree_node` is sent as one (`sent_as`); either way check that \
+the window title changed
 - A dependent node (child level) needs its parent entry selected in the table first
 
 ## Known Limits of SAP GUI Scripting
@@ -2129,7 +2131,10 @@ async def sap_read_tree(tree_id: str, ctx: Context, max_nodes: int = 200) -> dic
     specific nodes by text.
 
     total_nodes is the number of nodes read; truncated=true means the tree
-    has more loaded nodes (available_nodes) than max_nodes allowed."""
+    has more loaded nodes (available_nodes) than max_nodes allowed.
+    events lists what the application reacts to on this tree (e.g.
+    link_click, item_double_click, node_double_click): other clicks do
+    nothing there."""
     c = _ctrl(ctx)
     capped = min(max_nodes, config.max_table_rows)
     return _note_cap(
@@ -2171,9 +2176,14 @@ async def sap_select_tree_node(tree_id: str, node_key: str, ctx: Context) -> dic
 async def sap_double_click_tree_node(tree_id: str, node_key: str, ctx: Context) -> dict:
     """Double-click a node in a tree control (often opens details or drills down).
 
-    In SPRO/customizing trees, this may open documentation (hypertext)
-    rather than executing the activity. Use sap_click_tree_link on the
-    execute column (typically column '2') for SPRO activities."""
+    Selects the node first, as a mouse double-click does. A tree that
+    reacts only to item double-clicks (SM34 view clusters) gets one on the
+    node's text (sent_as: item_double_click); a warning says when the tree
+    reacts to no double-click at all. node_keys_changed=true means the tree
+    numbered its nodes anew: read it again before the next tree call.
+
+    It does not run an SPRO activity: use sap_click_tree_link on the
+    execute column (typically column '2')."""
     _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.double_click_tree_node(tree_id, node_key))
@@ -2186,7 +2196,11 @@ async def sap_double_click_tree_item(
     """Double-click a specific item (column cell) in a tree node row.
 
     item_name is the column name (e.g., 'Column1', 'Column2').
-    Use sap_read_tree to discover column names for the tree."""
+    Use sap_read_tree to discover column names for the tree.
+    Selects the item first, as a mouse double-click does. A tree that
+    reacts only to node double-clicks gets one (sent_as:
+    node_double_click). node_keys_changed=true means the tree numbered its
+    nodes anew: read it again before the next tree call."""
     _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(
@@ -2199,8 +2213,9 @@ async def sap_click_tree_link(tree_id: str, node_key: str, item_name: str, ctx: 
     """Click a hyperlink in a tree node item.
 
     For SPRO/customizing trees, click on the execute icon column
-    (typically item_name='2') to run an activity. Use sap_read_tree
-    to see which columns have link-type items."""
+    (typically item_name='2') to run an activity; '1' opens its
+    documentation. Use sap_read_tree to see which columns have link-type
+    items. node_keys_changed=true means the tree numbered its nodes anew."""
     _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(
@@ -2247,7 +2262,8 @@ async def sap_get_tree_node_children(tree_id: str, ctx: Context, node_key: str =
     """Get direct children of a tree node. Much faster than read_tree for
     step-by-step navigation of deep trees (e.g., SPRO).
 
-    Omit node_key or pass empty string for root-level nodes.
+    Omit node_key or pass empty string for root-level nodes; that answer
+    also lists the tree's events (what the application reacts to).
     Set expand=true to expand the node first (requires write permission)."""
     if expand:
         _check_write(ctx)

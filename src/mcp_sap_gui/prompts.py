@@ -258,9 +258,9 @@ Once you have the node key, use `sap_click_tree_link` with column `"2"`:
 sap_click_tree_link("<tree_id>", "<node_key>", "2")
 ```
 
-**CRITICAL**: Do NOT use `sap_double_click_tree_node` — in SPRO that opens
-documentation (hypertext), not the activity. Always use `sap_click_tree_link`
-on column `"2"` (the execute icon).
+**CRITICAL**: Do NOT use `sap_double_click_tree_node` — in SPRO it does not
+run the activity. Always use `sap_click_tree_link` on column `"2"` (the
+execute icon); column `"1"` opens the activity's documentation (hypertext).
 
 ## Step 5 — Handle the result
 After clicking, check for popups:
@@ -470,8 +470,9 @@ sap_read_tree("wnd[0]/shellcont/shell")
 ```
 sap_double_click_tree_item("wnd[0]/shellcont/shell", "<node_key>", "Column1")
 ```
-- `sap_double_click_tree_node` reports success there but does NOT switch the view. \
-Always verify: the window title changes to the node's name.
+- The tree reacts only to item double-clicks: a node double-click does NOT switch \
+the view by itself, so `sap_double_click_tree_node` sends it as an item \
+double-click (`sent_as`). Always verify: the window title changes to the node's name.
 - A dependent node (a child in the tree) shows the entries OF the selected parent \
 entry. Select the parent row first, then open the child:
 ```
@@ -510,7 +511,7 @@ and ask; change the field first if it is wrong. Never confirm it blindly.
 
 ## Common pitfalls
 - Looking for the dialog-structure tree under `wnd[0]/usr` (it is under `wnd[0]/shellcont`)
-- Using `sap_double_click_tree_node` in a view cluster and assuming the view switched
+- Assuming the view switched without checking the window title
 - Opening a child node without a selected parent entry
 - Treating `total_rows` as the number of entries
 - Pressing F5 to "refresh" (it creates new entries)

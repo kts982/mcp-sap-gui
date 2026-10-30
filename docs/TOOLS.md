@@ -11,7 +11,7 @@ ID handling:
 
 - Pass normal SAP GUI IDs such as `wnd[0]/usr/...`, `wnd[0]/tbar[1]/btn[8]`, or `wnd[0]/mbar/menu[3]/menu[0]`.
 - Full session paths such as `/app/con[0]/ses[0]/wnd[0]/usr/...` are accepted and normalized automatically.
-- Docking containers sit beside the user area, not inside it: the dialog-structure tree of a view cluster (SM34, most IMG activities) is under `wnd[0]/shellcont/...`. `sap_get_screen_elements` lists them as `docking_containers`; pass `container_id="wnd[0]"` with `max_depth=1` to see all top-level areas of a window. Switch views in such a tree with `sap_double_click_tree_item(tree_id, node_key, "Column1")`; `sap_double_click_tree_node` does not navigate there.
+- Docking containers sit beside the user area, not inside it: the dialog-structure tree of a view cluster (SM34, most IMG activities) is under `wnd[0]/shellcont/...`. `sap_get_screen_elements` lists them as `docking_containers`; pass `container_id="wnd[0]"` with `max_depth=1` to see all top-level areas of a window. Switch views in such a tree with `sap_double_click_tree_item(tree_id, node_key, "Column1")`. The tree reacts only to item double-clicks, so `sap_double_click_tree_node` is sent as one there (`sent_as`).
 - Malformed IDs are rejected before they reach SAP GUI scripting.
 
 ## Policy Profiles
@@ -208,8 +208,9 @@ and the pending-values table (requires the optional `apps` extra; see
 
 1. Never `sap_read_tree` the SPRO tree: it has more than 1,000 nodes. `sap_read_tree` suits small trees.
 2. Expand the parents with `sap_get_tree_node_children(expand=true)`, then `sap_search_tree_nodes`, which searches expanded nodes only.
-3. Run an IMG activity with `sap_click_tree_link(tree_id, node_key, "2")`; a double-click opens its documentation instead.
+3. Run an IMG activity with `sap_click_tree_link(tree_id, node_key, "2")`; column `"1"` opens its documentation. A double-click does not run it.
 4. In a view cluster (SM34), switch views with `sap_double_click_tree_item(tree_id, node_key, "Column1")`.
+5. `sap_read_tree` and the root listing of `sap_get_tree_node_children` name the tree's `events`: what the application reacts to (`link_click`, `item_double_click`, `node_double_click`, ...). A double-click selects the node first, as a mouse does, and is sent the way the tree expects (`sent_as`). Some trees (SE19's BAdI implementation tree) number their nodes anew after every round trip: `node_keys_changed: true` in a response means read the tree again before the next tree call.
 
 ## Workflow Prompts
 
