@@ -1495,9 +1495,11 @@ async def sap_get_screen_info(ctx: Context) -> dict:
     Present only when set: subscreens, the sub-screens on the active window
     as "program:dynnr", outer first (program / screen_number name only the
     main screen, so an RF step, a tab page or a detail area that changes
-    shows only here), and cursor, the ID of the field the cursor is in. A
+    shows only here), cursor, the ID of the field the cursor is in (a
     screen redisplayed without a message, e.g. for an empty required
-    field, still moves the cursor to that field."""
+    field, still moves the cursor to that field), and buttons, the
+    pushbuttons with a text in the main window's user area as {ID: text}
+    (RF menu pages differ only in these; left out above 15 buttons)."""
     c = _ctrl(ctx)
     return await _com(c.get_screen_info)
 
