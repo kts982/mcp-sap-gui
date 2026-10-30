@@ -2,6 +2,14 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
+## Unreleased
+
+### Fixed
+
+- **Tree double-clicks reach the application as a mouse double-click does** ([#39](https://github.com/kts982/mcp-sap-gui/pull/39)). In SE19's BAdI implementation editor the tree could not be driven: `sap_double_click_tree_item` reported `double_clicked` and nothing opened, because SE19 opens the selected node, not the one the event names. A double-click now selects the node first. It is also sent the way the tree registered it (`GuiShell.OcxEvents`): in an SM34 view cluster, which reacts only to item double-clicks, `sap_double_click_tree_node` now switches the view (`sent_as: item_double_click`), and in `/SCWM/MON`, which reacts only to node double-clicks, `sap_double_click_tree_item` now opens the node. A tree that reacts to no double-click still gets the click, with a `warning` that names what it does react to. `sap_read_tree` and the root listing of `sap_get_tree_node_children` list the tree's `events`.
+- **A tree that renumbers its nodes no longer ends in a bare COM error** ([#39](https://github.com/kts982/mcp-sap-gui/pull/39)). SE19's tree numbers its nodes anew after every round trip, so the next call with an old key failed with "Exception occurred". The error now says the key is no longer in the tree and to read the tree again, and a double-click or link click that renumbered the tree returns `node_keys_changed: true`.
+- **The SPRO guidance said a double-click opens an activity's documentation.** It does nothing there; link column `"1"` opens the documentation, column `"2"` runs the activity. Corrected in the server instructions, the SPRO guide and the tool descriptions.
+
 ## 0.6.0 — 2026-10-28
 
 Support for MCP 2026-07-28 next to the earlier protocol versions, with confirmation questions that hold on both; Python 3.11 or later; documentation reorganised by task.
