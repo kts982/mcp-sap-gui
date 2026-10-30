@@ -14,6 +14,9 @@ from .models import _TOOLBAR_BUTTON_TYPES, VKey
 
 logger = logging.getLogger(__name__)
 
+# A cell selection in Free mode can be a large rectangle: list this many.
+_MAX_SELECTED_CELLS = 100
+
 
 def _is_blank_cell(value: Any) -> bool:
     """True for a table-control cell with nothing in it.
@@ -370,6 +373,14 @@ class TablesMixin:
             "column_info": column_info,
             "data": data,
         }
+        try:
+            title = str(grid.Title).strip()
+        except Exception:
+            title = ""
+        if title:
+            # Which list this is: two grids of /SCWM/MON differ only here.
+            result["title"] = title
+        result.update(self._alv_selection(grid))
         if columns_only:
             result["columns_only"] = True
         if unread_from is not None:
@@ -381,6 +392,53 @@ class TablesMixin:
                 "rows on screen can be read here."
             )
         return result
+
+    @staticmethod
+    def _alv_selection(grid) -> Dict[str, Any]:
+        """The grid's selection, only the parts that are set.
+
+        Toolbar and menu functions act on the selected rows, so this is
+        what they would act on. selected_rows stays in SAP's own form
+        ("1,2,4-8,10"): selecting every row of a large grid would otherwise
+        list them all.
+        """
+        selection: Dict[str, Any] = {}
+        try:
+            rows = str(grid.SelectedRows).strip()
+        except Exception:
+            rows = ""
+        if rows:
+            selection["selected_rows"] = rows
+            count = 0
+            for part in rows.split(","):
+                low, _, high = part.strip().partition("-")
+                try:
+                    count += int(high or low) - int(low) + 1
+                except ValueError:
+                    count = None
+                    break
+            if count is not None:
+                selection["selected_row_count"] = count
+        try:
+            cells = grid.SelectedCells
+            cell_list = []
+            for i in range(min(cells.Count, _MAX_SELECTED_CELLS)):
+                row, _, column = str(cells(i)).partition(",")
+                cell_list.append({"row": int(row), "column": column})
+            if cell_list:
+                selection["selected_cells"] = cell_list
+                if cells.Count > len(cell_list):
+                    selection["selected_cell_count"] = cells.Count
+        except Exception:
+            pass
+        try:
+            columns = grid.SelectedColumns
+            column_list = [str(columns(i)) for i in range(columns.Count)]
+            if column_list:
+                selection["selected_columns"] = column_list
+        except Exception:
+            pass
+        return selection
 
     @staticmethod
     def _start_row_note(start_row: Optional[int], start_position: int,
@@ -608,6 +666,9 @@ class TablesMixin:
 
                 buttons.append(btn_info)
 
+            # No "open menu" here: CurrentContextMenu keeps the last menu's
+            # items after the menu closed (seen live, SAP GUI 8.10), so it
+            # cannot tell whether one is open now.
             return {
                 "grid_id": grid_id,
                 "button_count": button_count,

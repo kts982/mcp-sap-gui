@@ -1768,7 +1768,12 @@ async def sap_read_table(
     explains a clamped or failed scroll. total_rows counts its empty lines
     too (SM30 pads the view). When the read reaches the first empty row,
     the response has empty_rows_from, that row's absolute index: the data
-    ends there."""
+    ends there.
+
+    An ALV grid read also gives, when set: title (which list this is) and
+    the selection that toolbar and menu functions act on: selected_rows in
+    SAP's form ("1,2,4-8,10") with selected_row_count, selected_cells,
+    selected_columns."""
     c = _ctrl(ctx)
     capped = min(max_rows, config.max_table_rows)
     return _note_cap(await _com(lambda: c.read_table(
