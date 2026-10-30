@@ -4,6 +4,10 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ## Unreleased
 
+### Added
+
+- **An ALV read names the grid and what is selected** ([#40](https://github.com/kts982/mcp-sap-gui/pull/40)). `sap_read_table` on an ALV grid adds, when set, the grid's `title` and its selection: `selected_rows` in SAP's own form (`"1,2,4-8,10"`) with `selected_row_count`, `selected_cells` and `selected_columns`. Toolbar and menu functions, such as the "More Methods" of `/SCWM/MON`, act on the selected rows; the tools could set that selection but not read it. The title tells two grids on one screen apart.
+
 ### Fixed
 
 - **Tree double-clicks reach the application as a mouse double-click does** ([#39](https://github.com/kts982/mcp-sap-gui/pull/39)). In SE19's BAdI implementation editor the tree could not be driven: `sap_double_click_tree_item` reported `double_clicked` and nothing opened, because SE19 opens the selected node, not the one the event names. A double-click now selects the node first. It is also sent the way the tree registered it (`GuiShell.OcxEvents`): in an SM34 view cluster, which reacts only to item double-clicks, `sap_double_click_tree_node` now switches the view (`sent_as: item_double_click`), and in `/SCWM/MON`, which reacts only to node double-clicks, `sap_double_click_tree_item` now opens the node. A tree that reacts to no double-click still gets the click, with a `warning` that names what it does react to. `sap_read_tree` and the root listing of `sap_get_tree_node_children` list the tree's `events`.
