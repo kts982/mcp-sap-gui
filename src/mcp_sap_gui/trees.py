@@ -6,9 +6,44 @@ SAP GUI tree controls (SimpleTree, ListTree, ColumnTree).
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+# GuiShell.OcxEvents lists the events the application registered on a tree:
+# the only events that reach it. The ids are the tree control's own, the
+# ABAP constants CL_TREE_CONTROL_BASE / CL_ITEM_TREE_CONTROL=>EVENTID_*.
+_TREE_EVENT_NAMES = {
+    18: "expand_no_children",
+    21: "selection_changed",
+    22: "item_double_click",
+    25: "node_double_click",
+    26: "item_context_menu",
+    28: "header_click",
+    29: "button_click",
+    33: "checkbox_change",
+    35: "link_click",
+    36: "node_context_menu",
+    39: "item_keypress",
+    40: "node_keypress",
+    41: "header_context_menu",
+    42: "default_context_menu",
+    45: "drop_external_files",
+}
+_SELECTION_CHANGED = 21
+_ITEM_DOUBLE_CLICK = 22
+_NODE_DOUBLE_CLICK = 25
+
+# GetSelectionMode 1 (multiple nodes) and 3 (multiple items): SelectNode
+# adds to the selection there instead of replacing it.
+_MULTIPLE_SELECTION_MODES = (1, 3)
+
+_STALE_NODE_KEY = (
+    "Node key {key!r} is not in the tree (any more). Some trees number "
+    "their nodes anew after every round trip (SE19 does): read the tree "
+    "again (sap_read_tree or sap_get_tree_node_children) and use the "
+    "current key."
+)
 
 
 class TreesMixin:
@@ -100,6 +135,137 @@ class TreesMixin:
                     logger.debug("GetColumnHeaders fallback failed: %s", e)
 
         return column_names, column_titles
+
+    def _tree_events(self, tree) -> Optional[Set[int]]:
+        """Event ids the application registered on *tree*; None if unknown."""
+        try:
+            events = tree.OcxEvents
+            return {int(events(i)) for i in range(events.Count)}
+        except Exception as e:
+            logger.debug("OcxEvents not readable: %s", e)
+            return None
+
+    @staticmethod
+    def _event_names(events: Set[int]) -> List[str]:
+        return [_TREE_EVENT_NAMES.get(e, f"event_{e}") for e in sorted(events)]
+
+    def _node_key_gone(self, tree_id: str, node_key: str) -> bool:
+        """True when the tree is still there but *node_key* is not.
+
+        GetHierarchyLevel raises for an unknown key; GetNodeTextByKey
+        returns '' and cannot tell.
+        """
+        try:
+            tree = self._find_element(tree_id)
+        except Exception:
+            return False
+        try:
+            tree.GetHierarchyLevel(node_key)
+            return False
+        except Exception:
+            return True
+
+    def _tree_error(self, context: Dict[str, Any], exc: Exception,
+                    fallback: str) -> Dict[str, Any]:
+        """Error result that says so when the node key went stale."""
+        node_key = context.get("node_key")
+        if node_key and self._node_key_gone(context["tree_id"], node_key):
+            logger.warning("%s: %s (node key no longer in the tree)", fallback, exc)
+            result = dict(context)
+            result["error"] = _STALE_NODE_KEY.format(key=node_key)
+            return result
+        return self._error_result(context, exc, fallback)
+
+    def _text_item(self, tree, node_key: str) -> str:
+        """The item that shows the node's text: where a mouse double-click lands.
+
+        Not simply the first column: SPRO's first columns are icon links
+        ('1' opens the documentation, '2' runs the activity), its text is
+        in 'TEXT', and GetColumnNames leaves out its '&Hierarchy' column.
+        """
+        column_names, _ = self._get_tree_column_info(tree)
+        for name in [*column_names, "&Hierarchy"]:
+            try:
+                if tree.GetItemText(node_key, name):
+                    return name
+            except Exception:
+                continue
+        return ""
+
+    def _select_before_double_click(self, tree, node_key: str,
+                                    item_name: str = "") -> None:
+        """Select the node first, as a mouse double-click does.
+
+        Some applications act on the selected node, not on the one the
+        event names (SE19's BAdI implementation tree). A failed selection
+        is logged only: the double-click is still sent.
+        """
+        if item_name:
+            try:
+                tree.SelectItem(node_key, item_name)  # replaces the selection
+                return
+            except Exception as e:
+                logger.debug("SelectItem(%r, %r) failed: %s", node_key, item_name, e)
+        try:
+            multiple = tree.GetSelectionMode() in _MULTIPLE_SELECTION_MODES
+        except Exception:
+            multiple = False
+        try:
+            if multiple:
+                tree.UnselectAll()
+            tree.SelectNode(node_key)
+        except Exception as e:
+            logger.debug("SelectNode(%r) failed: %s", node_key, e)
+
+    def _double_click(self, tree_id: str, node_key: str,
+                      item_name: str = "") -> Dict[str, Any]:
+        """Double-click a node (no item_name) or an item, as a mouse does.
+
+        Sends the double-click the application registered: a tree that
+        handles only item double-clicks (SM34 view clusters, SPRO) ignores
+        a node double-click, and the other way round.
+        """
+        tree = self._find_element(tree_id)
+        events = self._tree_events(tree)
+        send_item = bool(item_name)
+        result: Dict[str, Any] = {}
+        if events is not None:
+            has_node = _NODE_DOUBLE_CLICK in events
+            has_item = _ITEM_DOUBLE_CLICK in events
+            if send_item and not has_item and has_node:
+                send_item = False
+                result["sent_as"] = "node_double_click"
+            elif not send_item and not has_node and has_item:
+                item_name = self._text_item(tree, node_key)
+                if item_name:
+                    send_item = True
+                    result["sent_as"] = "item_double_click"
+                    result["item_name"] = item_name
+            if not (has_node or has_item):
+                result["warning"] = (
+                    "This tree reacts to no double-click, so it was probably "
+                    "ignored. Registered events: "
+                    + (", ".join(self._event_names(events)) or "none")
+                    + ". For link_click use sap_click_tree_link."
+                )
+            elif not send_item and not has_node:
+                result["warning"] = (
+                    "This tree reacts only to item double-clicks: use "
+                    "sap_double_click_tree_item with a column from sap_read_tree."
+                )
+
+        self._select_before_double_click(tree, node_key, item_name if send_item else "")
+        if events and _SELECTION_CHANGED in events:
+            # The selection was a round trip of its own: find the tree again.
+            tree = self._find_element(tree_id)
+        if send_item:
+            tree.DoubleClickItem(node_key, item_name)
+        else:
+            tree.DoubleClickNode(node_key)
+
+        if self._node_key_gone(tree_id, node_key):
+            result["node_keys_changed"] = True
+        return result
 
     def read_tree(self, tree_id: str, max_nodes: int = 200) -> Dict[str, Any]:
         """
@@ -234,7 +400,7 @@ class TreesMixin:
 
                 nodes.append(node)
 
-            return {
+            result = {
                 "tree_id": tree_id,
                 "tree_type": tree_type,
                 "hierarchy_title": hierarchy_title,
@@ -248,6 +414,12 @@ class TreesMixin:
                 "column_names": column_names,
                 "nodes": nodes,
             }
+            # What the application reacts to, e.g. link_click or only
+            # item_double_click: left out when SAP GUI does not say.
+            events = self._tree_events(tree)
+            if events is not None:
+                result["events"] = self._event_names(events)
+            return result
 
         except Exception as e:
             return self._error_result(
@@ -280,7 +452,7 @@ class TreesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return self._error_result(
+            return self._tree_error(
                 {"tree_id": tree_id, "node_key": node_key},
                 e,
                 "Could not expand tree node",
@@ -310,7 +482,7 @@ class TreesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return self._error_result(
+            return self._tree_error(
                 {"tree_id": tree_id, "node_key": node_key},
                 e,
                 "Could not collapse tree node",
@@ -340,7 +512,7 @@ class TreesMixin:
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return self._error_result(
+            return self._tree_error(
                 {"tree_id": tree_id, "node_key": node_key},
                 e,
                 "Could not select tree node",
@@ -355,22 +527,23 @@ class TreesMixin:
             node_key: The key of the node to double-click
 
         Returns:
-            Dict with result status and screen info
+            Dict with result status and screen info; ``sent_as`` when the
+            tree registered only the item double-click, ``node_keys_changed``
+            when the tree renumbered its nodes.
         """
         self._require_session()
 
         try:
-            tree = self._find_element(tree_id)
-            tree.DoubleClickNode(node_key)
-
+            sent = self._double_click(tree_id, node_key)
             return {
                 "tree_id": tree_id,
                 "node_key": node_key,
                 "status": "double_clicked",
+                **sent,
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return self._error_result(
+            return self._tree_error(
                 {"tree_id": tree_id, "node_key": node_key},
                 e,
                 "Could not double-click tree node",
@@ -390,23 +563,24 @@ class TreesMixin:
             item_name: Column name / item name to double-click
 
         Returns:
-            Dict with result status and screen info
+            Dict with result status and screen info; ``sent_as`` when the
+            tree registered only the node double-click, ``node_keys_changed``
+            when the tree renumbered its nodes.
         """
         self._require_session()
 
         try:
-            tree = self._find_element(tree_id)
-            tree.DoubleClickItem(node_key, item_name)
-
+            sent = self._double_click(tree_id, node_key, item_name)
             return {
                 "tree_id": tree_id,
                 "node_key": node_key,
                 "item_name": item_name,
                 "status": "double_clicked",
+                **sent,
                 "screen": self.get_screen_info(),
             }
         except Exception as e:
-            return self._error_result(
+            return self._tree_error(
                 {
                     "tree_id": tree_id,
                     "node_key": node_key,
@@ -435,15 +609,18 @@ class TreesMixin:
             tree = self._find_element(tree_id)
             tree.ClickLink(node_key, item_name)
 
-            return {
+            result = {
                 "tree_id": tree_id,
                 "node_key": node_key,
                 "item_name": item_name,
                 "status": "clicked",
-                "screen": self.get_screen_info(),
             }
+            if self._node_key_gone(tree_id, node_key):
+                result["node_keys_changed"] = True
+            result["screen"] = self.get_screen_info()
+            return result
         except Exception as e:
-            return self._error_result(
+            return self._tree_error(
                 {
                     "tree_id": tree_id,
                     "node_key": node_key,
@@ -703,6 +880,11 @@ class TreesMixin:
             if node_key:
                 result["node_text"] = self._get_node_text(tree, node_key, column_names)
                 result["path"] = self._build_ancestor_path(tree, node_key, column_names)
+            else:
+                # First look at the tree: say what the application reacts to.
+                events = self._tree_events(tree)
+                if events is not None:
+                    result["events"] = self._event_names(events)
 
             if expand and node_key:
                 result["screen"] = self.get_screen_info()

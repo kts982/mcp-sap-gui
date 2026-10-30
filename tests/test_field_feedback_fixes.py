@@ -1555,7 +1555,7 @@ class TestSm30Guide:
         for lesson in (
             "wnd[0]/shellcont",              # the tree is a docking container
             "sap_double_click_tree_item",    # ...and needs an item double-click
-            "does NOT switch the view",
+            "does NOT switch",               # a node double-click by itself
             "Select the parent row first",
             "cell_id",                       # cell IDs come from the schema
             "name_is_title",
