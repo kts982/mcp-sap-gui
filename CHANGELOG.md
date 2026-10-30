@@ -6,6 +6,7 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ### Added
 
+- **The screen info names the buttons on the screen** ([#41](https://github.com/kts982/mcp-sap-gui/pull/41)). Every action response now carries `buttons`, the pushbuttons with a text in the main window's user area as `{ID: text}`. EWM RF menu pages share one sub-screen and one cursor field, so before this each page looked the same and needed an element list; and an RF F-key button changes its meaning ("F1 Logoff" on a menu, "F1 Save" on the logoff screen). Only the buttons' texts are read, about 1.5 ms each; a screen without buttons costs nothing. Icon-only buttons and popups (their digest lists the buttons) are left out, and so is a screen with more than 15 buttons.
 - **An ALV read names the grid and what is selected** ([#40](https://github.com/kts982/mcp-sap-gui/pull/40)). `sap_read_table` on an ALV grid adds, when set, the grid's `title` and its selection: `selected_rows` in SAP's own form (`"1,2,4-8,10"`) with `selected_row_count`, `selected_cells` and `selected_columns`. Toolbar and menu functions, such as the "More Methods" of `/SCWM/MON`, act on the selected rows; the tools could set that selection but not read it. The title tells two grids on one screen apart.
 
 ### Fixed
