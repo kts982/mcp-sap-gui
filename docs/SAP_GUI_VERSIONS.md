@@ -50,7 +50,9 @@ Two environment variables, set in the MCP client's server definition
 - `MCP_SAP_GUI_DISABLE_OBJECT_TREE` turns `GetObjectTree` off. Use `all`, or
   a comma list of the call sites `table`, `popup`, `list`, `elements` and
   `subscreens`. A disabled site reads element by element, as on a release
-  before 7.70 PL3. An unknown site name stops the server at start-up.
+  before 7.70 PL3; with `subscreens` off, the screen info has neither
+  `subscreens` nor `buttons`. An unknown site name stops the server at
+  start-up.
 - `MCP_SAP_GUI_TRACE_FILE` names a file that gets a `start` line before each
   `GetObjectTree` call and a `done` or `failed` line after it, written to disk
   at once. If SAP Logon exits, the last `start` with nothing after it is the

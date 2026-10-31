@@ -158,6 +158,13 @@ def _trace_object_tree(phase: str, site: str, root_id: str, detail: str = "") ->
 _SUBSCREEN_ID_RE = re.compile(
     r"/s?sub[A-Za-z0-9_]*:((?:/[A-Za-z0-9_]+/)?[A-Za-z0-9_]+):(\d{4})$"
 )
+# A pushbutton, its name namespaced or not (btn/SCWM/S_RF_SCRELM-MENU1);
+# not a button cell of a table control ([column,row]).
+_BUTTON_ID_RE = re.compile(r"/btn(?:/[A-Za-z0-9_]+/)?[^/\[]*$")
+# Buttons with a text in the main window's user area, by ID: RF menu pages
+# differ only in these, and an F-key button changes meaning ("F1 Logoff",
+# "F1 Save"). A screen with more (a busy form) leaves them out: discover.
+_MAX_SCREEN_BUTTONS = 15
 
 
 def _identity_dict(system: Any, client: Any, user: Any) -> Dict[str, str]:
@@ -1237,12 +1244,17 @@ class SAPGUIControllerBase:
                 result["message_has_long_text"] = True
             if status.get("as_popup"):
                 result["message_as_popup"] = True
-            subscreens = self._subscreens(active_wnd_id)
+            subscreens, button_ids = self._user_area_ids(active_wnd_id)
             if subscreens:
                 result["subscreens"] = subscreens
             cursor = self._cursor_field(active)
             if cursor:
                 result["cursor"] = cursor
+            # A popup's buttons are in its digest below.
+            if active_wnd_id == "wnd[0]":
+                buttons = self._button_texts(button_ids)
+                if buttons:
+                    result["buttons"] = buttons
 
             # A popup opened: say what it is in THIS response, so the caller
             # sees pre-filled values before deciding to confirm it.
@@ -1255,19 +1267,21 @@ class SAPGUIControllerBase:
         except Exception as e:
             return self._error_result({}, e, "Could not read screen information")
 
-    def _subscreens(self, window_id: str) -> List[str]:
-        """The sub-screens on the window, outer first, as ``program:dynnr``.
+    def _user_area_ids(self, window_id: str) -> Tuple[List[str], List[str]]:
+        """The window's sub-screens and pushbutton IDs, in one walk.
 
-        Info.Program / ScreenNumber name only the main screen: an RF step,
-        a tab page or a header/item area is a sub-screen, and when only it
-        changes the screen info looks the same. One GetObjectTree call
-        (1-9 ms live, against up to 180 ms walking the elements over COM);
-        an older SAP GUI without it reports none.
+        Sub-screens come outer first, as ``program:dynnr``: Info.Program /
+        ScreenNumber name only the main screen, and an RF step, a tab page
+        or a header/item area is a sub-screen, so when only it changes the
+        screen info looks the same. One Id-only GetObjectTree call (1-9 ms
+        live, against up to 180 ms walking the elements over COM); an older
+        SAP GUI without it reports neither.
         """
         tree = self._object_tree(f"{window_id}/usr", ["Id"], site="subscreens")
         if tree is None:
-            return []
+            return [], []
         found: List[str] = []
+        buttons: List[str] = []
         stack = [tree]
         while stack:
             node = stack.pop()
@@ -1275,8 +1289,30 @@ class SAPGUIControllerBase:
             match = _SUBSCREEN_ID_RE.search(node_id)
             if match:
                 found.append(f"{match.group(1)}:{match.group(2)}")
+            elif _BUTTON_ID_RE.search(node_id):
+                buttons.append(node_id)
             stack.extend(reversed(node.get("children") or []))
-        return list(dict.fromkeys(found))
+        return list(dict.fromkeys(found)), buttons
+
+    def _button_texts(self, button_ids: List[str]) -> Dict[str, str]:
+        """``{short ID: text}`` of the buttons that have a text.
+
+        Read only for these buttons, over COM: asking GetObjectTree for
+        Text would read every field on the screen. Icon-only buttons (a
+        selection screen's multiple-selection arrows) have none.
+        """
+        if not button_ids or len(button_ids) > _MAX_SCREEN_BUTTONS:
+            return {}
+        texts: Dict[str, str] = {}
+        for button_id in button_ids:
+            short_id = self._normalize_element_id(button_id)
+            try:
+                text = str(self._session.findById(short_id).Text).strip()
+            except Exception:
+                continue
+            if text:
+                texts[short_id] = text
+        return texts
 
     def _cursor_field(self, window) -> str:
         """ID of the field the cursor is in, '' when there is none.

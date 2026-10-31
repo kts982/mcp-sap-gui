@@ -4359,7 +4359,96 @@ class TestScreenInfoSubscreensAndCursor:
         result = controller.get_screen_info()
 
         assert "subscreens" not in result
+        assert "buttons" not in result
         assert result["cursor"] == "wnd[0]/usr/txtBTCH2170-JOBNAME"
+
+
+class TestScreenInfoButtons:
+    """Button texts in the main window's user area: RF menu pages differ
+    only in these, and the F-key button on the RF template changes meaning."""
+
+    _P = "/app/con[0]/ses[0]/"
+
+    def _controller(self, tree, texts, window="wnd[0]"):
+        controller = TestScreenInfoSubscreensAndCursor()._controller(
+            tree=tree, window=window,
+        )
+        screen_find = controller._session.findById.side_effect
+        read = []
+
+        def find_by_id(element_id):
+            if element_id in texts:
+                read.append(element_id)
+                return MagicMock(Text=texts[element_id])
+            return screen_find(element_id)
+
+        controller._session.findById.side_effect = find_by_id
+        return controller, read
+
+    def test_rf_menu_buttons_in_the_subscreen_and_on_the_template(self):
+        usr = self._P + "wnd[0]/usr"
+        sub = usr + "/subX:/SCWM/SAPLRF_SSCR:0001"
+        controller, _ = self._controller(
+            _tree_json(usr, (sub, sub + "/btn/SCWM/S_RF_SCRELM-MENU1",
+                             sub + "/btn/SCWM/S_RF_SCRELM-PGDN"),
+                       usr + "/btn/SCWM/S_RF_SCRELM-PB1"),
+            {
+                "wnd[0]/usr/subX:/SCWM/SAPLRF_SSCR:0001/btn/SCWM/S_RF_SCRELM-MENU1":
+                    "05 Internal Processes",
+                "wnd[0]/usr/subX:/SCWM/SAPLRF_SSCR:0001/btn/SCWM/S_RF_SCRELM-PGDN": "v",
+                "wnd[0]/usr/btn/SCWM/S_RF_SCRELM-PB1": " F1 Logoff ",
+            },
+        )
+
+        result = controller.get_screen_info()
+
+        assert result["subscreens"] == ["/SCWM/SAPLRF_SSCR:0001"]
+        assert result["buttons"] == {
+            "wnd[0]/usr/subX:/SCWM/SAPLRF_SSCR:0001/btn/SCWM/S_RF_SCRELM-MENU1":
+                "05 Internal Processes",
+            "wnd[0]/usr/subX:/SCWM/SAPLRF_SSCR:0001/btn/SCWM/S_RF_SCRELM-PGDN": "v",
+            "wnd[0]/usr/btn/SCWM/S_RF_SCRELM-PB1": "F1 Logoff",
+        }
+
+    def test_icon_only_buttons_are_left_out(self):
+        usr = self._P + "wnd[0]/usr"
+        controller, _ = self._controller(
+            _tree_json(usr, usr + "/btn%_S_LGNUM_%_APP_%-VALU_PUSH"),
+            {"wnd[0]/usr/btn%_S_LGNUM_%_APP_%-VALU_PUSH": ""},
+        )
+
+        assert "buttons" not in controller.get_screen_info()
+
+    def test_a_busy_screen_reads_no_button_texts(self):
+        usr = self._P + "wnd[0]/usr"
+        ids = [f"{usr}/btnB{i}" for i in range(16)]
+        controller, read = self._controller(
+            _tree_json(usr, *ids), {f"wnd[0]/usr/btnB{i}": "Go" for i in range(16)},
+        )
+
+        assert "buttons" not in controller.get_screen_info()
+        assert read == []
+
+    def test_table_control_button_cells_are_not_screen_buttons(self):
+        usr = self._P + "wnd[0]/usr"
+        table = usr + "/tblSAPLTEST_TC"
+        controller, read = self._controller(
+            _tree_json(usr, (table, table + "/btnDETAIL[3,0]", table + "/btnDETAIL[3,1]")),
+            {},
+        )
+
+        assert "buttons" not in controller.get_screen_info()
+        assert read == []
+
+    def test_a_popup_lists_its_buttons_in_its_digest_not_here(self):
+        usr = self._P + "wnd[1]/usr"
+        controller, read = self._controller(
+            _tree_json(usr, usr + "/btnBUTTON_1"), {"wnd[1]/usr/btnBUTTON_1": "Yes"},
+            window="wnd[1]",
+        )
+
+        assert "buttons" not in controller.get_screen_info(include_popup=False)
+        assert read == []
 
 
 # ===========================================================================
