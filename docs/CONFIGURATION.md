@@ -68,7 +68,7 @@ Every tool is tagged `read` or `write`, and the profile decides which ones the a
 |---|---|---|
 | `exploration` | `read` | Look only: inspect screens, read tables, take screenshots. It cannot navigate or change anything |
 | `operator` | `read`, `write` | Normal SAP work: start transactions, fill fields, press buttons. The transaction policy and the confirmation questions still apply |
-| `full` | all | All tools. The default |
+| `full` | all | All tools. The default. Today the same tools as `operator`: `full` would add tools tagged `destructive`, and no tool has that tag yet |
 
 The profile applies to every chat the server serves. To be asked before writes in one chat only, use confirmation points.
 

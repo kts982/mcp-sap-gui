@@ -21,6 +21,12 @@ _MAX_SELECTED_CELLS = 100
 _MAX_UNREADABLE_CELLS = 20
 
 
+def _label(value: Any) -> str:
+    """A column title or tooltip without its padding: SAP GUI pads them to
+    the field length (live: "CARRID" plus 114 spaces on an SE16 grid)."""
+    return str(value).strip()
+
+
 def _unknown_columns(col_filter: List[str], available: List[str]) -> List[str]:
     """The requested column names the table does not have, in request order."""
     known = set(available)
@@ -125,11 +131,11 @@ class TablesMixin:
             try:
                 col = table.Columns(i)
                 try:
-                    info["title"] = col.Title
+                    info["title"] = _label(col.Title)
                 except Exception:
                     info["title"] = ""
                 try:
-                    info["tooltip"] = col.Tooltip
+                    info["tooltip"] = _label(col.Tooltip)
                 except Exception:
                     info["tooltip"] = ""
             except Exception:
@@ -381,11 +387,11 @@ class TablesMixin:
         for col in all_columns:
             info = {"name": col}
             try:
-                info["tooltip"] = grid.GetColumnTooltip(col)
+                info["tooltip"] = _label(grid.GetColumnTooltip(col))
             except Exception:
                 info["tooltip"] = ""
             try:
-                info["title"] = grid.GetDisplayedColumnTitle(col)
+                info["title"] = _label(grid.GetDisplayedColumnTitle(col)) or col
             except Exception:
                 info["title"] = col
             all_column_info.append(info)
@@ -1165,12 +1171,13 @@ class TablesMixin:
                 col_info = {"name": col_name, "index": i}
 
                 try:
-                    col_info["title"] = table.GetDisplayedColumnTitle(col_name)
+                    col_info["title"] = (
+                        _label(table.GetDisplayedColumnTitle(col_name)) or col_name)
                 except Exception:
                     col_info["title"] = col_name
 
                 try:
-                    col_info["tooltip"] = table.GetColumnTooltip(col_name)
+                    col_info["tooltip"] = _label(table.GetColumnTooltip(col_name))
                 except Exception:
                     col_info["tooltip"] = ""
 
