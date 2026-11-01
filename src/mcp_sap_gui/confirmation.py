@@ -53,9 +53,10 @@ logger = logging.getLogger(__name__)
 # Point taxonomy
 # ---------------------------------------------------------------------------
 
-#: Always on, never settable, never removable.  Covers the existing F11/Save
-#: elicitation in ``sap_send_key`` (which stays in the tool body, untouched)
-#: plus the Save toolbar button handled by this middleware.
+#: Always on, never settable, never removable.  Asked in the tool bodies, not
+#: by this middleware: F11 / Save in ``sap_send_key``, the Save toolbar button
+#: in ``sap_press_button`` (both through the server's ``_gated_save``) and
+#: save-shaped popup answers in ``sap_handle_popup`` / ``sap_press_button``.
 SAVE_POINT = "save"
 
 #: Points a session or the ``--confirm`` floor may activate.
@@ -87,11 +88,13 @@ POINT_BY_TOOL: dict[str, str] = {
 }
 
 #: The SAP-standard Save button on the system toolbar.  Pressing it reaches the
-#: same code path as F11, so it must hit the ``save`` point too — otherwise
-#: ``sap_press_button`` is a complete bypass of the save gate.  Menu paths
-#: (System -> Save) and ALV/app-toolbar Save buttons remain a documented gap:
-#: their IDs are positional and locale-dependent, so there is no reliable
-#: static ID to match.
+#: same code path as F11, so it hits the ``save`` point too — otherwise
+#: ``sap_press_button`` is a complete bypass of the save gate.  Like F11, it
+#: is asked in the tool body (server ``_gated_save``), not by the middleware:
+#: the question is bound to the screen and read again just before the press.
+#: Menu paths (System -> Save) and ALV/app-toolbar Save buttons remain a
+#: documented gap: their IDs are positional and locale-dependent, so there is
+#: no reliable static ID to match.
 #: Popups: sap_handle_popup and sap_press_button (on a button outside wnd[0])
 #: ask in their tool bodies before a press that may save (a Save button, or
 #: Yes/OK on a popup about saving) and before any answer but Cancel to a popup
@@ -112,7 +115,7 @@ _TOOL_ACTIONS: dict[str, str] = {
     "sap_select_checkbox": "change a checkbox",
     "sap_select_radio_button": "select a radio button",
     "sap_select_combobox_entry": "change a dropdown selection",
-    "sap_press_button": "press the SAP Save button (system toolbar)",
+    "sap_press_button": "press a button",
 }
 
 
@@ -177,13 +180,11 @@ def point_for_call(
 ) -> str | None:
     """Resolve the confirmation point that gates this call, or ``None``.
 
-    ``sap_send_key`` is deliberately absent from the ``save`` branch: its F11 /
-    Save elicitation lives in the tool body and stays there.
+    The ``save`` point is not resolved here: F11 (``sap_send_key``) and the
+    Save button (``sap_press_button``) ask in their tool bodies, bound to the
+    screen. Under ``all_writes`` both ask that point first, then the save.
     """
     active = set(active_points)
-
-    if tool_name == "sap_press_button" and is_save_button(args.get("button_id")):
-        return SAVE_POINT  # always on
 
     mapped = POINT_BY_TOOL.get(tool_name)
     if mapped is not None and mapped in active:

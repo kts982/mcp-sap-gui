@@ -48,6 +48,7 @@ from .confirmation import (
     build_relax_prompt,
     effective_points,
     is_modern,
+    is_save_button,
     log_attach_event,
     log_confirmation_event,
     points_with_provenance,
@@ -1010,31 +1011,113 @@ async def _elicit_save(ctx: Context, message: str,
     return answer.action, answer.note
 
 
-async def _confirm_save(ctx: Context, key: str,
-                        shown: object = None) -> dict | Ask | None:
-    """Request user confirmation before sending a save key.
+def _where(target: object) -> str:
+    """The save target in words, for the question and a refusal."""
+    if not isinstance(target, dict):
+        return ""
+    screen = target.get("title") or ""
+    detail = ", ".join(str(target[k]) for k in ("transaction", "program", "screen_number")
+                       if target.get(k))
+    if detail:
+        screen = f"{screen} ({detail})" if screen else detail
+    system = "/".join(str(target[k]) for k in ("system", "client") if target.get(k))
+    parts = [f"screen '{screen}'" if screen else "", f"system {system}" if system else ""]
+    return " on ".join(p for p in parts if p)
+
+
+async def _confirm_save(ctx: Context, what: str, target: object = None, *,
+                        tool: str = "sap_send_key",
+                        subject: dict | None = None) -> dict | Ask | None:
+    """Ask the user before a save; *what* says what is about to be sent and
+    *target* (``save_target``) where.
 
     Returns ``None`` if the user accepted (caller should proceed), an
-    ``Ask`` to return on MCP 2026-07-28, or a cancellation dict.
+    ``Ask`` to return on MCP 2026-07-28, or a cancellation dict that
+    carries *subject* (the key or button).
     Raises ``ValueError`` if the client does not support elicitation.
     """
+    where = _where(target)
     declined = await _elicit_save(ctx, (
-        f"You are about to send '{key}' which triggers Save (F11) "
-        "in SAP. This can persist changes to the database. "
-        "Do you want to proceed?"
-    ), shown=shown)
+        f"You are about to {what} in SAP. This can persist changes to the "
+        "database."
+        + (f" It goes to {where}." if where else "")
+        + " Do you want to proceed?"
+    ), tool, shown=target)
     if declined is None or isinstance(declined, Ask):
         return declined
     action, note = declined
+    if action == "changed":
+        # MCP 2026-07-28: the answer round found another screen. The person
+        # may well have said yes: it is not a decline.
+        return {
+            "status": "cancelled",
+            "action": "changed",
+            **(subject or {}),
+            "reason": "The SAP screen changed before the answer arrived",
+            "error": f"Save not sent.{note}",
+        }
     return {
         "status": "cancelled",
         "action": action,
-        "key": key,
+        **(subject or {}),
         "reason": f"User did not confirm save ({action})",
         # Same wording as a decline at a confirmation point, which the
         # instructions tell agents to stop on.
         "error": f"Save declined by user ({action}). Nothing was sent.{note}",
     }
+
+
+def _save_target_changed(subject: dict, asked: object, now: object) -> dict:
+    """The refusal when the screen changed between the approval and the save."""
+    changed = ([k for k in asked if asked.get(k) != now.get(k)]
+               if isinstance(asked, dict) and isinstance(now, dict) else [])
+    where = _where(now)
+    return {
+        "status": "cancelled",
+        "action": "changed",
+        **subject,
+        "changed": changed,
+        "reason": "The SAP screen changed after the save was approved",
+        "error": (
+            "Save not sent: the SAP screen changed after the user approved it"
+            + (f" (now {where})" if where else "")
+            + ". Nothing was sent. Read the screen again and repeat the call "
+            "if the save is still wanted."
+        ),
+    }
+
+
+async def _gated_save(ctx: Context, c, *, tool: str, what: str,
+                      subject: dict, send) -> dict | InputRequiredResult:
+    """A save (F11, the Save button): ask the user, then send it only to the
+    screen the question was about.
+
+    The screen, system, client, user and session (``save_target``) are read
+    for the question and again in the same COM job as the save, so a person
+    who moves on in SAP GUI while the dialog is open, a popup that opens or
+    another call in between keeps the save from reaching another screen. On
+    MCP 2026-07-28 the answer round also compares with the question round
+    (``ask_user``'s ``shown``).
+    """
+    target = await _com(c.save_target)
+    cancellation = await _confirm_save(ctx, what, target, tool=tool, subject=subject)
+    if isinstance(cancellation, Ask):
+        return cancellation.result
+    if cancellation is not None:
+        return cancellation
+
+    def recheck_and_send():
+        now = c.save_target()
+        if now != target:
+            return None, now
+        return send(), None
+
+    result, now = await _com(recheck_and_send)
+    if result is None:
+        log_confirmation_event(SAVE_POINT, tool, "changed")
+        return _save_target_changed(subject, target, now)
+    result["confirmed_by_user"] = True
+    return result
 
 
 def _popup_shown(plan: dict) -> dict:
@@ -1097,13 +1180,6 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
                   f"Nothing was pressed.{note}"),
     })
     return popup
-
-
-def _screen_shown(c) -> dict:
-    """The screen a save question is asked on (COM thread)."""
-    screen = c.get_screen_info(include_popup=False)
-    return {key: screen.get(key) for key in
-            ("active_window", "transaction", "program", "screen_number", "title")}
 
 
 def _to_dict(obj):
@@ -1448,30 +1524,23 @@ async def sap_send_key(
 
     F11 / Save requires user confirmation via elicitation before proceeding;
     the response then has confirmed_by_user: true. A declined save
-    returns status 'cancelled' with an error."""
+    returns status 'cancelled' with an error, as does a save whose screen
+    changed after the approval (action 'changed'): nothing was sent."""
     _check_write(ctx)
     vkey = _parse_key(key)
     c = _ctrl(ctx)
-    confirmed = False
     if key in _SAVE_KEYS:
         # A key the screen refuses is never sent: do not ask the user to
         # approve a save that cannot happen.
         refusal = await _com(lambda: c.check_vkey(vkey))
         if refusal is not None:
             return refusal
-        # On MCP 2026-07-28 this body runs again with the answer: the save
-        # goes only to the screen the question was asked on.
-        shown = await _com(lambda: _screen_shown(c)) if is_modern(ctx) else None
-        cancellation = await _confirm_save(ctx, key, shown)
-        if isinstance(cancellation, Ask):
-            return cancellation.result
-        if cancellation is not None:
-            return cancellation
-        confirmed = True
-    result = await _com(lambda: c.send_vkey(vkey))
-    if confirmed:
-        result["confirmed_by_user"] = True
-    return result
+        return await _gated_save(
+            ctx, c, tool="sap_send_key",
+            what=f"send '{key}' which triggers Save (F11)",
+            subject={"key": key}, send=lambda: c.send_vkey(vkey),
+        )
+    return await _com(lambda: c.send_vkey(vkey))
 
 
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
@@ -1552,11 +1621,21 @@ async def sap_press_button(button_id: str, ctx: Context) -> dict | InputRequired
     that long text (Diagnosis / Procedure), usually as a list popup: read it
     with sap_read_list(window_id='wnd[1]').
 
+    The Save button (tbar[0]/btn[11]) asks the user first, as F11 does, and
+    is pressed only on the screen that was approved: confirmed_by_user: true
+    when accepted, else status 'cancelled' with an error (nothing pressed).
     A popup button is checked like sap_handle_popup's press: a press that
     may save, or any answer but Cancel to a popup question the tool cannot
     read, asks the user first (confirmed_by_user: true when accepted)."""
     _check_write(ctx)
     c = _ctrl(ctx)
+    if is_save_button(button_id):
+        return await _gated_save(
+            ctx, c, tool="sap_press_button",
+            what=f"press the Save button '{button_id}', which triggers Save",
+            subject={"button_id": button_id},
+            send=lambda: c.press_button(button_id),
+        )
 
     def plan_or_press():
         # One COM job, as before, unless the button answers a popup that

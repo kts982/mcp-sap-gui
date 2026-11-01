@@ -55,7 +55,7 @@ More ideas of what to ask: [What it can do](OVERVIEW.md).
 
 ## When the assistant wants to change something
 
-Saving always asks you first: the server puts a question in front of you (*"Yes, save"*), and nothing is saved until you answer yes. You can make the assistant ask before other kinds of changes too, for example before every field it fills: say *"ask me before every field write"*. How the questions look and what each answer does: [Confirmations](CONFIRMATIONS.md).
+A save with F11 or the Save button asks you first: the server puts a question in front of you (*"Yes, save"*), and nothing is saved until you answer yes. You can make the assistant ask before other kinds of changes too, for example before every field it fills: say *"ask me before every field write"*. How the questions look and what each answer does: [Confirmations](CONFIRMATIONS.md).
 
 ## Updating to a new release
 

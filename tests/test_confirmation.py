@@ -144,12 +144,14 @@ class TestPointResolution:
         assert not _confirm_mod.is_save_button("wnd[0]/tbar[1]/btn[8]")
         assert not _confirm_mod.is_save_button(None)
 
-    def test_save_button_gated_without_any_session_points(self):
-        point = _confirm_mod.point_for_call(
-            "sap_press_button", {"button_id": "wnd[0]/tbar[0]/btn[11]"},
-            {"save"}, {"write"},
-        )
-        assert point == "save"
+    def test_save_button_is_asked_in_the_tool_not_here(self):
+        """The Save button asks in sap_press_button, bound to the screen (as
+        F11 does in sap_send_key); all_writes still asks first, as for F11."""
+        args = {"button_id": "wnd[0]/tbar[0]/btn[11]"}
+        assert _confirm_mod.point_for_call(
+            "sap_press_button", args, {"save"}, {"write"}) is None
+        assert _confirm_mod.point_for_call(
+            "sap_press_button", args, {"save", "all_writes"}, {"write"}) == "all_writes"
 
     def test_other_buttons_not_gated(self):
         assert _confirm_mod.point_for_call(
@@ -498,9 +500,47 @@ class TestGating:
                     raise_on_error=False,
                 )
 
-        assert result.is_error
-        assert "confirmation point 'save'" in _text(result)
+        # The same refusal as a declined F11: status cancelled, nothing pressed.
+        assert result.structured_content["status"] == "cancelled"
+        assert result.structured_content["button_id"] == "wnd[0]/tbar[0]/btn[11]"
+        assert "Save declined by user" in result.structured_content["error"]
+        assert "triggers Save" in elicitor.messages[0]
         controller.press_button.assert_not_called()
+
+    async def test_save_button_under_all_writes_asks_point_then_save(self, srv):
+        controller, patcher = _patched_controller(press_button={"status": "ok"})
+        elicitor = _Elicitor("accept")
+        with patcher:
+            async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
+                await client.call_tool(
+                    "sap_set_confirmation_points", {"points": ["all_writes"]}
+                )
+                result = await client.call_tool(
+                    "sap_press_button", {"button_id": "wnd[0]/tbar[0]/btn[11]"},
+                )
+
+        # As for F11: the point first, then the save (docs/CONFIRMATIONS.md).
+        assert len(elicitor.messages) == 2
+        assert "all_writes" in elicitor.messages[0]
+        assert "triggers Save" in elicitor.messages[1]
+        assert result.structured_content["confirmed_by_user"] is True
+        controller.press_button.assert_called_once()
+
+    async def test_all_writes_prompt_names_an_ordinary_button(self, srv):
+        """It used to read "press the SAP Save button" for any button."""
+        _, patcher = _patched_controller(press_button={"status": "ok"})
+        elicitor = _Elicitor("accept")
+        with patcher:
+            async with Client(srv.mcp, elicitation_handler=elicitor.handler) as client:
+                await client.call_tool(
+                    "sap_set_confirmation_points", {"points": ["all_writes"]}
+                )
+                await client.call_tool(
+                    "sap_press_button", {"button_id": "wnd[0]/tbar[1]/btn[8]"},
+                )
+
+        assert "Save" not in elicitor.messages[0]
+        assert "wnd[0]/tbar[1]/btn[8]" in elicitor.messages[0]
 
     async def test_accepted_save_button_reports_confirmed_by_user(self, srv):
         """The agent never sees the prompt, so the result must say a human

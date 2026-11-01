@@ -10,7 +10,7 @@
 - **Handle popups:** every action reports a popup it opened, recognised for what it is (a question, a warning, an F4 list, a date picker, an SAP message in any logon language). Only clearly harmless information popups are closed automatically.
 - **Show and record:** take screenshots, inline or saved as a full-resolution file, and show you a preview of the screen and the values about to be written before anything is saved.
 
-Saving always waits for your yes, and you can make other changes wait for it too: [Confirmations](CONFIRMATIONS.md).
+A save with F11 or the Save button waits for your yes, and you can make other changes wait for it too: [Confirmations](CONFIRMATIONS.md).
 
 ## Things to ask
 

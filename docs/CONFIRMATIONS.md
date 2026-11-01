@@ -4,7 +4,7 @@ Some actions wait for your answer before they reach SAP. The server asks the que
 
 ## What asks
 
-**Saving always asks.** This cannot be switched off:
+**A save asks.** This cannot be switched off. It covers the standard ways to save:
 
 - `F11` / the Save key, and the Save button in the toolbar (`wnd[0]/tbar[0]/btn[11]`);
 - on a popup: a Save button, Yes or OK on a popup about saving, and any answer except Cancel to a popup whose question the server cannot read (SAP shows some questions in a browser control that scripting cannot read: the question then tells you to check the SAP window).
@@ -21,7 +21,7 @@ Some actions wait for your answer before they reach SAP. The server asks the que
 
 ## What a question looks like
 
-The server's text says what is about to happen (*"You are about to send 'F11' which triggers Save (F11) in SAP"*), and the answer is labelled with what a yes does: *Yes, save*, *Yes, run it*, *Yes, press 'No'*. Each client draws it its own way: a checkbox and Accept (Claude Code CLI), Yes / No (GitHub Copilot CLI), True / False and Submit (VS Code, Codex). Only a yes goes ahead; anything else, including closing the question, is a no.
+The server's text says what is about to happen and where (*"You are about to send 'F11' which triggers Save (F11) in SAP. [...] It goes to screen 'Maintain User Profile (SU3, SAPLSUU5, 100)' on system DEV/100."*), and the answer is labelled with what a yes does: *Yes, save*, *Yes, run it*, *Yes, press 'No'*. Each client draws it its own way: a checkbox and Accept (Claude Code CLI), Yes / No (GitHub Copilot CLI), True / False and Submit (VS Code, Codex). Only a yes goes ahead; anything else, including closing the question, is a no.
 
 ## After you answer
 
@@ -31,7 +31,7 @@ The server's text says what is about to happen (*"You are about to send 'F11' wh
 Three more rules protect the answer:
 
 - **An answer that comes back faster than a person can give one** (under 250 ms) came from the client, not from you. A no still counts, and the error says that no person saw the question; a yes is refused.
-- **An answer counts only for what the question showed.** On MCP 2026-07-28 the server reads SAP again when your answer arrives. If the screen, the popup or the list of sessions changed in the meantime, the answer does not count and nothing is done; the assistant reads the screen again and asks again if still needed.
+- **An answer counts only for what the question showed.** A save goes only to the screen the question named: right before it sends the save, the server reads the screen, system, client, user and SAP session again, and if any of them changed while the question was open (you moved on in SAP GUI, a popup opened), nothing is saved and the result says `action: changed`. On MCP 2026-07-28 the server also reads SAP again when your answer arrives, for a popup and the list of sessions too. The assistant then reads the screen again and asks again if still needed.
 - **An answer counts once.** It cannot be replayed to repeat the action.
 
 ## Clients that cannot show the questions
@@ -54,5 +54,11 @@ With `--audit-log`, every question and answer gets a `confirmation` line: the po
 
 ## Known gaps
 
-- A save through a menu (for example Table View → Save in SM30) or through a Save button in an ALV or application toolbar does not ask: those element IDs differ by screen and logon language, so the server cannot recognise them as a save. The SAP user's authorizations still apply.
-- With the experimental `--code-mode`, a script cannot ask a question on MCP 2026-07-28: an action that needs one is refused inside the script, and the assistant has to call that tool directly.
+The server recognises a save by how it is sent, not by what it does in SAP. What a function does depends on the screen: the same code may save a document on one screen and only a selection variant on another, and a customer's own screen can use any code. So these do not ask:
+
+- A save through a menu (for example Table View → Save in SM30) or through a Save button in an ALV or application toolbar: those element IDs differ by screen and logon language, so the server cannot recognise them as a save.
+- An application button or function that posts or changes data (Execute, Activate, Post, an ALV "More Methods" entry), or a function code typed into the command field.
+
+To be asked before every action that can change something, switch on `all_writes`. The SAP user's authorizations remain the boundary for what can change at all.
+
+With the experimental `--code-mode`, a script cannot ask a question on MCP 2026-07-28: an action that needs one is refused inside the script, and the assistant has to call that tool directly.

@@ -61,14 +61,24 @@ async def _rounds(session, tool, args, answer, between=lambda: None):
 
 
 def _save_controller(titles):
+    """save_target reads *titles* in turn, then the last one from there on.
+    A save reads it for the question, again in the answer round and once
+    more just before the save is sent."""
     controller = MagicMock(Busy=False)
     controller.check_vkey.return_value = None
     controller.send_vkey.return_value = {"status": "ok"}
-    screens = iter(titles)
-    controller.get_screen_info.side_effect = lambda include_popup=True: {
-        "active_window": "wnd[0]", "transaction": "SU3", "program": "SAPLSUU5",
-        "screen_number": 100, "title": next(screens),
-    }
+    controller.press_button.return_value = {"status": "ok"}
+    reads = list(titles)
+
+    def save_target():
+        title = reads.pop(0) if len(reads) > 1 else reads[0]
+        return {
+            "active_window": "wnd[0]", "transaction": "SU3", "program": "SAPLSUU5",
+            "screen_number": "100", "title": title, "system": "DEV",
+            "client": "100", "user": "TESTUSER", "session": "/app/con[0]/ses[0]",
+        }
+
+    controller.save_target.side_effect = save_target
     return controller
 
 
@@ -88,8 +98,52 @@ async def test_save_is_not_sent_after_the_screen_changed(default_config):
         async with Client(server.mcp, elicitation_handler=_accept) as client:
             _, done = await _rounds(client.session, "sap_send_key", {"key": "F11"}, YES)
     assert done.structured_content["status"] == "cancelled"
+    assert done.structured_content["action"] == "changed"
     assert "changed before the answer arrived" in done.structured_content["error"]
+    # The person said yes: the refusal must not read as their decline.
+    assert "declined" not in done.structured_content["error"]
     controller.send_vkey.assert_not_called()
+
+
+async def test_save_is_not_sent_when_the_screen_changes_after_the_answer(default_config):
+    # Question and answer round on the same screen; it changes just before
+    # the save would go out (read again in the same COM job as the save).
+    controller = _save_controller(["Maintain User Profile"] * 2 + ["Change Material"])
+    with patch.multiple(server, _ctrl=MagicMock(return_value=controller), _com=_inline):
+        async with Client(server.mcp, elicitation_handler=_accept) as client:
+            _, done = await _rounds(client.session, "sap_send_key", {"key": "F11"}, YES)
+    sc = done.structured_content
+    assert (sc["status"], sc["action"]) == ("cancelled", "changed")
+    assert sc["changed"] == ["title"]
+    assert sc["error"].startswith("Save not sent")
+    assert "confirmed_by_user" not in sc
+    controller.send_vkey.assert_not_called()
+
+
+async def test_save_button_is_pressed_on_the_screen_it_was_asked_on(default_config):
+    controller = _save_controller(["Maintain User Profile"] * 3)
+    with patch.multiple(server, _ctrl=MagicMock(return_value=controller), _com=_inline):
+        async with Client(server.mcp, elicitation_handler=_accept) as client:
+            first, done = await _rounds(
+                client.session, "sap_press_button",
+                {"button_id": "wnd[0]/tbar[0]/btn[11]"}, YES,
+            )
+    assert list(first.input_requests) == ["save"]
+    assert "Maintain User Profile" in first.input_requests["save"].params.message
+    assert done.structured_content["confirmed_by_user"] is True
+    controller.press_button.assert_called_once_with("wnd[0]/tbar[0]/btn[11]")
+
+
+async def test_save_button_is_not_pressed_after_the_screen_changed(default_config):
+    controller = _save_controller(["Maintain User Profile", "Change Material"])
+    with patch.multiple(server, _ctrl=MagicMock(return_value=controller), _com=_inline):
+        async with Client(server.mcp, elicitation_handler=_accept) as client:
+            _, done = await _rounds(
+                client.session, "sap_press_button",
+                {"button_id": "wnd[0]/tbar[0]/btn[11]"}, YES,
+            )
+    assert done.structured_content["status"] == "cancelled"
+    controller.press_button.assert_not_called()
 
 
 def _slow_answer_round(controller):
