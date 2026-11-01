@@ -40,11 +40,13 @@ class FakeController:
     def check_vkey(self, vkey, window="wnd[0]"):
         return None
 
-    def get_screen_info(self, include_popup=True):
-        # Read again when the answer to a save question arrives (MCP
-        # 2026-07-28): the save goes only to the screen it was asked on.
+    def save_target(self):
+        # Read for the save question and again just before the save is
+        # sent: the save goes only to the screen it was asked on.
         return {"active_window": "wnd[0]", "transaction": "SU3",
-                "program": "SAPLSUU5", "screen_number": 100, "title": "Maintain User Profile"}
+                "program": "SAPLSUU5", "screen_number": "100",
+                "title": "Maintain User Profile", "system": "DEV",
+                "client": "100", "user": "TESTUSER", "session": "/app/con[0]/ses[0]"}
 
     def send_vkey(self, vkey, window="wnd[0]"):
         self.sent.append(vkey)

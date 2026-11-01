@@ -37,7 +37,9 @@ An accepted call's result carries `confirmed_by_user: true`, so the agent, which
 
 Points are scoped to the MCP session, not the SAP connection: they survive `sap_disconnect` and a later reconnect.
 
-Known gap: menu paths (Table View → Save) and ALV / application-toolbar Save buttons are not mapped to the `save` point, because those IDs are positional and locale-dependent.
+A save goes only to the screen it was approved for: the screen, system, client, user and session are read again just before the save is sent, and if they changed the result is `status: cancelled`, `action: changed` (nothing sent).
+
+Known gap: menu paths (Table View → Save), ALV / application-toolbar Save buttons, application functions that post, and function codes typed into the command field are not mapped to the `save` point: the server recognises a save by how it is sent, not by its effect ([Confirmations](CONFIRMATIONS.md#known-gaps)).
 
 ## Connection
 

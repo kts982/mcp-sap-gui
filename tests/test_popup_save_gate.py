@@ -42,6 +42,11 @@ class FakeSession:
         self.log: List[str] = []
         self.elements: Dict[str, FakeElement] = {}
         self.Busy = False
+        self.Id = "/app/con[0]/ses[0]"
+        self.Info = SimpleNamespace(
+            Transaction="SU3", Program="SAPLSUU5", ScreenNumber=100,
+            SystemName="DEV", Client="100", User="TESTUSER",
+        )
 
     def add(self, element_id: str, **kwargs: Any) -> FakeElement:
         element = FakeElement(element_id, self.log, **kwargs)
@@ -287,13 +292,17 @@ def test_send_vkey_refusal_unchanged(controller):
 # ---------------------------------------------------------------------------
 
 class FakeCtx:
-    def __init__(self, answer: str = "accept", data: Any = True) -> None:
+    def __init__(self, answer: str = "accept", data: Any = True,
+                 while_asking=None) -> None:
         self.prompts: List[str] = []
         self._answer = answer
         self._data = data
+        self._while_asking = while_asking  # SAP changes while the dialog is open
 
     async def elicit(self, message: str, response_type: Any = None, **_: Any):
         self.prompts.append(message)
+        if self._while_asking is not None:
+            self._while_asking()
         return SimpleNamespace(action=self._answer, data=self._data)
 
 
@@ -369,6 +378,77 @@ def test_send_key_declined_save_unchanged(tools):
         "reason": "User did not confirm save (decline)",
         "error": "Save declined by user (decline). Nothing was sent.",
     }
+    assert tools.session.log == []
+
+
+SAVE_BUTTON = "wnd[0]/tbar[0]/btn[11]"
+
+
+def _other_screen(tools):
+    def move():
+        tools.session.Info.ScreenNumber = 200
+    return move
+
+
+def test_save_question_names_the_screen_and_system(tools):
+    tools.session.add("wnd[0]", text="Maintain User Profile", allowed_vkeys={11})
+    ctx = FakeCtx()
+    _run(server.sap_send_key("F11", ctx))
+    assert "screen 'Maintain User Profile (SU3, SAPLSUU5, 100)'" in ctx.prompts[0]
+    assert "system DEV/100" in ctx.prompts[0]
+
+
+def test_send_key_save_not_sent_when_the_screen_changes_while_asking(tools):
+    # The handshake protocol asks inside one call: the screen is read again
+    # in the same COM job as the save.
+    tools.session.add("wnd[0]", allowed_vkeys={11})
+    ctx = FakeCtx(while_asking=_other_screen(tools))
+    result = _run(server.sap_send_key("F11", ctx))
+    assert (result["status"], result["action"]) == ("cancelled", "changed")
+    assert result["changed"] == ["screen_number"]
+    assert result["key"] == "F11"
+    assert result["error"].startswith("Save not sent")
+    assert tools.session.log == []
+
+
+def test_save_button_asks_then_presses(tools):
+    tools.session.add(SAVE_BUTTON)
+    ctx = FakeCtx()
+    result = _run(server.sap_press_button(SAVE_BUTTON, ctx))
+    assert len(ctx.prompts) == 1
+    assert result["confirmed_by_user"] is True
+    assert tools.session.log == [f"press {SAVE_BUTTON}"]
+
+
+def test_save_button_not_pressed_when_the_screen_changes_while_asking(tools):
+    tools.session.add(SAVE_BUTTON)
+    ctx = FakeCtx(while_asking=_other_screen(tools))
+    result = _run(server.sap_press_button(SAVE_BUTTON, ctx))
+    assert (result["status"], result["action"]) == ("cancelled", "changed")
+    assert result["button_id"] == SAVE_BUTTON
+    assert tools.session.log == []
+
+
+def test_save_button_not_pressed_on_another_session(tools):
+    """Same screen, but another SAP session (or system) is bound now."""
+    tools.session.add(SAVE_BUTTON)
+
+    def rebind():
+        tools.session.Id = "/app/con[1]/ses[0]"
+        tools.session.Info.SystemName = "QAS"
+
+    result = _run(server.sap_press_button(SAVE_BUTTON, FakeCtx(while_asking=rebind)))
+    assert result["action"] == "changed"
+    assert set(result["changed"]) == {"system", "session"}
+    assert "system QAS/100" in result["error"]
+    assert tools.session.log == []
+
+
+def test_declined_save_button_unchanged_screen_not_pressed(tools):
+    tools.session.add(SAVE_BUTTON)
+    result = _run(server.sap_press_button(SAVE_BUTTON, FakeCtx("decline", None)))
+    assert result["status"] == "cancelled"
+    assert result["action"] == "decline"
     assert tools.session.log == []
 
 

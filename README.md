@@ -6,7 +6,7 @@
 [![Docs](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml/badge.svg)](https://github.com/kts982/mcp-sap-gui/actions/workflows/docs.yml)
 [![Release](https://img.shields.io/github/v/release/kts982/mcp-sap-gui)](https://github.com/kts982/mcp-sap-gui/releases)
 
-An [MCP](https://modelcontextprotocol.io/) server that lets AI assistants work in **SAP GUI for Windows**: ask in plain language, and the assistant reads screens and tables, fills in fields, runs transactions and handles popups, through SAP's own Scripting API. Saving always waits for your yes.
+An [MCP](https://modelcontextprotocol.io/) server that lets AI assistants work in **SAP GUI for Windows**: ask in plain language, and the assistant reads screens and tables, fills in fields, runs transactions and handles popups, through SAP's own Scripting API. A save with F11 or the Save button waits for your yes ([what asks](https://github.com/kts982/mcp-sap-gui/blob/master/docs/CONFIRMATIONS.md)).
 
 It works with any MCP client that can start a local server: Claude Code, GitHub Copilot, Codex, Google Antigravity and others.
 

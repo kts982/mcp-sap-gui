@@ -1187,6 +1187,44 @@ class SAPGUIControllerBase:
         """Press Execute (F8)."""
         return self.send_vkey(VKey.F8)
 
+    def save_target(self) -> Dict[str, Any]:
+        """What a save question is about: the active window and its screen,
+        on which system, client, user and session.
+
+        Read when the question is asked and again just before the save is
+        sent: a save goes only to the screen that was approved. Kept to
+        plain reads (no status bar, buttons or popup digest) so the second
+        read sits as close to the save as possible.
+        """
+        self._require_session()
+        session = self._session
+
+        def read(get):
+            try:
+                return str(get())
+            except Exception:
+                return ""
+
+        window = "wnd[0]"
+        try:
+            active = session.ActiveWindow
+            if active is not None:
+                window = self._normalize_window_id(active.Id)
+        except Exception:
+            pass
+        info = session.Info
+        return {
+            "active_window": window,
+            "transaction": read(lambda: info.Transaction),
+            "program": read(lambda: info.Program),
+            "screen_number": read(lambda: info.ScreenNumber),
+            "title": read(lambda: session.findById(window).Text),
+            "system": read(lambda: info.SystemName),
+            "client": read(lambda: info.Client),
+            "user": read(lambda: info.User),
+            "session": read(lambda: session.Id),
+        }
+
     def get_screen_info(self, include_popup: bool = True) -> Dict[str, Any]:
         """Get information about the current screen.
 
