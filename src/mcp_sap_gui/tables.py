@@ -17,6 +17,42 @@ logger = logging.getLogger(__name__)
 # A cell selection in Free mode can be a large rectangle: list this many.
 _MAX_SELECTED_CELLS = 100
 
+# ALV cells that raised on GetCellValue: list this many, then only count.
+_MAX_UNREADABLE_CELLS = 20
+
+
+def _unknown_columns(col_filter: List[str], available: List[str]) -> List[str]:
+    """The requested column names the table does not have, in request order."""
+    known = set(available)
+    return [name for name in col_filter if name not in known]
+
+
+def _unknown_warning(unknown: List[str]) -> str:
+    return (f"Not in this table, left out: {', '.join(unknown)} "
+            "(see unknown_columns).")
+
+
+def _no_known_columns(table_id: str, table_type: str, unknown: List[str],
+                      available: List[str]) -> Dict[str, Any]:
+    """A read that names only columns the table does not have.
+
+    Returned instead of rows: before, the names were dropped without a word
+    and every row came back holding only its index, which reads like a
+    successful read of empty columns.
+    """
+    shown = ", ".join(available[:30]) + (", ..." if len(available) > 30 else "")
+    return {
+        "table_id": table_id,
+        "table_type": table_type,
+        "unknown_columns": unknown,
+        "available_columns": available,
+        "error": (
+            f"None of the requested columns is in this table: "
+            f"{', '.join(unknown)}. Column names are technical names, as "
+            f"columns_only=true lists them: {shown}"
+        ),
+    }
+
 
 def _is_blank_cell(value: Any) -> bool:
     """True for a table-control cell with nothing in it.
@@ -287,9 +323,11 @@ class TablesMixin:
         rendered before we read it. Without this, an ALV read past the first
         screenful silently drops or corrupts every off-screen row.
 
-        Returns ``(rows, unread_from)``: unread_from is the first row not read
-        because the grid would not scroll to it, else None. Read-only
-        scripting sets no property, so there only the rows on screen read.
+        Returns ``(rows, unread_from, failed)``: unread_from is the first row
+        not read because the grid would not scroll to it, else None (read-only
+        scripting sets no property, so there only the rows on screen read);
+        failed lists the cells whose GetCellValue raised, as {row, column}.
+        Such a cell reads None in its row, unlike an empty cell ("").
         """
         try:
             visible = int(grid.VisibleRowCount)
@@ -299,6 +337,7 @@ class TablesMixin:
             visible = 1
 
         data = []
+        failed: List[Dict[str, Any]] = []
         row = start_row
         while row < end_row:
             try:
@@ -309,9 +348,9 @@ class TablesMixin:
                 try:
                     shown = int(grid.firstVisibleRow)
                 except Exception:
-                    return data, row
+                    return data, row, failed
                 if not shown <= row < shown + visible:
-                    return data, row
+                    return data, row, failed
                 window_end = min(shown + visible, end_row)
             for r in range(row, window_end):
                 row_data = {}
@@ -320,10 +359,11 @@ class TablesMixin:
                         row_data[col] = grid.GetCellValue(r, col)
                     except Exception:
                         row_data[col] = None
+                        failed.append({"row": r, "column": col})
                 row_data["_absolute_row_index"] = r
                 data.append(row_data)
             row = window_end
-        return data, None
+        return data, None, failed
 
     def _read_alv_grid(self, grid, table_id: str, max_rows: int,
                        col_filter: List[str] = None,
@@ -333,6 +373,9 @@ class TablesMixin:
         all_columns = []
         for i in range(grid.ColumnCount):
             all_columns.append(grid.ColumnOrder(i))
+        unknown = _unknown_columns(col_filter or [], all_columns)
+        if col_filter and len(unknown) == len(col_filter):
+            return _no_known_columns(table_id, "GuiGridView", unknown, all_columns)
 
         all_column_info = []
         for col in all_columns:
@@ -358,10 +401,12 @@ class TablesMixin:
 
         data = []
         unread_from = None
+        failed: List[Dict[str, Any]] = []
         start_row = max(0, start_row)
         if not columns_only:
             end_row = min(start_row + max_rows, grid.RowCount)
-            data, unread_from = self._read_alv_rows(grid, columns, start_row, end_row)
+            data, unread_from, failed = self._read_alv_rows(
+                grid, columns, start_row, end_row)
 
         result = {
             "table_id": table_id,
@@ -383,6 +428,19 @@ class TablesMixin:
         result.update(self._alv_selection(grid))
         if columns_only:
             result["columns_only"] = True
+        warnings = []
+        if unknown:
+            result["unknown_columns"] = unknown
+            warnings.append(_unknown_warning(unknown))
+        if failed:
+            result["unreadable_cells"] = failed[:_MAX_UNREADABLE_CELLS]
+            result["unreadable_cell_count"] = len(failed)
+            warnings.append(
+                f"{len(failed)} cell(s) could not be read and are null in "
+                "their rows (an empty cell reads \"\"): see unreadable_cells."
+            )
+        if warnings:
+            result["warning"] = " ".join(warnings)
         if unread_from is not None:
             result["unread_from_row"] = unread_from
             result["note"] = (
@@ -494,6 +552,16 @@ class TablesMixin:
         )
         all_column_names = [c["name"] for c in all_columns_info]
         all_col_count = len(all_columns_info)
+        unknown = _unknown_columns(col_filter or [], all_column_names)
+        if col_filter and len(unknown) == len(col_filter):
+            result = _no_known_columns(
+                table_id, "GuiTableControl", unknown, all_column_names)
+            if any(c.get("name_is_title") for c in all_columns_info):
+                result["note"] = (
+                    "The table has no rows, so its columns are named by their "
+                    "titles until a row exists (e.g. after New Entries)."
+                )
+            return result
 
         # Build column filter index mapping
         if col_filter:
@@ -513,6 +581,7 @@ class TablesMixin:
 
         data = []
         empty_rows_from = None
+        unreadable_rows: List[int] = []
         scroll_maximum = None
         scroll_error = None
         rows_to_read = 0
@@ -553,6 +622,10 @@ class TablesMixin:
                     except Exception:
                         return None
 
+                def blank_row(vis_idx):
+                    return all(_is_blank_cell(cell_value(vis_idx, ci))
+                               for ci in range(all_col_count))
+
                 rows_to_read = min(visible_rows, max_rows)
                 for vis_idx in range(rows_to_read):
                     # Padding detection must check ALL columns, not just
@@ -572,8 +645,17 @@ class TablesMixin:
                         if not col_filter and not _is_blank_cell(value):
                             all_empty = False
                     if all_empty:
-                        empty_rows_from = start_position + vis_idx
-                        break
+                        # The data ends at the first empty row, unless a row
+                        # further down the page has data. A padding row has
+                        # no cells, so it reads like a row whose cells all
+                        # failed: only what follows tells the two apart.
+                        if all(blank_row(r) for r in range(vis_idx + 1, visible_rows)):
+                            empty_rows_from = start_position + vis_idx
+                            break
+                        if all(cell_value(vis_idx, ci) is None
+                               for ci in range(all_col_count)):
+                            unreadable_rows.append(start_position + vis_idx)
+                        # else a blank line between entries: kept as a row.
                     row_data["_absolute_row_index"] = start_position + vis_idx
                     data.append(row_data)
         else:
@@ -595,6 +677,19 @@ class TablesMixin:
             result["start_row"] = start_row
         if empty_rows_from is not None:
             result["empty_rows_from"] = empty_rows_from
+        warnings = []
+        if unknown:
+            result["unknown_columns"] = unknown
+            warnings.append(_unknown_warning(unknown))
+        if unreadable_rows:
+            result["unreadable_rows"] = unreadable_rows
+            warnings.append(
+                "No cell of row(s) " + ", ".join(map(str, unreadable_rows))
+                + " could be read, though rows below have data: they are "
+                "returned with null values. Read again, or check the screen."
+            )
+        if warnings:
+            result["warning"] = " ".join(warnings)
         if columns_only:
             result["columns_only"] = True
         else:

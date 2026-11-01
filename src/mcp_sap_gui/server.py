@@ -1847,9 +1847,15 @@ async def sap_read_table(
     A TableControl read returns at most the visible rows: page with
     start_row=next_start_row while has_more is true. start_row_note
     explains a clamped or failed scroll. total_rows counts its empty lines
-    too (SM30 pads the view). When the read reaches the first empty row,
-    the response has empty_rows_from, that row's absolute index: the data
-    ends there.
+    too (SM30 pads the view). When the read reaches the first empty row
+    with no data below it, the response has empty_rows_from, that row's
+    absolute index: the data ends there.
+
+    What could not be read is said, never dropped: a column name the table
+    does not have is listed in unknown_columns (no known name at all: an
+    error with the table's column names); a cell that could not be read is
+    null (an empty cell is ""), listed in unreadable_cells (ALV) or, for a
+    whole table-control row, unreadable_rows; warning sums it up.
 
     An ALV grid read also gives, when set: title (which list this is) and
     the selection that toolbar and menu functions act on: selected_rows in

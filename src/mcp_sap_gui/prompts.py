@@ -197,11 +197,19 @@ Compare the total rows read against `total_rows` from step 1 (GuiTableControl: \
 against `empty_rows_from`). If they don't match, you may have missed rows — check \
 your pagination math.
 
+A page with `unreadable_rows` or `unreadable_cells` holds null values that were \
+not read (an empty cell is `""`): read those rows again before calling the export \
+complete. `unknown_columns` lists requested names the table does not have.
+
+`total_rows` counts every row the grid shows, totals included: an ALV grid can end \
+with a totals row (highlighted, e.g. the counter row of `/SCWM/MON`, whose value \
+is the record count). Check the last rows before reporting a number of records.
+
 ## Tips
 - **Start with `columns_only=true`**: Don't read data until you know the schema.
 - **Select specific columns**: Wide tables waste tokens. Only fetch what you need.
 - **Batch size**: 100 rows per call is a good default. For very wide tables, use smaller batches.
-- **GuiTableControl**: `total_rows` may report the visible capacity rather than the actual data rows. The read stops at the first all-empty row and reports its index as `empty_rows_from`: the real data ends there.
+- **GuiTableControl**: `total_rows` may report the visible capacity rather than the actual data rows. The read stops at the first all-empty row with no data below it and reports its index as `empty_rows_from`: the real data ends there.
 - **Position button**: For SM30-style table maintenance, look for a "Position..." button in the toolbar (`sap_get_toolbar_buttons`) to jump to specific entries instead of paginating.
 """
 
