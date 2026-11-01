@@ -7,6 +7,7 @@ sap_set_policy_profile in 0.6). Live gates run against a real SAP system
 separately.
 """
 
+import hashlib
 import json
 import logging
 from unittest.mock import MagicMock, patch
@@ -145,6 +146,31 @@ class TestAuditTrail:
         inner = [e for e in entries if e["tool"] == "read_rows"]
         assert inner[0]["args"] == {"start_row": 0}
         assert all(e["status"] == "ok" for e in entries)
+
+    async def test_script_is_logged_by_hash_not_text(self, caplog):
+        """A script is source code: masking by argument name cannot find a
+        password in it, so the execute line keeps its hash and size only.
+        The calls it makes are logged one by one, masked as usual."""
+        srv, _ = _make_code_mode_server()
+        srv.add_middleware(AuditMiddleware())
+        script = (
+            'pw = "dummy-pass-123"\n'
+            'return await call_tool("write_thing", {"value": "x"})'
+        )
+        with caplog.at_level(logging.INFO, logger="mcp_sap_gui.audit"):
+            async with Client(srv) as client:
+                await client.call_tool("execute", {"code": script})
+
+        assert "dummy-pass-123" not in caplog.text
+        entries = [json.loads(r.message) for r in caplog.records]
+        (outer,) = [e for e in entries if e["tool"] == "execute"]
+        assert outer["args"]["code"] == {
+            "sha256": hashlib.sha256(script.encode("utf-8")).hexdigest(),
+            "chars": len(script),
+            "lines": 2,
+        }
+        (nested,) = [e for e in entries if e["tool"] == "write_thing"]
+        assert nested["args"] == {"value": "x"}
 
 
 # ===========================================================================

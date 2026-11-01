@@ -5,6 +5,7 @@ Logs every tool invocation with arguments, timing, and outcome.
 Designed to feed downstream analysis (playbook generation, compliance).
 """
 
+import hashlib
 import json
 import logging
 import time
@@ -65,6 +66,33 @@ def _mask_secrets(args: dict[str, Any]) -> dict[str, Any]:
         else:
             masked[key] = value
     return masked
+
+
+#: Tools whose argument is a script, by the argument that holds it: code
+#: mode's ``execute`` (--code-mode). A script is source code, so masking by
+#: argument name cannot find a password written into it (seen: a nested
+#: sap_set_field was masked, the script around it was logged whole). The
+#: line keeps the script's hash and size; the calls it makes are logged one
+#: by one and masked as usual.
+_SCRIPT_ARGS = {"execute": "code"}
+
+
+def _summarize_script(script: Any) -> dict[str, Any]:
+    text = script if isinstance(script, str) else json.dumps(script, default=str)
+    return {
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "chars": len(text),
+        "lines": text.count("\n") + 1,
+    }
+
+
+def _audit_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """The arguments as the audit line records them: a script by its hash
+    and size, everything else with secrets masked."""
+    script_arg = _SCRIPT_ARGS.get(tool_name)
+    if script_arg is not None and script_arg in args:
+        args = {**args, script_arg: _summarize_script(args[script_arg])}
+    return _mask_secrets(args)
 
 
 class AuditMiddleware(Middleware):
@@ -136,7 +164,7 @@ class AuditMiddleware(Middleware):
     ) -> ToolResult:
         tool_name = context.message.name
         raw_args = context.message.arguments or {}
-        safe_args = _mask_secrets(raw_args)
+        safe_args = _audit_args(tool_name, raw_args)
         ts = context.timestamp.isoformat()
         sap_before = self._sap(context)
         protocol = self._protocol(context)

@@ -45,7 +45,7 @@ It is a guardrail against an assistant's mistakes, not a security boundary: a bl
 
 ## Audit log
 
-`--audit-log FILE` writes one JSON object per line. Arguments are recorded with secrets masked: an argument named like a password, token or secret, and a value written into a field whose ID or column looks like one (`pwdRSYST-BCODE`, `PASSWORD`). The field itself stays visible, so the log shows where a value went.
+`--audit-log FILE` writes one JSON object per line. Arguments are recorded with secrets masked: an argument named like a password, token or secret, and a value written into a field whose ID or column looks like one (`pwdRSYST-BCODE`, `PASSWORD`). The field itself stays visible, so the log shows where a value went. With `--code-mode`, the script of an `execute` call is recorded by its hash and size (`sha256`, `chars`, `lines`), not its text: masking by name cannot find a value written into source code. Each call the script makes has its own line, masked as above.
 
 | `event` | When | Fields |
 |---|---|---|
