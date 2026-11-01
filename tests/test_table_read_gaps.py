@@ -187,3 +187,49 @@ def test_alv_unreadable_cells_are_capped_but_counted():
     assert result["unreadable_cell_count"] == 30
     assert len(result["unreadable_cells"]) == 20
     assert result["unreadable_cells"][0] == {"row": 0, "column": "CARRID"}
+
+
+# ---- padded column labels -------------------------------------------------
+
+
+class PaddedGrid(Grid):
+    """Live on an SE16 grid: GetColumnTooltip gave "CARRID" + 114 spaces."""
+
+    def GetColumnTooltip(self, col):  # noqa: N802
+        return col + " " * 114
+
+    def GetDisplayedColumnTitle(self, col):  # noqa: N802
+        return f"  {col.title()}  "
+
+
+def test_alv_read_strips_padded_titles_and_tooltips():
+    info = controller_for(PaddedGrid()).read_table(GRID_ID, columns_only=True)
+    assert info["column_info"][0] == {"name": "CARRID", "tooltip": "CARRID",
+                                      "title": "Carrid"}
+
+
+def test_alv_column_info_strips_padded_titles_and_tooltips():
+    info = controller_for(PaddedGrid()).get_column_info(GRID_ID)
+    first = info["columns"][0]
+    assert (first["title"], first["tooltip"]) == ("Carrid", "CARRID")
+
+
+def test_blank_alv_title_falls_back_to_the_name():
+    class BlankTitle(Grid):
+        def GetDisplayedColumnTitle(self, col):  # noqa: N802
+            return "    "
+
+    info = controller_for(BlankTitle()).read_table(GRID_ID, columns_only=True)
+    assert info["column_info"][0]["title"] == "CARRID"
+
+
+def test_table_control_strips_padded_titles():
+    tc = FakeTableControl(["KEY", "TEXT"], [row("A")], visible=3)
+    tc.Columns = type("Cols", (), {
+        "Count": 2,
+        "__call__": lambda self, i: type("Col", (), {
+            "Title": ["Key   ", "Text   "][i], "Tooltip": "  tip  "})(),
+    })()
+    info = controller_for(tc).read_table(TABLE_ID, columns_only=True)
+    assert [(c["title"], c["tooltip"]) for c in info["column_info"]] == [
+        ("Key", "tip"), ("Text", "tip")]
