@@ -396,9 +396,9 @@ Detailed reference guide for automating SAP GUI via MCP tools.
 | GuiComboBox | Dropdown | `wnd[0]/usr/cmbFIELD_NAME` |
 | GuiTab | Tab in strip | `wnd[0]/usr/tabsTABSTRIP/tabpTAB01` |
 | GuiMenu | Menu bar item | `wnd[0]/mbar/menu[0]/menu[1]` |
-| GuiGridView | ALV Grid | `wnd[0]/usr/cntlGRID/shellcont/shell` |
+| GuiGridView | ALV Grid (type GuiShell, subtype GridView) | `wnd[0]/usr/cntlGRID/shellcont/shell` |
 | GuiTableControl | Classic table | `wnd[0]/usr/tblSAPLBD41TCTRL_V_TBDLS` |
-| GuiTree | Tree control | `wnd[0]/usr/cntlTREE/shellcont/shell` |
+| GuiTree | Tree control (type GuiShell, subtype Tree) | `wnd[0]/usr/cntlTREE/shellcont/shell` |
 | GuiStatusbar | Status bar | `wnd[0]/sbar` |
 | GuiOkCodeField | Command/OK-code field | `wnd[0]/tbar[0]/okcd` |
 
@@ -2395,6 +2395,12 @@ async def sap_get_screen_elements(
     Use type_filter and changeable_only to reduce response size on
     complex screens (e.g. type_filter="GuiTextField,GuiCTextField"
     to find only input fields).
+
+    Trees, ALV grids, text editors and HTML viewers report type GuiShell
+    and a subtype (Tree, GridView, TextEdit, HTMLViewer, Toolbar, ...).
+    type_filter finds them by their class (GuiTree, GuiGridView, ...), by
+    the bare subtype, or all of them by GuiShell. They usually sit 3-6
+    levels deep: raise max_depth to find them.
 
     max_depth controls how deep to recurse into containers (default 2).
     Use max_depth=1 for a quick overview, max_depth=3+ for deeply nested

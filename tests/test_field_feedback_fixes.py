@@ -490,9 +490,9 @@ class TestScreenshotTool:
 # ===========================================================================
 
 def _child(element_id, type_, *, text="", changeable=False, selected=False,
-           children=()):
+           children=(), subtype=""):
     child = MagicMock(Id=element_id, Type=type_, Text=text, Changeable=changeable,
-                      Selected=selected)
+                      Selected=selected, SubType=subtype)
     child.Name = element_id.rsplit("/", 1)[-1]
     kids = list(children)
     child.Children.Count = len(kids)
@@ -510,7 +510,7 @@ def _tree_value(value):
 
 
 def _object_tree_json(element, props=("Id", "Type", "Name", "Text", "Changeable",
-                                      "Key", "Value")):
+                                      "Key", "Value", "SubType")):
     """What GetObjectTree returns for a _child() screen."""
     def node(el):
         result = {"properties": {name: _tree_value(getattr(el, name)) for name in props}}
@@ -825,7 +825,8 @@ class TestObjectTreeDiscovery:
         elements = controller.get_screen_elements("wnd[0]/usr")
 
         controller._session.GetObjectTree.assert_called_once_with(
-            "wnd[0]/usr", ["Id", "Type", "Name", "Text", "Changeable", "Key", "Value"],
+            "wnd[0]/usr",
+            ["Id", "Type", "Name", "Text", "Changeable", "Key", "Value", "SubType"],
         )
         assert [(e.id, e.text, e.changeable) for e in elements] == [
             ("wnd[0]/usr/sub", "", False),
@@ -2141,3 +2142,61 @@ class TestRadioAndCheckboxSelection:
 
         assert "selected" not in result
         assert "error" not in result
+
+
+class TestShellTypeFilter:
+    """Trees, grids and editors report the Type GuiShell: type_filter="GuiTree"
+    found nothing, so a guide that used it reported no tree (live, 2026-11-01
+    on /SCWM/MON). The filter now matches a shell by its class or SubType."""
+
+    _P = "/app/con[0]/ses[0]/wnd[0]/usr"
+
+    def _screen(self):
+        tree = _child(f"{self._P}/cntlTREE/shellcont/shell", "GuiShell",
+                      text="SAP.TableTreeControl.1", subtype="Tree")
+        grid = _child(f"{self._P}/cntlGRID/shellcont/shell", "GuiShell",
+                      text="SAPGUI.GridViewCtrl.1", subtype="GridView")
+        bar = _child(f"{self._P}/cntlBAR/shellcont/shell", "GuiShell",
+                     subtype="Toolbar")
+        edit = _child(f"{self._P}/cntlEDIT/shellcont/shell", "GuiShell",
+                      subtype="TextEdit")
+        field = _child(f"{self._P}/txtF", "GuiTextField", changeable=True)
+        tree_box = _child(f"{self._P}/cntlTREE", "GuiCustomControl", children=[
+            _child(f"{self._P}/cntlTREE/shellcont", "GuiContainerShell",
+                   children=[tree])])
+        return _child(self._P, "GuiUserArea",
+                      children=[tree_box, grid, bar, edit, field])
+
+    def _ids(self, discovery_path, type_filter):
+        controller = _make_controller_with_session()
+        _serve(controller, self._screen(), discovery_path)
+        found = controller.get_screen_elements(
+            "wnd[0]/usr", max_depth=6, type_filter=type_filter)
+        return [e.id.rsplit("/usr/", 1)[-1] for e in found]
+
+    @pytest.mark.parametrize("type_filter, expected", [
+        ("GuiTree", ["cntlTREE/shellcont/shell"]),
+        ("Tree", ["cntlTREE/shellcont/shell"]),
+        ("GuiGridView,GuiTableControl", ["cntlGRID/shellcont/shell"]),
+        ("GuiTextedit", ["cntlEDIT/shellcont/shell"]),      # the API's spelling
+        ("GuiToolbarControl", ["cntlBAR/shellcont/shell"]),  # not "GuiToolbar"
+        ("guitextfield", ["txtF"]),                          # any case
+    ])
+    def test_a_shell_is_found_by_its_class(self, discovery_path, type_filter, expected):
+        assert self._ids(discovery_path, type_filter) == expected
+
+    def test_guishell_still_finds_every_shell(self, discovery_path):
+        assert self._ids(discovery_path, "GuiShell") == [
+            "cntlTREE/shellcont/shell", "cntlGRID/shellcont/shell",
+            "cntlBAR/shellcont/shell", "cntlEDIT/shellcont/shell",
+        ]
+
+    def test_shells_report_their_subtype_and_nothing_else_does(self, discovery_path):
+        controller = _make_controller_with_session()
+        _serve(controller, self._screen(), discovery_path)
+        found = {e.id.rsplit("/usr/", 1)[-1]: e.subtype
+                 for e in controller.get_screen_elements("wnd[0]/usr", max_depth=6)}
+        assert found["cntlTREE/shellcont/shell"] == "Tree"
+        assert found["cntlGRID/shellcont/shell"] == "GridView"
+        assert found["txtF"] is None
+        assert found["cntlTREE"] is None

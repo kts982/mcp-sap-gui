@@ -1360,7 +1360,9 @@ class DiscoveryMixin:
 
         type_filter_set = None
         if type_filter:
-            type_filter_set = {t.strip() for t in type_filter.split(",") if t.strip()}
+            # Case-insensitive: the API writes GuiTextedit, SubType TextEdit.
+            type_filter_set = {t.strip().lower() for t in type_filter.split(",")
+                               if t.strip()}
 
         try:
             root_id = self._validate_container_id(container_id)
@@ -1419,7 +1421,11 @@ class DiscoveryMixin:
             return []
 
     # Key / Value are a dropdown's selection ("" for every other element).
-    _DISCOVERY_PROPS = ["Id", "Type", "Name", "Text", "Changeable", "Key", "Value"]
+    _DISCOVERY_PROPS = ["Id", "Type", "Name", "Text", "Changeable", "Key", "Value",
+                        "SubType"]
+
+    #: A shell's Scripting API class where it is not "Gui" + its SubType.
+    _SHELL_CLASSES = {"Toolbar": "GuiToolbarControl"}
 
     @staticmethod
     def _apply_combobox_selection(element: ScreenElement, key, value) -> None:
@@ -1461,6 +1467,8 @@ class DiscoveryMixin:
             if element.type == "GuiComboBox":
                 self._apply_combobox_selection(
                     element, props.get("Key"), props.get("Value"))
+            elif element.type == "GuiShell":
+                element.subtype = props.get("SubType") or None
             if self._wanted(element, type_filter_set, changeable_only):
                 if element.type in self._SELECTABLE_TYPES:
                     element.selected = self._selected(child_id)
@@ -1493,11 +1501,28 @@ class DiscoveryMixin:
             )
         return True
 
-    @staticmethod
-    def _wanted(element: ScreenElement, type_filter_set: set | None,
+    @classmethod
+    def _type_names(cls, element: ScreenElement) -> set:
+        """The names type_filter matches an element by, lowercase.
+
+        Every tree, ALV grid, text editor or HTML viewer reports the Type
+        GuiShell; what it is, is its SubType. The Scripting API documents
+        each as its own class (GuiTree, GuiGridView, GuiTextedit, ...), so a
+        filter that names the class finds it, as does the bare SubType
+        ("Tree") and GuiShell for all of them.
+        """
+        names = {element.type.lower()}
+        if element.subtype:
+            names.add(element.subtype.lower())
+            names.add(cls._SHELL_CLASSES.get(
+                element.subtype, "Gui" + element.subtype).lower())
+        return names
+
+    @classmethod
+    def _wanted(cls, element: ScreenElement, type_filter_set: set | None,
                 changeable_only: bool) -> bool:
         """Apply discovery's filters (containers are recursed regardless)."""
-        if type_filter_set and element.type not in type_filter_set:
+        if type_filter_set and not cls._type_names(element) & type_filter_set:
             return False
         if changeable_only and not element.changeable:
             return False
@@ -1554,6 +1579,8 @@ class DiscoveryMixin:
                 if element.type == "GuiComboBox":
                     self._apply_combobox_selection(
                         element, prop(child, 'Key', ''), prop(child, 'Value', ''))
+                elif element.type == "GuiShell":
+                    element.subtype = prop(child, 'SubType', '') or None
 
                 # Apply filters — but always recurse into containers
                 if self._wanted(element, type_filter_set, changeable_only):

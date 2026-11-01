@@ -79,6 +79,10 @@ class ScreenElement:
     # Radio buttons and checkboxes only: whether it is selected (read over
     # COM, never from GetObjectTree). None elsewhere, and left out.
     selected: bool | None = None
+    # Shells (GuiShell) only: the control inside, its SubType: "Tree",
+    # "GridView", "TextEdit", "HTMLViewer", "Toolbar", ... None elsewhere,
+    # and left out of tool responses.
+    subtype: str | None = None
 
 
 class SAPGUIError(Exception):
