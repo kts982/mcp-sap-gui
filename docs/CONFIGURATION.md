@@ -99,7 +99,7 @@ By default the card loads its renderer from the jsDelivr CDN, so on a PC without
 
 ## Code mode (experimental)
 
-`--code-mode` (with the `code-mode` extra) replaces the tool list with four meta-tools (`search`, `get_schema`, `tags`, `execute`): the assistant writes a short script that chains SAP calls in a sandbox. It is faster and cheaper on long chained flows such as full table dumps, and slower on quick questions. The confirmation questions and the transaction policy apply inside the sandbox too; on MCP 2026-07-28 a script cannot ask a question, so an action that needs one is refused there and has to be called directly.
+`--code-mode` (with the `code-mode` extra) replaces the tool list with four meta-tools (`search`, `get_schema`, `tags`, `execute`): the assistant writes a short script that chains SAP calls in a sandbox. It is faster and cheaper on long chained flows such as full table dumps, and slower on quick questions. The confirmation questions and the transaction policy apply inside the sandbox too; on MCP 2026-07-28 a script cannot ask a question, so an action that needs one is refused there and has to be called directly. The audit log records a script by its hash and size, not its text, and each call it makes on a line of its own ([Audit log](SECURITY_GUIDE.md#audit-log)).
 
 ```powershell
 uvx "mcp-sap-gui[screenshots,code-mode]" --code-mode
