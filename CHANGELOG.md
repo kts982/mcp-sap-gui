@@ -22,6 +22,11 @@ Every release and what changed for someone running the server. The [GitHub relea
 - **A tree that renumbers its nodes no longer ends in a bare COM error** ([#39](https://github.com/kts982/mcp-sap-gui/pull/39)). SE19's tree numbers its nodes anew after every round trip, so the next call with an old key failed with "Exception occurred". The error now says the key is no longer in the tree and to read the tree again, and a double-click or link click that renumbered the tree returns `node_keys_changed: true`.
 - **The SPRO guidance said a double-click opens an activity's documentation.** It does nothing there; link column `"1"` opens the documentation, column `"2"` runs the activity. Corrected in the server instructions, the SPRO guide and the tool descriptions.
 
+### Dependencies
+
+- `opentelemetry-api` 1.45.1 → 1.45.2 (through fastmcp and the MCP SDK) for [GHSA-mf5v-w3w3-f6cg](https://github.com/advisories/GHSA-mf5v-w3w3-f6cg) (CVE-2026-126360) ([#48](https://github.com/kts982/mcp-sap-gui/pull/48)): a crafted `traceparent` value in a request's `_meta` could cost the server a lot of CPU time and hold up the other requests meanwhile. The MCP SDK reads that value on every request, so the server was affected: a 16,000-character value took 0.6 s, and the time grows with the square of the length. 1.45.2 refuses a value longer than 512 characters. Availability only.
+- `dnspython` 2.9.0 → 2.9.2 (through pydantic's `email` extra, which fastmcp uses) for [GHSA-vvf4-9x63-8xvv](https://github.com/advisories/GHSA-vvf4-9x63-8xvv) (CVE-2026-128089) ([#48](https://github.com/kts982/mcp-sap-gui/pull/48)): a crafted WKS record in zone-file text could use up memory and CPU time. The server reads no zone files and does not load dnspython.
+
 ## 0.6.0 — 2026-10-28
 
 Support for MCP 2026-07-28 next to the earlier protocol versions, with confirmation questions that hold on both; Python 3.11 or later; documentation reorganised by task.
