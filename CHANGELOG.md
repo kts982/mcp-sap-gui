@@ -2,7 +2,9 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
-## Unreleased
+## 0.6.1 — 2026-11-16
+
+F11 and the Save button are sent only if the screen, system, client, user and SAP session still match the question. Responses add the screen's `buttons` and, for an ALV grid, its title and selection; `sap_read_table` names the columns, rows and cells it could not read; tree double-clicks are sent as the event the tree registered (SE19, SM34 view clusters, `/SCWM/MON`). `opentelemetry-api` 1.45.2 fixes CVE-2026-126360.
 
 ### Added
 

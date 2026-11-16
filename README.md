@@ -76,7 +76,7 @@ Tested on 2026-10-28: the **Claude Code CLI**, the **GitHub Copilot CLI**, **VS 
 
 ## What's new
 
-**0.6.0** supports MCP 2026-07-28, the newest protocol version, next to the earlier ones, and the confirmation questions work on both. It needs Python 3.11 or later, retires `sap_set_policy_profile`, names the MCP client in the audit log, and comes with reorganised documentation. Every change: [CHANGELOG](https://github.com/kts982/mcp-sap-gui/blob/master/CHANGELOG.md).
+**0.6.1** sends a save only to the screen you approved it for: if the screen, the system or the SAP session changed while the question was open, nothing is saved. Reads say more: the buttons on a screen, the title and selection of an ALV grid, and the columns or cells a table read could not return. Tree double-clicks now work in SE19 and in view clusters, and an updated `opentelemetry-api` closes a slowdown that a crafted request could cause. Every change: [CHANGELOG](https://github.com/kts982/mcp-sap-gui/blob/master/CHANGELOG.md).
 
 ## Contributing
 
