@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from .capture import CaptureUnavailableError, print_window_png
 from .models import SAPGUIError, ScreenElement
 
 
@@ -1672,8 +1673,7 @@ class DiscoveryMixin:
 
             # Find the topmost window (popups are wnd[1], wnd[2], etc.)
             window_id = self._find_topmost_window()
-            window = self._find_window(window_id)
-            window.HardCopy(filepath, _HARDCOPY_PNG)
+            self._capture_window(self._find_window(window_id), filepath)
 
             # Optimize image size with Pillow if available
             self._optimize_screenshot(filepath)
@@ -1731,7 +1731,7 @@ class DiscoveryMixin:
             target = self._resolve_screenshot_path(save_path)
 
             window_id = self._find_topmost_window()
-            self._find_window(window_id).HardCopy(target, _HARDCOPY_PNG)
+            method = self._capture_window(self._find_window(window_id), target)
             if not os.path.isfile(target):
                 raise SAPGUIError("SAP GUI did not write the screenshot file")
 
@@ -1739,6 +1739,7 @@ class DiscoveryMixin:
                 "format": "png",
                 "filepath": target,
                 "window": window_id,
+                "capture": method,
                 "size_bytes": os.path.getsize(target),
             }
             size = self._png_size(target)
@@ -1766,6 +1767,29 @@ class DiscoveryMixin:
         finally:
             if temp_filepath and os.path.exists(temp_filepath):
                 os.remove(temp_filepath)
+
+    def _capture_window(self, window, path: str) -> str:
+        """Capture *window* into *path*; return how: ``printwindow`` or ``hardcopy``.
+
+        Uses PrintWindow on the window handle, which ignores other windows on
+        top and refuses a minimized window or a session on a hidden Business
+        Client tab. Falls back to ``HardCopy`` (a screen copy that can show
+        other applications) when the handle is unavailable or pywin32/Pillow
+        are missing.
+        """
+        hwnd = None
+        try:
+            hwnd = window.Handle
+        except Exception:
+            pass
+        if isinstance(hwnd, int) and hwnd > 0:
+            try:
+                print_window_png(hwnd, path)
+                return "printwindow"
+            except CaptureUnavailableError as exc:
+                logger.warning("PrintWindow unavailable, using HardCopy: %s", exc)
+        window.HardCopy(path, _HARDCOPY_PNG)
+        return "hardcopy"
 
     def _resolve_screenshot_path(self, save_path: Any) -> str:
         """Validate a screenshot target and return it as an absolute path."""

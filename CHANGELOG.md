@@ -15,6 +15,7 @@ Every release and what changed for someone running the server. The [GitHub relea
 ### Fixed
 
 - **`sap_press_column_header` said it sorts** ([#53](https://github.com/kts982/mcp-sap-gui/pull/53)). It sends a click on the column header to the application, which on a standard grid neither selects the column nor sorts by it (checked live: no selected column, no sort, rows unchanged). The description now says so and points to `sap_select_alv_columns` and the grid's own functions.
+- **A screenshot no longer shows another application or another session.** `HardCopy` copies the window's rectangle from the screen, so a window on top of SAP, or another Business Client tab, ended up in the image, and a minimized window gave a black one that was reported as a success. The capture now renders the SAP window by its handle (`PrintWindow`, needs pywin32 and Pillow; the result says `capture: printwindow`), at the display's real resolution. A minimized window, or a session on a hidden Business Client tab, is refused with a message. Without pywin32 or Pillow it falls back to `HardCopy` as before (`capture: hardcopy`).
 
 ## 0.6.1 — 2026-11-16
 
