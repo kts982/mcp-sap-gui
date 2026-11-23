@@ -313,7 +313,11 @@ SAP GUI automation server. Controls SAP GUI for Windows via COM scripting.
 (`sap_get_screen_elements`, `sap_get_toolbar_buttons`): IDs differ between \
 systems and customizations.
 - **Check `screen.active_window` after every action.** `wnd[1]` or higher is a \
-popup: read it with `sap_get_popup_window` before you go on.
+popup: read it with `sap_get_popup_window` before you go on. \
+`screen.new_sessions` means another SAP session opened (a hotspot showing a \
+document in its own window, or the user): you stay in the old one; tell the \
+user, do not attach unasked. It shows seconds after the action: if an action \
+seems to do nothing, call `sap_get_screen_info` before repeating it.
 - **Confirmations.** F11 / Save always asks the user first; \
 `sap_set_confirmation_points` can add `transactions`, `batch_fields`, \
 `field_writes`, `all_writes` and `attach`. A "declined" error means the user \

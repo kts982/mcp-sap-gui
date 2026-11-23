@@ -194,6 +194,16 @@ and the pending-values table (requires the optional `apps` extra; see
 3. Use the popup `classification` before acting; `input_required` and risky `confirmation` popups should usually stay human- or agent-reviewed
 4. Use `sap_handle_popup(action="auto")` only for clearly informational popups you want dismissed safely
 
+### A Session That Opens Beside Yours
+
+A hotspot, a "Navigate to..." function or a menu entry can show a document in a SAP session of its own. The session the agent is in then looks unchanged. The user can open a session too, at any time.
+
+1. Check `new_sessions` in the `screen` of a response: each entry names a session that appeared on the connection (`session_id`, `transaction`, `title`)
+2. The agent is still bound to the session it was in: nothing moves on its own. Do not repeat the action, or a further session opens (SAP allows six by default)
+3. Tell the user. The report does not say who opened the session, and gives no index to attach with: attach to it only when the user asks, with current indexes from `sap_list_connections`
+
+A session is reported once, with the first response that carries `screen` after it appeared. It shows after the action has returned (0.5 to 0.7 seconds on a local system, 3 to 5 seconds on a remote one), so the action's own response usually does not have it yet. No action waits for it: when an action that should have opened a document seems to have done nothing, call `sap_get_screen_info` before repeating it.
+
 ### Table Handling
 
 1. Start with `sap_read_table`
