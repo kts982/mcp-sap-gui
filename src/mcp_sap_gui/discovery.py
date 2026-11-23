@@ -1775,19 +1775,41 @@ class DiscoveryMixin:
         window is rendered by its handle (``PrintWindow``) and a minimized
         window or a hidden tab is refused; there is no fallback. On plain SAP
         GUI ``HardCopy`` draws the window itself; only a minimized one is refused.
+
+        The host is that of the session's main window too: a popup in Business
+        Client is a top-level dialog of its own, and with Business Client
+        minimized ``HardCopy`` returned a copy of the screen for it while SAP's
+        ``Iconic`` stayed False.
         """
-        hwnd = None
-        try:
-            hwnd = window.Handle
-        except Exception:
-            pass
-        if isinstance(hwnd, int) and hwnd > 0 and is_embedded(hwnd):
+        hwnd = self._window_handle(window)
+        if (hwnd and is_embedded(hwnd)) or self._main_window_is_embedded():
+            if not hwnd:
+                raise SAPGUIError(
+                    "The SAP window gives no handle to capture it by, and in "
+                    "Business Client there is no other way."
+                )
             print_window_png(hwnd, path)
             return "printwindow"
         if window.Iconic is True:
             raise SAPGUIError("The SAP window is minimized; restore it and retry.")
         window.HardCopy(path, _HARDCOPY_PNG)
         return "hardcopy"
+
+    @staticmethod
+    def _window_handle(window) -> int | None:
+        try:
+            hwnd = window.Handle
+        except Exception:
+            return None
+        return hwnd if isinstance(hwnd, int) and hwnd > 0 else None
+
+    def _main_window_is_embedded(self) -> bool:
+        """True when this session's main window sits inside Business Client."""
+        try:
+            hwnd = self._window_handle(self._find_window("wnd[0]"))
+        except Exception:
+            return False
+        return bool(hwnd and is_embedded(hwnd))
 
     def _resolve_screenshot_path(self, save_path: Any) -> str:
         """Validate a screenshot target and return it as an absolute path."""

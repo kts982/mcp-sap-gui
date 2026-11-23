@@ -76,6 +76,48 @@ class TestCaptureByHost:
         assert "minimized" in result["error"]
         window.HardCopy.assert_not_called()
 
+    @staticmethod
+    def _popup_in_business_client(popup_handle):
+        """A session whose main window (4242) is embedded and whose popup is a dialog of its own."""
+        controller = SAPGUIController()
+        controller._session = MagicMock(Busy=False)
+        controller._session.ActiveWindow = MagicMock(Id="wnd[1]")
+        main = MagicMock(Iconic=False, Handle=4242)
+        popup = MagicMock(Iconic=False)  # SAP's Iconic stays False in Business Client
+        if popup_handle is not None:
+            popup.Handle = popup_handle
+        popup.HardCopy.side_effect = lambda path, _fmt: Path(path).write_bytes(b"png")
+        controller._session.findById.side_effect = {"wnd[0]": main, "wnd[1]": popup}.__getitem__
+        return controller, popup
+
+    def test_a_popup_in_business_client_uses_printwindow(self, tmp_path):
+        controller, popup = self._popup_in_business_client(5000)
+
+        def fake(hwnd, path):
+            Path(path).write_bytes(b"png")
+            return (21, 324)
+
+        with (
+            patch("mcp_sap_gui.discovery.is_embedded", side_effect=lambda hwnd: hwnd == 4242),
+            patch("mcp_sap_gui.discovery.print_window_png", side_effect=fake) as pw,
+        ):
+            result = controller.save_screenshot(str(tmp_path / "e.png"), inline=False)
+
+        assert pw.call_args[0][0] == 5000
+        assert (result["window"], result["capture"]) == ("wnd[1]", "printwindow")
+        popup.HardCopy.assert_not_called()
+
+    def test_a_popup_in_business_client_without_a_handle_is_refused(self, tmp_path):
+        controller, popup = self._popup_in_business_client(None)
+        target = tmp_path / "e.png"
+
+        with patch("mcp_sap_gui.discovery.is_embedded", side_effect=lambda hwnd: hwnd == 4242):
+            result = controller.save_screenshot(str(target))
+
+        assert "no handle" in result["error"]
+        assert not target.exists()
+        popup.HardCopy.assert_not_called()
+
     def test_without_a_handle_it_is_plain_hardcopy(self, tmp_path):
         controller, window = _controller()  # a MagicMock handle is not an int
 
@@ -84,8 +126,12 @@ class TestCaptureByHost:
         assert result["capture"] == "hardcopy"
 
 
-def _fake_win32(visible=True, root_iconic=False, classes=None):
-    """win32gui stand-in: handle 1 is a Business Client tab, 2 its parent, 99 the root."""
+def _fake_win32(visible=True, root_iconic=False, classes=None, owner_iconic=False):
+    """win32gui stand-in: handle 1 is a Business Client tab, 2 its parent, 99 the root.
+
+    77 is the window that owns the root: the Business Client main window, when
+    the root is a popup's dialog.
+    """
     classes = classes or {1: "SAP_FRONTEND_EMBEDDED", 2: "Shell Embedding"}
     parents = {1: 2, 2: 0}
 
@@ -95,7 +141,8 @@ def _fake_win32(visible=True, root_iconic=False, classes=None):
     return SimpleNamespace(
         GetClassName=classes.__getitem__,
         GetParent=parents.__getitem__,
-        IsIconic=lambda hwnd: root_iconic and hwnd == 99,
+        GetWindow=lambda _hwnd, _relation: 77,
+        IsIconic=lambda hwnd: (root_iconic and hwnd == 99) or (owner_iconic and hwnd == 77),
         IsWindowVisible=lambda _hwnd: visible,
         GetWindowRect=measure,
     )
@@ -120,6 +167,11 @@ class TestPrintWindowChecks:
     def test_minimized_business_client_is_refused_by_its_root_window(self):
         with pytest.raises(SAPGUIError, match="minimized"):
             _print(_fake_win32(root_iconic=True))
+
+    def test_a_popup_of_a_minimized_business_client_is_refused_by_its_owner(self):
+        # The popup's dialog is its own root and not minimized; its owner is.
+        with pytest.raises(SAPGUIError, match="minimized"):
+            _print(_fake_win32(visible=False, owner_iconic=True))
 
     def test_missing_pillow_names_the_extra(self):
         modules = {"win32gui": MagicMock(), "win32ui": MagicMock(), "PIL": None}

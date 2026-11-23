@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _PW_RENDERFULLCONTENT = 2
 _GA_ROOT = 2
+_GW_OWNER = 4
 _PER_MONITOR_AWARE_V2 = -4  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 
 
@@ -90,9 +91,11 @@ def _print_window_png(hwnd: int, path: str) -> Tuple[int, int]:
             "install mcp-sap-gui[screenshots]"
         ) from exc
 
-    # A Business Client tab is a child window: only the NWBC main window is minimized.
+    # A Business Client tab is a child window: only the NWBC main window is
+    # minimized. A popup is a top-level dialog which that main window owns.
     root = ctypes.windll.user32.GetAncestor(hwnd, _GA_ROOT)
-    if win32gui.IsIconic(hwnd) or (root and win32gui.IsIconic(root)):
+    owner = win32gui.GetWindow(root or hwnd, _GW_OWNER)
+    if any(handle and win32gui.IsIconic(handle) for handle in (hwnd, root, owner)):
         raise SAPGUIError("The SAP window is minimized; restore it and retry.")
     if not win32gui.IsWindowVisible(hwnd):
         raise SAPGUIError(
