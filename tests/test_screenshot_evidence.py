@@ -1,6 +1,9 @@
 """Screenshot evidence: capture by handle guards, highlight, mask, caption."""
 
+import sys
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -168,6 +171,118 @@ class TestSaveScreenshotEvidence:
         assert "error" in result
         assert not target.exists()
         assert list(tmp_path.iterdir()) == []  # no unmasked temp left in the target dir
+
+
+@contextmanager
+def _plain_sap_gui(maximized: bool):
+    """Plain SAP GUI (not embedded); yields the mock that is asked whether it is maximized."""
+    with (
+        patch("mcp_sap_gui.discovery.is_embedded", return_value=False),
+        patch("mcp_sap_gui.discovery.is_maximized", return_value=maximized) as asked,
+    ):
+        yield asked
+
+
+class TestMaximizedWindow:
+    """SAP reports a maximized window with its invisible frame; HardCopy leaves it out."""
+
+    @staticmethod
+    def _maximized(tmp_path, frame=12):
+        controller, window = _controller(tmp_path)
+        # The 200x100 image is the window less the frame on every side.
+        window.Handle = 4242
+        window.ScreenLeft, window.ScreenTop = -frame, 100 - frame
+        window.Width, window.Height = 200 + 2 * frame, 100 + 2 * frame
+        return controller, window
+
+    def test_the_image_starts_one_frame_inside_the_window(self, tmp_path):
+        controller, _ = self._maximized(tmp_path)
+        target = tmp_path / "e.png"
+
+        with _plain_sap_gui(maximized=True):
+            result = controller.save_screenshot(
+                str(target), inline=False, mask=["wnd[0]/usr/txtF"],
+            )
+
+        assert "error" not in result, result
+        with Image.open(target) as img:
+            assert img.getpixel((15, 15)) == (0, 0, 0)  # (10,110) minus the image's (0,100)
+            assert img.getpixel((55, 35)) == (255, 255, 255)  # not at SAP's origin (-12,88)
+
+    def test_a_window_that_is_not_maximized_is_still_refused(self, tmp_path):
+        controller, _ = self._maximized(tmp_path)
+        target = tmp_path / "e.png"
+
+        with _plain_sap_gui(maximized=False):
+            result = controller.save_screenshot(str(target), mask=["wnd[0]/usr/txtF"])
+
+        assert "SAP reports the window" in result["error"]
+        assert not target.exists()
+
+    def test_a_difference_that_is_not_a_frame_is_still_refused(self, tmp_path):
+        controller, window = self._maximized(tmp_path)
+        window.Height = 110  # 24 wider but 10 higher: not the same frame on every side
+        target = tmp_path / "e.png"
+
+        with _plain_sap_gui(maximized=True):
+            result = controller.save_screenshot(str(target), mask=["wnd[0]/usr/txtF"])
+
+        assert "SAP reports the window" in result["error"]
+        assert not target.exists()
+
+    def test_without_a_window_handle_it_is_refused(self, tmp_path):
+        controller, window = self._maximized(tmp_path)
+        window.Handle = MagicMock()  # Windows cannot be asked about this window
+        target = tmp_path / "e.png"
+
+        with _plain_sap_gui(maximized=True) as asked:
+            result = controller.save_screenshot(str(target), mask=["wnd[0]/usr/txtF"])
+
+        assert "SAP reports the window" in result["error"]
+        assert not target.exists()
+        asked.assert_not_called()
+
+    def test_a_status_bar_reaching_into_the_frame_is_cut_at_the_image_edge(self, tmp_path):
+        controller, _ = self._maximized(tmp_path)
+        # Inside the window SAP reports (bottom 212), 3 px below the image (bottom 200).
+        controller._known["wnd[0]/sbar"] = MagicMock(
+            ScreenLeft=0, ScreenTop=180, Width=200, Height=23,
+        )
+        target = tmp_path / "e.png"
+
+        with _plain_sap_gui(maximized=True):
+            result = controller.save_screenshot(str(target), inline=False, mask=["wnd[0]/sbar"])
+
+        assert "error" not in result, result
+        with Image.open(target) as img:
+            assert img.size == (200, 100)
+            assert img.getpixel((100, 99)) == (0, 0, 0)  # down to the last row
+            assert img.getpixel((100, 75)) == (255, 255, 255)
+
+    @pytest.mark.parametrize("box, cut", [
+        ((0, 80, 200, 23), (0, 80, 200, 20)),      # 3 px into the frame below
+        ((-5, -5, 30, 30), (0, 0, 25, 25)),        # into the frame at the top left
+        ((10, 10, 40, 20), (10, 10, 40, 20)),      # inside: untouched
+        ((0, 80, 200, 40), (0, 80, 200, 40)),      # further than the frame: left for the refusal
+        ((-12, 10, 12, 20), (-12, 10, 12, 20)),    # only in the frame: nothing would be left
+    ])
+    def test_a_box_is_cut_by_the_frame_and_no_further(self, box, cut):
+        from mcp_sap_gui.capture import cut_at_frame
+
+        assert cut_at_frame(box, (200, 100), 12) == cut
+
+    def test_windows_is_asked_for_the_show_state(self):
+        from mcp_sap_gui import capture
+
+        placement = {1: (0, 3, (-1, -1), (-1, -1), (0, 0, 800, 600)),  # maximized
+                     2: (0, 1, (-1, -1), (-1, -1), (0, 0, 800, 600))}  # normal
+        fake = SimpleNamespace(GetWindowPlacement=placement.__getitem__)
+        modules = {"win32gui": fake, "win32con": SimpleNamespace(SW_SHOWMAXIMIZED=3)}
+
+        with patch.dict(sys.modules, modules):
+            assert capture.is_maximized(1)
+            assert not capture.is_maximized(2)
+            assert not capture.is_maximized(99)  # no such window: not maximized
 
 
 class TestScreenshotToolArguments:

@@ -10,7 +10,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from .capture import annotate_png, evidence_line, is_embedded, print_window_png
+from .capture import (
+    annotate_png,
+    cut_at_frame,
+    evidence_line,
+    is_embedded,
+    is_maximized,
+    print_window_png,
+)
 from .models import SAPGUIError, ScreenElement
 
 
@@ -1808,16 +1815,13 @@ class DiscoveryMixin:
                     "The screen changed during the capture (scrolled or moved); "
                     "nothing saved. Retry."
                 )
-            reported = (int(window.Width), int(window.Height))
-            if self._png_size(path) != reported:
-                raise SAPGUIError(
-                    f"The image is {self._png_size(path)} but SAP reports the window as "
-                    f"{reported} (display scaling?); not drawing on it, nothing saved."
-                )
-        if origin is None:  # HardCopy: SAP's own window origin
-            origin = (int(window.ScreenLeft), int(window.ScreenTop))
-        boxes = [(left - origin[0], top - origin[1], width, height)
-                 for left, top, width, height in before]
+            origin, size, frame = self._image_origin(window, path, origin)
+            boxes = [(left - origin[0], top - origin[1], width, height)
+                     for left, top, width, height in before]
+            if frame:  # a maximized window: its frame is not in the image
+                boxes = [cut_at_frame(box, size, frame) for box in boxes]
+        else:
+            boxes = []
         meta = self._evidence_meta() if caption and include_context else ""
         annotate_png(
             path,
@@ -1827,6 +1831,41 @@ class DiscoveryMixin:
             meta=meta,
             isolate=isolate,
         )
+
+    def _image_origin(self, window, path: str, origin) -> tuple:
+        """Where the image is on the screen: ``((left, top), (width, height), frame)``.
+
+        The image has to be the window SAP reports, pixel for pixel; otherwise
+        nothing is drawn (SAPGUIError). One case differs by design: SAP reports
+        a maximized window with its invisible frame (3224x1940 at -12,-12 on a
+        screen 3200 wide) and ``HardCopy`` leaves the frame out (3200x1916). The
+        image then starts one frame width inside the window, on every side the
+        same; *frame* is that width, 0 in every other case.
+        """
+        size = self._png_size(path)
+        reported = (int(window.Width), int(window.Height))
+        hardcopy = origin is None
+        if hardcopy:  # SAP's own window origin
+            origin = (int(window.ScreenLeft), int(window.ScreenTop))
+        if size == reported:
+            return origin, size, 0
+        if hardcopy and size is not None and self._window_is_maximized(window):
+            extra_width, extra_height = reported[0] - size[0], reported[1] - size[1]
+            if extra_width == extra_height and extra_width > 0 and extra_width % 2 == 0:
+                frame = extra_width // 2
+                return (origin[0] + frame, origin[1] + frame), size, frame
+        raise SAPGUIError(
+            f"The image is {size} but SAP reports the window as "
+            f"{reported} (display scaling?); not drawing on it, nothing saved."
+        )
+
+    @staticmethod
+    def _window_is_maximized(window) -> bool:
+        try:
+            hwnd = window.Handle
+        except Exception:
+            return False
+        return isinstance(hwnd, int) and hwnd > 0 and is_maximized(hwnd)
 
     def _inline_png_b64(self, target: str) -> str:
         """The saved file as a downscaled base64 PNG; the file itself stays full size."""

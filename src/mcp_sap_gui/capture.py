@@ -46,6 +46,22 @@ def is_embedded(hwnd: int) -> bool:
     return False
 
 
+def is_maximized(hwnd: int) -> bool:
+    """True when Windows shows the window with this handle maximized.
+
+    SAP reports a maximized window with its invisible frame, and ``HardCopy``
+    leaves the frame out of the image; the caller needs to know which case it
+    has. Anything that cannot be asked counts as not maximized.
+    """
+    try:
+        import win32con
+        import win32gui
+
+        return win32gui.GetWindowPlacement(hwnd)[1] == win32con.SW_SHOWMAXIMIZED
+    except Exception:
+        return False
+
+
 @contextmanager
 def _physical_pixels():
     """Make this thread DPI-aware so window sizes and PrintWindow use real pixels.
@@ -188,6 +204,26 @@ def _require_inside(boxes: Iterable[Box], size: Tuple[int, int]) -> None:
     for left, top, box_width, box_height in boxes:
         if left < 0 or top < 0 or left + box_width > width or top + box_height > height:
             raise SAPGUIError("A target lies outside the captured window; nothing saved")
+
+
+def cut_at_frame(box: Box, size: Tuple[int, int], frame: int) -> Box:
+    """*box* cut at the image's edge where it reaches into the window's frame.
+
+    The image of a maximized window lacks the frame, *frame* pixels on every
+    side, and an element beside it can reach into it: the status bar does, by
+    3 px at the bottom. What is cut off is in no capture. A box that reaches
+    further than the frame, or of which nothing would be left, comes back
+    unchanged and is then refused as outside the captured window.
+    """
+    left, top, width, height = box
+    right, bottom = left + width, top + height
+    if left < -frame or top < -frame or right > size[0] + frame or bottom > size[1] + frame:
+        return box
+    left, top = max(left, 0), max(top, 0)
+    right, bottom = min(right, size[0]), min(bottom, size[1])
+    if right <= left or bottom <= top:
+        return box
+    return left, top, right - left, bottom - top
 
 
 def _isolated(image, highlight: Iterable[Box]):
