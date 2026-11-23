@@ -1523,6 +1523,271 @@ class TablesMixin:
                 "Could not read cell information",
             )
 
+    _ALV_CELL_ACTIONS = ("click", "press_button", "set_checkbox", "f4",
+                         "enter", "context_menu", "toggle_total")
+
+    def alv_cell_action(self, grid_id: str, action: str,
+                        row: Optional[int] = None, column: str = "",
+                        checked: Optional[bool] = None) -> Dict[str, Any]:
+        """
+        Act on a cell of an ALV grid (GuiGridView).
+
+        click (a hotspot), press_button (a button cell), set_checkbox,
+        f4 (value help), enter (send the grid's changes to the application),
+        context_menu (open the cell's menu) and toggle_total (open or close
+        a subtotal's group). A cell that is not what the action needs is
+        refused before anything is sent, with status 'rejected'.
+
+        What the checks are for, each seen live (SAP GUI 8.10):
+        - Click on a cell that is no hotspot and PressButton on a cell that
+          is no button raise a bare "Exception occurred".
+        - ModifyCheckBox on a cell that is no checkbox returns without an
+          error and changes nothing.
+        - PressF4 on a cell without value help opens an information popup.
+        - Click or PressButton on a row that is not on screen only scrolls
+          there: the event fires on the second call. So the cell is made
+          the current one first, which brings its row on screen.
+        - PressTotalRow takes a column that carries a total, or the line's
+          own subtotal column; any other column raises, and so does an
+          overall total that has no subtotals. On the overall total it
+          closes every group at once (40 rows became 5).
+
+        Args:
+            grid_id: SAP GUI grid ID (ALV)
+            action: One of _ALV_CELL_ACTIONS
+            row: Row index (0-based); enter can do without a cell
+            column: Column name; toggle_total finds its own
+            checked: The state to set, for set_checkbox
+
+        Returns:
+            Dict with the status and, where the action reaches the
+            application, the screen after it
+        """
+        self._require_session()
+
+        base: Dict[str, Any] = {"grid_id": grid_id, "action": action}
+        if row is not None:
+            base["row"] = row
+        if column:
+            base["column"] = column
+
+        def rejected(error: str, **extra: Any) -> Dict[str, Any]:
+            return {**base, **extra, "status": "rejected", "error": error}
+
+        try:
+            if action not in self._ALV_CELL_ACTIONS:
+                return rejected(
+                    f"Unknown action {action!r}. Use one of: "
+                    f"{', '.join(self._ALV_CELL_ACTIONS)}."
+                )
+            grid = self._find_element(grid_id)
+            if getattr(grid, "Type", "") == "GuiTableControl":
+                return rejected(
+                    "This is a table control, not an ALV grid: its cells are "
+                    "screen elements (sap_set_field, sap_select_checkbox, "
+                    "sap_press_button, sap_double_click_cell)."
+                )
+
+            has_cell = row is not None and bool(column)
+            if action == "toggle_total":
+                if row is None:
+                    return rejected("toggle_total needs the row of the totals line.")
+            elif not has_cell and (action != "enter" or row is not None or column):
+                return rejected(f"{action} needs row and column.")
+            columns: List[str] = []
+            if row is not None:
+                row_count = int(grid.RowCount)
+                if not 0 <= row < row_count:
+                    return rejected(
+                        f"Row {row} is not in the grid: it has rows 0 to "
+                        f"{row_count - 1}."
+                    )
+                columns = [grid.ColumnOrder(i) for i in range(grid.ColumnCount)]
+                if column and column not in columns:
+                    shown = ", ".join(columns[:30]) + (", ..." if len(columns) > 30 else "")
+                    return rejected(
+                        f"Column {column!r} is not in the grid. Its columns: {shown}",
+                        available_columns=columns,
+                    )
+
+            def fact(method: str, *args: Any) -> Any:
+                # None = this SAP GUI cannot say: then the action is not held back.
+                try:
+                    return getattr(grid, method)(*args)
+                except Exception:
+                    return None
+
+            def make_current():
+                # Brings the row on screen; the grid is found again because a
+                # grid that reports selection changes makes a round trip here.
+                grid.SetCurrentCell(row, column)
+                return self._find_element(grid_id)
+
+            result: Dict[str, Any] = dict(base)
+
+            if action == "click":
+                if fact("IsCellHotspot", row, column) is False:
+                    return rejected(
+                        "This cell is not a hotspot, so a click does nothing "
+                        "there. sap_get_cell_info says what kind of cell it "
+                        "is; sap_double_click_cell sends a double-click.",
+                        cell_type=fact("GetCellType", row, column),
+                    )
+                make_current().Click(row, column)
+                result["status"] = "clicked"
+
+            elif action == "press_button":
+                cell_type = fact("GetCellType", row, column)
+                if cell_type is not None and cell_type != "Button":
+                    return rejected(
+                        f"This cell is not a button (cell_type {cell_type}).",
+                        cell_type=cell_type,
+                    )
+                make_current().PressButton(row, column)
+                result["status"] = "pressed"
+
+            elif action == "set_checkbox":
+                if checked is None:
+                    return rejected("set_checkbox needs checked (true or false).")
+                cell_type = fact("GetCellType", row, column)
+                if cell_type is not None and cell_type != "CheckBox":
+                    return rejected(
+                        f"This cell is not a checkbox (cell_type {cell_type}).",
+                        cell_type=cell_type,
+                    )
+                if fact("GetCellChangeable", row, column) is False:
+                    return rejected("This checkbox is not changeable.")
+                grid.ModifyCheckBox(row, column, bool(checked))
+                now = fact("GetCellCheckBoxChecked", row, column)
+                if now is not None and bool(now) != bool(checked):
+                    return {**base, "checked": bool(now), "status": "rejected",
+                            "error": "The checkbox did not take the value."}
+                result["checked"] = bool(checked)
+                result["status"] = "success"
+                result["note"] = (
+                    "The application sees the change with the next round "
+                    "trip: action 'enter' sends it for checking."
+                )
+                return result  # nothing reached the application yet
+
+            elif action == "f4":
+                if fact("HasCellF4Help", row, column) is False:
+                    return rejected("This cell has no value help (F4).")
+                make_current().PressF4()
+                result["status"] = "opened"
+
+            elif action == "enter":
+                grid.PressEnter()
+                result["status"] = "sent"
+                if has_cell:
+                    grid = self._find_element(grid_id)
+                    for method, key in (("GetCellValue", "value"),
+                                        ("GetCellState", "state")):
+                        value = fact(method, row, column)
+                        if value is not None:
+                            result[key] = value
+
+            elif action == "context_menu":
+                make_current().ContextMenu()
+                result["status"] = "menu_opened"
+                result["hint"] = (
+                    "Use select_alv_context_menu_item with an item's "
+                    "function_code (select_by='id') to pick it"
+                )
+                items = self._open_context_menu_items(self._find_element(grid_id))
+                if items:
+                    result["menu_items"] = items
+
+            else:  # toggle_total
+                level = fact("GetRowTotalLevel", row)
+                if type(level) is int and level < 1:
+                    return rejected(
+                        f"Row {row} is a record, not a total or subtotal "
+                        "(sap_read_table marks those with _total_level)."
+                    )
+                # The press is taken only in a column that carries a total
+                # (or in the line's own subtotal column): any other raises.
+                column = next(
+                    (name for name in columns
+                     if fact("GetColumnTotalType", name) == "Total"),
+                    column,
+                )
+                if not column:
+                    return rejected(
+                        "No column with a total was found: name one in column."
+                    )
+                rows_before = int(grid.RowCount)
+                grid = make_current()
+                try:
+                    grid.PressTotalRow(row, column)
+                except Exception:
+                    return rejected(
+                        "This totals line has no group to open or close "
+                        "(an overall total without subtotals below it)."
+                    )
+                rows_after = int(self._find_element(grid_id).RowCount)
+                result["status"] = "toggled"
+                result["rows_before"] = rows_before
+                result["rows_after"] = rows_after
+                if rows_after != rows_before:
+                    result["note"] = (
+                        "The grid's rows changed: row numbers are no longer "
+                        "the same, read the table again."
+                    )
+
+            result["screen"] = self.get_screen_info()
+            return result
+        except Exception as e:
+            return self._error_result(base, e, "Could not perform the cell action")
+
+    def select_alv_columns(self, grid_id: str, columns: List[str],
+                           add: bool = False) -> Dict[str, Any]:
+        """
+        Select columns of an ALV grid, as a click on their headers does.
+
+        The grid's functions act on the selected columns: Total and Subtotals
+        need one, Sort and Filter take it as their column. Without *add* the
+        selection is replaced (the selected rows go with it: ClearSelection
+        clears both); an empty list just clears it.
+
+        Args:
+            grid_id: SAP GUI grid ID (ALV)
+            columns: Column names
+            add: Keep what is selected and add these
+
+        Returns:
+            Dict with the status and the columns selected afterwards
+        """
+        self._require_session()
+
+        base: Dict[str, Any] = {"grid_id": grid_id}
+        try:
+            grid = self._find_element(grid_id)
+            if getattr(grid, "Type", "") == "GuiTableControl":
+                return {**base, "status": "rejected", "error": (
+                    "This is a table control, not an ALV grid: use "
+                    "sap_select_all_table_control_columns."
+                )}
+            available = [grid.ColumnOrder(i) for i in range(grid.ColumnCount)]
+            unknown = _unknown_columns(columns, available)
+            if unknown:
+                # Nothing is selected: half a selection would make the next
+                # function act on other columns than the caller named.
+                return {**base, "status": "rejected",
+                        "error": (f"Not in this grid: {', '.join(unknown)}. "
+                                  "Nothing was selected."),
+                        "unknown_columns": unknown,
+                        "available_columns": available}
+            if not add:
+                grid.ClearSelection()
+            for column in columns:
+                grid.SelectColumn(column)
+            selection = self._alv_selection(self._find_element(grid_id))
+            return {**base, "status": "selected",
+                    "selected_columns": selection.get("selected_columns", [])}
+        except Exception as e:
+            return self._error_result(base, e, "Could not select the columns")
+
     def press_column_header(self, grid_id: str,
                              column: str) -> Dict[str, Any]:
         """

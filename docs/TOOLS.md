@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **59 MCP tools**. This page is the reference for developers and for anyone who wants to know what the assistant can call; how to use the server is in [Getting started](GETTING_STARTED.md).
+`mcp-sap-gui` currently exposes **61 MCP tools**. This page is the reference for developers and for anyone who wants to know what the assistant can call; how to use the server is in [Getting started](GETTING_STARTED.md).
 
 Two practical rules:
 
@@ -108,7 +108,9 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_press_alv_toolbar_button` | Press an ALV toolbar button. A menu button opens its menu and the response lists `menu_items` (text and function code) |
 | `sap_select_alv_context_menu_item` | Select an ALV context menu item by function code, text or position |
 | `sap_get_cell_info` | Read detailed ALV cell metadata: editable, cell type (checkbox, dropdown, button), error/warning state, F4 help, hotspot |
-| `sap_press_column_header` | Click a column header, typically to sort |
+| `sap_alv_cell_action` | Act on one cell: `click` a hotspot, `press_button`, `set_checkbox`, `f4` (value help), `enter` (send the grid's changes to the application for checking), `context_menu` (open the cell's menu; the response lists `menu_items`) and `toggle_total` (open or close a subtotal's group). A cell that is not what the action needs is refused before anything is sent (`status: rejected`): a click on a cell that is no hotspot would fail with a bare error, and a checkbox write to a cell that is no checkbox would change nothing without saying so. The cell's row is brought on screen first, because a click on a row that is not on screen only scrolls there. `set_checkbox` falls under the `field_writes` confirmation point |
+| `sap_select_alv_columns` | Select columns by name (comma-separated; `""` clears). The grid's Total, Subtotals, Sort and Filter functions act on the selected columns. A name the grid does not have selects nothing |
+| `sap_press_column_header` | Send a click on a column header to the application. It neither selects the column nor sorts by it: use `sap_select_alv_columns` and the grid's own function |
 | `sap_select_all_rows` | Select all ALV rows |
 
 ### TableControl Tools
