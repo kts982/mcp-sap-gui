@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from .capture import CaptureUnavailableError, print_window_png
+from .capture import is_embedded, print_window_png
 from .models import SAPGUIError, ScreenElement
 
 
@@ -1771,23 +1771,21 @@ class DiscoveryMixin:
     def _capture_window(self, window, path: str) -> str:
         """Capture *window* into *path*; return how: ``printwindow`` or ``hardcopy``.
 
-        Uses PrintWindow on the window handle, which ignores other windows on
-        top and refuses a minimized window or a session on a hidden Business
-        Client tab. Falls back to ``HardCopy`` (a screen copy that can show
-        other applications) when the handle is unavailable or pywin32/Pillow
-        are missing.
+        Embedded in Business Client, ``HardCopy`` copies the screen, so the
+        window is rendered by its handle (``PrintWindow``) and a minimized
+        window or a hidden tab is refused; there is no fallback. On plain SAP
+        GUI ``HardCopy`` draws the window itself; only a minimized one is refused.
         """
         hwnd = None
         try:
             hwnd = window.Handle
         except Exception:
             pass
-        if isinstance(hwnd, int) and hwnd > 0:
-            try:
-                print_window_png(hwnd, path)
-                return "printwindow"
-            except CaptureUnavailableError as exc:
-                logger.warning("PrintWindow unavailable, using HardCopy: %s", exc)
+        if isinstance(hwnd, int) and hwnd > 0 and is_embedded(hwnd):
+            print_window_png(hwnd, path)
+            return "printwindow"
+        if window.Iconic is True:
+            raise SAPGUIError("The SAP window is minimized; restore it and retry.")
         window.HardCopy(path, _HARDCOPY_PNG)
         return "hardcopy"
 

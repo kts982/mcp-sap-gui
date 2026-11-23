@@ -153,7 +153,7 @@ Every action tool also reports a popup that it opened: `screen.popup` carries th
 | Tool | Description |
 |------|-------------|
 | `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any. A table control is one element, and a classic list is reported under `lists` without its cells (`expand_tables=true` lists the cells of both); a dropdown reports its selected `key` and the entry's text, a radio button or checkbox `selected`, a shell (type `GuiShell`) its `subtype` (`Tree`, `GridView`, `TextEdit`, ...). `type_filter` finds a shell by its class (`GuiTree`, `GuiGridView`), its bare subtype, or every shell by `GuiShell`; IDs are returned in the short `wnd[0]/...` form |
-| `sap_screenshot` | Capture a screenshot of the active SAP window. `save_path` also writes a full-resolution PNG (never overwrites an existing file) and returns its path and pixel size; `inline=false` skips the image when only the file is needed. The window is captured by its handle, so other windows on top do not show up; a minimized window or a session on a hidden Business Client tab is refused |
+| `sap_screenshot` | Capture a screenshot of the active SAP window. `save_path` also writes a full-resolution PNG (never overwrites an existing file) and returns its path and pixel size; `inline=false` skips the image when only the file is needed. In Business Client the window is rendered by its handle (needs the `screenshots` extra), so other windows and tabs do not show up; on plain SAP GUI `HardCopy` draws it. A minimized window or a hidden Business Client tab is refused. The result's `capture` is `printwindow` or `hardcopy` |
 
 ## Preview
 

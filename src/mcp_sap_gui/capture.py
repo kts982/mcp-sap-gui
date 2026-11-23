@@ -21,8 +21,25 @@ _GA_ROOT = 2
 _PER_MONITOR_AWARE_V2 = -4  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 
 
-class CaptureUnavailableError(Exception):
-    """pywin32 or Pillow is missing, so the screen-based fallback must be used."""
+_EMBEDDED_CLASS = "SAP_FRONTEND_EMBEDDED"
+
+
+def is_embedded(hwnd: int) -> bool:
+    """True when the SAP window sits inside another host (Business Client).
+
+    There ``HardCopy`` is a screen copy, so only ``PrintWindow`` is right. On
+    plain SAP GUI ``HardCopy`` draws the window itself. Looks at the handle and
+    its parents for the class SAP gives the embedded window.
+    """
+    try:
+        import win32gui
+    except ImportError:
+        return False
+    while hwnd:
+        if win32gui.GetClassName(hwnd) == _EMBEDDED_CLASS:
+            return True
+        hwnd = win32gui.GetParent(hwnd)
+    return False
 
 
 @contextmanager
@@ -55,8 +72,8 @@ def print_window_png(hwnd: int, path: str) -> Tuple[int, int]:
     reports for ``ScreenLeft``/``ScreenTop``.
 
     Raises SAPGUIError when the window is minimized, not visible (a hidden
-    Business Client tab) or cannot be rendered, and CaptureUnavailableError when
-    the libraries are missing.
+    Business Client tab), cannot be rendered, or Pillow is missing. There is no
+    HardCopy fallback: in Business Client it would copy the screen.
     """
     with _physical_pixels():
         return _print_window_png(hwnd, path)
@@ -68,7 +85,10 @@ def _print_window_png(hwnd: int, path: str) -> Tuple[int, int]:
         import win32ui
         from PIL import Image
     except ImportError as exc:
-        raise CaptureUnavailableError(str(exc)) from exc
+        raise SAPGUIError(
+            "Capturing a Business Client window needs Pillow and pywin32: "
+            "install mcp-sap-gui[screenshots]"
+        ) from exc
 
     # A Business Client tab is a child window: only the NWBC main window is minimized.
     root = ctypes.windll.user32.GetAncestor(hwnd, _GA_ROOT)
