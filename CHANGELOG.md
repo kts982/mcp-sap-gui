@@ -2,6 +2,12 @@
 
 Every release and what changed for someone running the server. The [GitHub release pages](https://github.com/kts982/mcp-sap-gui/releases) also list the merged pull requests and their authors.
 
+## Unreleased
+
+### Added
+
+- **An ALV read marks the totals lines of the layout** ([#51](https://github.com/kts982/mcp-sap-gui/pull/51)). A total or subtotal counts as a row but is a sum, not a record: a grid with a total and two subtotal levels showed 40 rows for 30 records, and a subtotal row carries its group's key values, so it read like a record with empty fields. When the grid's layout has totals lines, `sap_read_table` now reports `totals_lines` (`highest_level`, `above_entries`) and marks each total or subtotal row among the rows read with `_total_level`: 1 is the innermost subtotal, the highest the overall total (the counter row of `/SCWM/MON` is level 1). A subtotal whose group is closed carries `_collapsed`, with a `warning`: its records are not in the grid. `total_rows` still counts every row. A grid without totals lines reads as before; the check is two calls, under 2 ms.
+
 ## 0.6.1 — 2026-11-16
 
 F11 and the Save button are sent only if the screen, system, client, user and SAP session still match the question. Responses add the screen's `buttons` and, for an ALV grid, its title and selection; `sap_read_table` names the columns, rows and cells it could not read; tree double-clicks are sent as the event the tree registered (SE19, SM34 view clusters, `/SCWM/MON`). `opentelemetry-api` 1.45.2 fixes CVE-2026-126360.
