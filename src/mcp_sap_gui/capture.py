@@ -66,6 +66,22 @@ def _physical_pixels():
             user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(old))
 
 
+def _require_shown(win32gui, hwnd: int) -> None:
+    """SAPGUIError unless this window is the one on screen and not minimized."""
+    # A Business Client tab is a child window: only the NWBC main window is
+    # minimized. A popup is a top-level dialog which that main window owns.
+    root = win32gui.GetAncestor(hwnd, _GA_ROOT)
+    owner = win32gui.GetWindow(root or hwnd, _GW_OWNER)
+    if any(handle and win32gui.IsIconic(handle) for handle in (hwnd, root, owner)):
+        raise SAPGUIError("The SAP window is minimized; restore it and retry.")
+    if not win32gui.IsWindowVisible(hwnd):
+        raise SAPGUIError(
+            "This session is not the visible one (another Business Client tab "
+            "or window is shown). Switch to it in SAP and retry; the capture "
+            "would show the wrong session."
+        )
+
+
 def print_window_png(hwnd: int, path: str) -> Tuple[int, int]:
     """Render the window with this handle into a PNG; return its screen (left, top).
 
@@ -91,18 +107,7 @@ def _print_window_png(hwnd: int, path: str) -> Tuple[int, int]:
             "install mcp-sap-gui[screenshots]"
         ) from exc
 
-    # A Business Client tab is a child window: only the NWBC main window is
-    # minimized. A popup is a top-level dialog which that main window owns.
-    root = ctypes.windll.user32.GetAncestor(hwnd, _GA_ROOT)
-    owner = win32gui.GetWindow(root or hwnd, _GW_OWNER)
-    if any(handle and win32gui.IsIconic(handle) for handle in (hwnd, root, owner)):
-        raise SAPGUIError("The SAP window is minimized; restore it and retry.")
-    if not win32gui.IsWindowVisible(hwnd):
-        raise SAPGUIError(
-            "This session is not the visible one (another Business Client tab "
-            "or window is shown). Switch to it in SAP and retry; the capture "
-            "would show the wrong session."
-        )
+    _require_shown(win32gui, hwnd)
 
     left, top, right, bottom = win32gui.GetWindowRect(hwnd)
     width, height = right - left, bottom - top
@@ -120,6 +125,9 @@ def _print_window_png(hwnd: int, path: str) -> Tuple[int, int]:
             hwnd, mem.GetSafeHdc(), _PW_RENDERFULLCONTENT
         ):
             raise SAPGUIError("Windows could not render the SAP window.")
+        # A tab switch between the first check and the render makes PrintWindow
+        # return the other tab's screen, so ask again before keeping the image.
+        _require_shown(win32gui, hwnd)
         image = Image.frombuffer(
             "RGB", (width, height), bmp.GetBitmapBits(True), "raw", "BGRX", 0, 1
         )

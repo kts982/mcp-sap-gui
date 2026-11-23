@@ -126,7 +126,8 @@ class TestCaptureByHost:
         assert result["capture"] == "hardcopy"
 
 
-def _fake_win32(visible=True, root_iconic=False, classes=None, owner_iconic=False):
+def _fake_win32(visible=True, root_iconic=False, classes=None, owner_iconic=False,
+                rect=None):
     """win32gui stand-in: handle 1 is a Business Client tab, 2 its parent, 99 the root.
 
     77 is the window that owns the root: the Business Client main window, when
@@ -136,22 +137,29 @@ def _fake_win32(visible=True, root_iconic=False, classes=None, owner_iconic=Fals
     parents = {1: 2, 2: 0}
 
     def measure(_hwnd):  # reached only when the checks pass
-        raise AssertionError("must refuse before measuring")
+        if rect is None:
+            raise AssertionError("must refuse before measuring")
+        return rect
+
+    shown = iter(visible) if isinstance(visible, list) else None
 
     return SimpleNamespace(
         GetClassName=classes.__getitem__,
         GetParent=parents.__getitem__,
         GetWindow=lambda _hwnd, _relation: 77,
         IsIconic=lambda hwnd: (root_iconic and hwnd == 99) or (owner_iconic and hwnd == 77),
-        IsWindowVisible=lambda _hwnd: visible,
+        GetAncestor=lambda _hwnd, _flag: 99,
+        IsWindowVisible=lambda _hwnd: next(shown) if shown else visible,
         GetWindowRect=measure,
+        GetWindowDC=lambda _hwnd: 5,
+        ReleaseDC=lambda _hwnd, _hdc: 1,
+        DeleteObject=lambda _handle: 1,
     )
 
 
 def _print(fake):
     modules = {"win32gui": fake, "win32ui": MagicMock(), "PIL": MagicMock()}
     user32 = MagicMock()
-    user32.GetAncestor.return_value = 99
     user32.SetThreadDpiAwarenessContext.return_value = 0
     windll = patch.object(capture.ctypes, "windll", create=True)
     with patch.dict(sys.modules, modules), windll as dll:
@@ -172,6 +180,12 @@ class TestPrintWindowChecks:
         # The popup's dialog is its own root and not minimized; its owner is.
         with pytest.raises(SAPGUIError, match="minimized"):
             _print(_fake_win32(visible=False, owner_iconic=True))
+
+    def test_a_tab_switch_during_the_render_is_refused_and_nothing_is_saved(self):
+        # Visible at the first check, hidden once PrintWindow has returned.
+        fake = _fake_win32(visible=[True, False], rect=(0, 0, 10, 10))
+        with pytest.raises(SAPGUIError, match="not the visible one"):
+            _print(fake)
 
     def test_missing_pillow_names_the_extra(self):
         modules = {"win32gui": MagicMock(), "win32ui": MagicMock(), "PIL": None}
