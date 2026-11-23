@@ -2063,8 +2063,75 @@ async def sap_get_cell_info(grid_id: str, row: int, column: str, ctx: Context) -
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
+async def sap_alv_cell_action(
+    grid_id: str,
+    action: Literal["click", "press_button", "set_checkbox", "f4", "enter",
+                    "context_menu", "toggle_total"],
+    ctx: Context,
+    row: Optional[int] = None,
+    column: str = "",
+    checked: Optional[bool] = None,
+) -> dict:
+    """Act on a cell of an ALV grid. Does NOT work on GuiTableControl.
+
+    Actions (row and column name the cell):
+    - click: click a hotspot, as a single mouse click on it does
+    - press_button: press the button shown in the cell
+    - set_checkbox: set a checkbox cell to `checked` (true/false)
+    - f4: open the cell's value help
+    - enter: send the grid's changes to the application for checking. The
+      cell is optional; when given, the response has its value and state
+      afterwards (state 'Error': the entry was not accepted)
+    - context_menu: open the cell's context menu. The response lists
+      menu_items; pick one with sap_select_alv_context_menu_item
+    - toggle_total: open or close the group of a subtotal row (a row that
+      sap_read_table marks with _total_level); needs only the row. On the
+      overall total it closes or opens every group. Row numbers change:
+      read the table again
+
+    A cell that is not what the action needs (no hotspot, no button, no
+    changeable checkbox, no value help) is refused before anything is
+    sent: status 'rejected' with an error. sap_get_cell_info shows what
+    kind of cell it is; sap_double_click_cell sends a double-click.
+
+    A hotspot or a button runs an application function: it can open a
+    popup (screen.active_window), post, or open a document in another SAP
+    session, which shows seconds later (screen.new_sessions of a later
+    response; sap_get_screen_info asks)."""
+    _check_write(ctx)
+    c = _ctrl(ctx)
+    return await _com(lambda: c.alv_cell_action(
+        grid_id, action, row=row, column=column, checked=checked))
+
+
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
+async def sap_select_alv_columns(
+    grid_id: str, columns: str, ctx: Context, add: bool = False,
+) -> dict:
+    """Select columns of an ALV grid, as a click on their headers does.
+    Does NOT work on GuiTableControl.
+
+    columns: comma-separated column names ("" clears the selection). The
+    grid's functions act on the selected columns: Total and Subtotals need
+    one, Sort and Filter take it as their column
+    (sap_press_alv_toolbar_button). The selection is replaced, selected
+    rows included, unless add=true. A name the grid does not have selects
+    nothing: status 'rejected' with unknown_columns."""
+    _check_write(ctx)
+    c = _ctrl(ctx)
+    names = [name.strip() for name in columns.split(",") if name.strip()]
+    return await _com(lambda: c.select_alv_columns(grid_id, names, add=add))
+
+
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_press_column_header(grid_id: str, column: str, ctx: Context) -> dict:
-    """Click a column header in an ALV grid (triggers sort). Does NOT work on GuiTableControl."""
+    """Send a click on a column header of an ALV grid to the application.
+    Does NOT work on GuiTableControl.
+
+    This does not select the column and does not sort by it: select it
+    with sap_select_alv_columns, then press the grid's sort, total or
+    filter function with sap_press_alv_toolbar_button. Only a grid whose
+    application reacts to header clicks does something here."""
     _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.press_column_header(grid_id, column))

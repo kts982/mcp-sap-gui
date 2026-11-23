@@ -116,6 +116,7 @@ _TOOL_ACTIONS: dict[str, str] = {
     "sap_select_radio_button": "select a radio button",
     "sap_select_combobox_entry": "change a dropdown selection",
     "sap_press_button": "press a button",
+    "sap_alv_cell_action": "act on a grid cell",
 }
 
 
@@ -187,6 +188,10 @@ def point_for_call(
     active = set(active_points)
 
     mapped = POINT_BY_TOOL.get(tool_name)
+    if tool_name == "sap_alv_cell_action" and args.get("action") == "set_checkbox":
+        # The one action of that tool that writes a value, as
+        # sap_select_checkbox and sap_modify_cell do.
+        mapped = "field_writes"
     if mapped is not None and mapped in active:
         return mapped
 
@@ -222,6 +227,12 @@ def _prompt_fields(tool_name: str, args: Mapping[str, Any]) -> Mapping[str, Any]
         return {"transaction": args.get("tcode", "")}
     if tool_name == "sap_press_button":
         return {"button": args.get("button_id", "")}
+    if tool_name == "sap_alv_cell_action":
+        cell = f"{args.get('grid_id', '?')}[{args.get('row', '?')}].{args.get('column', '?')}"
+        action = args.get("action", "?")
+        if action == "set_checkbox":
+            return {cell: args.get("checked")}
+        return {cell: action}
     # all_writes catch-all: show the raw arguments.  _normalize_fields masks
     # password-like keys and clips long values, so this is safe to render.
     return {k: v for k, v in args.items() if k != "ctx"}
