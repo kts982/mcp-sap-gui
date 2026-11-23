@@ -19,10 +19,11 @@ Larger ideas (new tool families, changes to the safety gates or the transaction 
 ```bash
 git clone https://github.com/kts982/mcp-sap-gui.git
 cd mcp-sap-gui
+git switch next
 uv sync --extra dev --extra screenshots --extra code-mode --extra apps
 ```
 
-These are the extras CI installs; with fewer, the tests for the missing ones are skipped.
+`next` is the branch to work on ([Branches](#branches)). These are the extras CI installs; with fewer, the tests for the missing ones are skipped.
 
 Real SAP GUI integration work requires:
 
@@ -53,8 +54,16 @@ Command:   uv
 Arguments: run --isolated --no-project --with "mcp-sap-gui[screenshots,apps] @ file:///<path-to-checkout>" python -m mcp_sap_gui.server
 ```
 
+## Branches
+
+- `master` is the latest release.
+- `next` collects the changes for the coming release. Branch off `next` and open your pull request against it.
+
+Only a fix that has to ship before the coming release goes to `master`; please say so in the issue first.
+
 ## Before Opening a PR
 
+- Open the pull request against `next` ([Branches](#branches)).
 - Keep changes focused. Small, reviewable PRs are easier to merge.
 - Use generic SAP examples such as system `DEV`, client `100`, user `TESTUSER`, `MAT-001`, and placeholder business values.
 - Do not commit customer-specific system names, screenshots, or SAP data.
