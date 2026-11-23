@@ -435,6 +435,15 @@ class TablesMixin:
         if columns_only:
             result["columns_only"] = True
         warnings = []
+        totals_lines, collapsed = self._alv_totals_lines(grid, data)
+        if totals_lines:
+            result["totals_lines"] = totals_lines
+        if collapsed:
+            warnings.append(
+                f"{collapsed} subtotal line(s) in this read are collapsed "
+                "(_collapsed): their records are not in the grid until the "
+                "group is expanded."
+            )
         if unknown:
             result["unknown_columns"] = unknown
             warnings.append(_unknown_warning(unknown))
@@ -456,6 +465,71 @@ class TablesMixin:
                 "rows on screen can be read here."
             )
         return result
+
+    @staticmethod
+    def _alv_totals_lines(grid, data: List[Dict[str, Any]]):
+        """Mark the totals lines among the rows read.
+
+        A totals line (a total or a subtotal of the ALV layout) counts as a
+        row but is a sum, not a record. Returns ``(info, collapsed)``: info
+        is None when the grid has no totals line, else ``highest_level`` and
+        ``above_entries``; collapsed counts the marked rows whose group is
+        closed. Each totals line in *data* gets ``_total_level`` and, when
+        its group is closed, ``_collapsed``.
+
+        Whether a grid has totals lines depends on its layout, so a read
+        asks two rows first: every record lies between the grid's first row
+        and its last, and its group's sums stand below it or, with "totals
+        lines above the entries", above it. One of the two rows is therefore
+        a totals line, or the grid has none. GetRowTotalLevel is 0 on a
+        record, 1 on the innermost subtotal and highest on the overall
+        total, and it also answers for rows that are not on screen.
+
+        Seen live: BCALV_GRID_DEMO with a total and two subtotal levels
+        (levels 1, 2 and 3; 40 rows for 30 records; a closed group drops its
+        records and inner subtotals from the grid) and the counter row of
+        /SCWM/MON (level 1).
+        """
+        def level(row: int) -> int:
+            try:
+                value = grid.GetRowTotalLevel(row)
+            except Exception:
+                return 0
+            # SAP GUI answers with a number; anything else is no totals line.
+            return value if type(value) is int else 0
+
+        try:
+            row_count = int(grid.RowCount)
+        except Exception:
+            return None, 0
+        if row_count < 1:
+            return None, 0
+        first = level(0)
+        last = level(row_count - 1) if row_count > 1 else first
+        if first < 1 and last < 1:
+            return None, 0
+
+        known = {0: first, row_count - 1: last}
+        collapsed = 0
+        for row in data:
+            index = row.get("_absolute_row_index")
+            if index is None:
+                continue
+            row_level = known[index] if index in known else level(index)
+            if row_level < 1:
+                continue
+            row["_total_level"] = row_level
+            try:
+                expanded = bool(grid.IsTotalRowExpanded(index))
+            except Exception:
+                expanded = True
+            if not expanded:
+                row["_collapsed"] = True
+                collapsed += 1
+        # With every group closed both ends are totals lines: the overall
+        # total, the higher level, is on the side the totals stand on.
+        info = {"highest_level": max(first, last), "above_entries": first > last}
+        return info, collapsed
 
     @staticmethod
     def _alv_selection(grid) -> Dict[str, Any]:

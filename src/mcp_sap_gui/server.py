@@ -1860,7 +1860,14 @@ async def sap_read_table(
     An ALV grid read also gives, when set: title (which list this is) and
     the selection that toolbar and menu functions act on: selected_rows in
     SAP's form ("1,2,4-8,10") with selected_row_count, selected_cells,
-    selected_columns."""
+    selected_columns.
+
+    An ALV grid whose layout has totals lines (totals, subtotals) has
+    totals_lines, and each such row carries _total_level: 1 is the
+    innermost subtotal, totals_lines.highest_level the overall total. It
+    is a sum, not a record, and total_rows counts it. _collapsed: true
+    marks a subtotal whose group is closed: its records are not in the
+    grid."""
     c = _ctrl(ctx)
     capped = min(max_rows, config.max_table_rows)
     return _note_cap(await _com(lambda: c.read_table(
