@@ -194,15 +194,15 @@ and the pending-values table (requires the optional `apps` extra; see
 3. Use the popup `classification` before acting; `input_required` and risky `confirmation` popups should usually stay human- or agent-reviewed
 4. Use `sap_handle_popup(action="auto")` only for clearly informational popups you want dismissed safely
 
-### An Action That Opens Another Session
+### A Session That Opens Beside Yours
 
-A hotspot, a "Navigate to..." function or a menu entry can show a document in a SAP session of its own. The session you are in then looks unchanged.
+A hotspot, a "Navigate to..." function or a menu entry can show a document in a SAP session of its own. The session the agent is in then looks unchanged. The user can open a session too, at any time.
 
-1. Check `new_sessions` in the `screen` of the response: each entry names the new session (`session_id`, `transaction`, `title`) and gives the `connection_index` and `session_index` to attach with
-2. You are still bound to the session you were in: nothing moves on its own. Do not repeat the action, or a further session opens (SAP allows six by default)
-3. To work in the new session, call `sap_connect_existing` with those two indexes; call it again with the old ones to come back
+1. Check `new_sessions` in the `screen` of a response: each entry names a session that appeared on the connection (`session_id`, `transaction`, `title`)
+2. The agent is still bound to the session it was in: nothing moves on its own. Do not repeat the action, or a further session opens (SAP allows six by default)
+3. Tell the user. The report does not say who opened the session, and gives no index to attach with: attach to it only when the user asks, with current indexes from `sap_list_connections`
 
-A session is reported once, in the first response after it appeared. Buttons, menu entries, double-clicks, tree links and F2 wait up to 1.5 seconds for it when they left the screen unchanged. On a local system that is enough (it showed after 0.5 to 0.7 seconds); on a remote system it took 3 to 5 seconds. When none shows in the wait, the response carries `unchanged_note` instead: check `sap_get_screen_info` before repeating the action. Other actions, and a session that takes longer, report it with the next response that carries `screen`.
+A session is reported once, with the first response that carries `screen` after it appeared. It shows after the action has returned (0.5 to 0.7 seconds on a local system, 3 to 5 seconds on a remote one), so the action's own response usually does not have it yet. No action waits for it: when an action that should have opened a document seems to have done nothing, call `sap_get_screen_info` before repeating it.
 
 ### Table Handling
 

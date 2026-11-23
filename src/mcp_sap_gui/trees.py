@@ -258,12 +258,10 @@ class TreesMixin:
         if events and _SELECTION_CHANGED in events:
             # The selection was a round trip of its own: find the tree again.
             tree = self._find_element(tree_id)
-        mark = self._navigation_mark()
         if send_item:
             tree.DoubleClickItem(node_key, item_name)
         else:
             tree.DoubleClickNode(node_key)
-        self._await_new_session(mark)
 
         if self._node_key_gone(tree_id, node_key):
             result["node_keys_changed"] = True
@@ -609,9 +607,7 @@ class TreesMixin:
 
         try:
             tree = self._find_element(tree_id)
-            mark = self._navigation_mark()
             tree.ClickLink(node_key, item_name)
-            self._await_new_session(mark)
 
             result = {
                 "tree_id": tree_id,
