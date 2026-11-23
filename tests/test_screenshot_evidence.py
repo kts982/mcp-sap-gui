@@ -162,6 +162,38 @@ class TestSaveScreenshotEvidence:
         assert "SAP reports the window" in result["error"]
         assert not target.exists()
 
+    def test_a_target_in_another_window_than_the_capture_saves_nothing(self, tmp_path):
+        controller, window = _controller(tmp_path)
+        controller._session.ActiveWindow = MagicMock(Id="wnd[1]")  # a popup is on top
+        controller._known["wnd[1]"] = window
+        target = tmp_path / "e.png"
+
+        result = controller.save_screenshot(str(target), mask=["wnd[0]/usr/txtF"])
+
+        assert "the capture is wnd[1]" in result["error"]
+        assert not target.exists()
+
+    def test_the_image_is_saved_across_drives(self, tmp_path):
+        controller, _ = _controller(tmp_path)
+        target = tmp_path / "e.png"
+
+        with patch("os.replace", side_effect=OSError(17, "not the same drive")):
+            result = controller.save_screenshot(str(target), inline=False)
+
+        assert "error" not in result, result
+        assert target.is_file()
+
+    def test_an_existing_file_is_never_overwritten(self, tmp_path):
+        target = tmp_path / "e.png"
+        target.write_bytes(b"mine")
+        source = tmp_path / "new.png"
+        source.write_bytes(b"new")
+
+        with pytest.raises(FileExistsError):
+            SAPGUIController._save_new(str(source), str(target))
+
+        assert target.read_bytes() == b"mine"
+
     def test_unlocatable_mask_saves_nothing(self, tmp_path):
         controller, _ = _controller(tmp_path)
         target = tmp_path / "e.png"
@@ -325,14 +357,15 @@ class TestAlvCellTargets:
 
     def test_cell_box_is_grid_origin_plus_cell_offsets(self):
         grid = self._grid()
-        box = self._controller(grid)._screen_box(CELL)
+        box = self._controller(grid)._screen_box(CELL, "wnd[0]")
 
         assert box == (100 + 50, 200 + 40, 80, 20)
         grid.GetCellLeft.assert_called_with(3, "COL_B")
 
     def test_column_runs_from_first_visible_row_to_the_grid_bottom(self):
         grid = self._grid()
-        box = self._controller(grid)._screen_box({"id": "wnd[0]/usr/shell", "column": "COL_B"})
+        target = {"id": "wnd[0]/usr/shell", "column": "COL_B"}
+        box = self._controller(grid)._screen_box(target, "wnd[0]")
 
         assert box == (150, 240, 80, 200 + 300 - 240)
         grid.GetCellLeft.assert_called_with(2, "COL_B")
@@ -342,14 +375,23 @@ class TestAlvCellTargets:
         controller = self._controller(self._grid(first=2, count=10))
 
         with pytest.raises(SAPGUIError, match="not visible"):
-            controller._screen_box(dict(CELL, row=row))
+            controller._screen_box(dict(CELL, row=row), "wnd[0]")
 
     def test_a_column_beyond_the_grids_right_edge_is_an_error(self):
         grid = self._grid()
         grid.GetCellLeft.return_value = 900  # right of the 500 px grid
 
         with pytest.raises(SAPGUIError, match="outside the visible"):
-            self._controller(grid)._screen_box(CELL)
+            self._controller(grid)._screen_box(CELL, "wnd[0]")
+
+    def test_a_cell_cut_by_the_grid_edge_is_clipped_for_a_mask_and_refused_for_a_highlight(self):
+        grid = self._grid()
+        grid.GetCellLeft.return_value = 450  # 80 px wide in a grid that ends 50 px on
+
+        clipped = self._controller(grid)._screen_box(CELL, "wnd[0]", clip=True)
+        assert clipped == (100 + 450, 200 + 40, 50, 20)
+        with pytest.raises(SAPGUIError, match="only partly visible"):
+            self._controller(grid)._screen_box(CELL, "wnd[0]", clip=False)
 
     def test_a_cell_reported_with_no_size_is_an_error(self):
         grid = self._grid()
@@ -357,13 +399,13 @@ class TestAlvCellTargets:
         grid.GetCellHeight.return_value = 0
 
         with pytest.raises(SAPGUIError, match="not visible"):
-            self._controller(grid)._screen_box(CELL)
+            self._controller(grid)._screen_box(CELL, "wnd[0]")
 
     def test_an_unknown_column_is_an_error_not_a_bogus_box(self):
         grid = self._grid()
 
         with pytest.raises(SAPGUIError, match="Unknown column 'NOPE'.*COL_A, COL_B"):
-            self._controller(grid)._screen_box(dict(CELL, column="NOPE"))
+            self._controller(grid)._screen_box(dict(CELL, column="NOPE"), "wnd[0]")
         grid.GetCellLeft.assert_not_called()
 
     @pytest.mark.parametrize("target", [
@@ -373,7 +415,7 @@ class TestAlvCellTargets:
     ])
     def test_a_malformed_cell_target_is_an_error(self, target):
         with pytest.raises(SAPGUIError):
-            self._controller(self._grid())._screen_box(target)
+            self._controller(self._grid())._screen_box(target, "wnd[0]")
 
     def test_the_tool_passes_cell_targets_on_as_plain_dicts(self):
         from mcp_sap_gui.server import CellTarget, _targets
@@ -408,6 +450,15 @@ class TestIsolateAndContext:
             str(tmp_path / "b.png"), inline=False, caption="Note", include_context=True,
         )
         controller._evidence_meta.assert_called_once()
+
+    def test_include_context_without_a_caption_saves_nothing(self, tmp_path):
+        controller, _ = _controller(tmp_path)
+        target = tmp_path / "a.png"
+
+        result = controller.save_screenshot(str(target), include_context=True)
+
+        assert "give a caption" in result["error"]
+        assert not target.exists()
 
     def test_isolate_without_a_highlight_saves_nothing(self, tmp_path):
         controller, _ = _controller(tmp_path)

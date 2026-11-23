@@ -1738,10 +1738,13 @@ class DiscoveryMixin:
                 ``{"id": <grid id>, "column": "MATNR", "row": 3}`` (``row``
                 0-based and visible; left out, the visible part of the column).
                 A target needs a size and has to lie inside its container
-                (the user area, the grid) and inside the window.
+                (the user area, the grid) and in the captured window. A cell
+                partly scrolled out of view is masked where it shows; for
+                highlight and isolate it is an error.
             caption: Text for a strip under the image.
             include_context: Add system, client, user, transaction and time
-                to the caption strip. Off by default: it exposes the user ID.
+                to the caption strip (needs a caption). Off by default: it
+                exposes the user ID.
             isolate: Black out everything outside the highlighted areas.
 
         Returns:
@@ -1758,12 +1761,14 @@ class DiscoveryMixin:
         try:
             if isolate and not highlight:
                 raise SAPGUIError("isolate needs at least one highlight target")
+            if include_context and not caption.strip():
+                raise SAPGUIError("include_context adds a line to the caption; give a caption")
             target = self._resolve_screenshot_path(save_path)
 
             window_id = self._find_topmost_window()
             window = self._find_window(window_id)
             # Read the targets before the capture and again after it.
-            before = [self._screen_box(t) for t in (*mask, *highlight)]
+            before = self._screen_boxes(window_id, mask, highlight)
             # Capture to a temp file: a masked screenshot must never exist
             # unmasked at the target path, even for a moment.
             capture_file = tempfile.NamedTemporaryFile(
@@ -1778,9 +1783,9 @@ class DiscoveryMixin:
             if highlight or mask or caption.strip():
                 self._annotate_capture(
                     window, capture_path, origin, highlight, mask, before,
-                    caption.strip(), include_context, isolate,
+                    caption.strip(), include_context, isolate, window_id,
                 )
-            os.replace(capture_path, target)
+            self._save_new(capture_path, target)
 
             result: Dict[str, Any] = {
                 "format": "png",
@@ -1806,11 +1811,29 @@ class DiscoveryMixin:
             if capture_path and os.path.exists(capture_path):
                 os.remove(capture_path)
 
+    @staticmethod
+    def _save_new(source: str, target: str) -> None:
+        """Copy the finished image to *target*; never over an existing file.
+
+        ``os.replace`` cannot cross drives (``WinError 17``) and overwrites.
+        """
+        import os
+        import shutil
+
+        with open(source, "rb") as src, open(target, "xb") as dst:
+            try:
+                shutil.copyfileobj(src, dst)
+            except BaseException:
+                dst.close()
+                os.remove(target)
+                raise
+
     def _annotate_capture(self, window, path: str, origin, highlight, mask, before,
-                          caption: str, include_context: bool, isolate: bool) -> None:
+                          caption: str, include_context: bool, isolate: bool,
+                          window_id: str) -> None:
         """Draw the targets onto the capture, once the screen is known not to have moved."""
         if before:
-            if [self._screen_box(t) for t in (*mask, *highlight)] != before:
+            if self._screen_boxes(window_id, mask, highlight) != before:
                 raise SAPGUIError(
                     "The screen changed during the capture (scrolled or moved); "
                     "nothing saved. Retry."
@@ -1910,12 +1933,24 @@ class DiscoveryMixin:
         window.HardCopy(path, _HARDCOPY_PNG)
         return None, "hardcopy"
 
-    def _screen_box(self, target) -> tuple:
+    def _screen_boxes(self, window_id: str, mask, highlight) -> list:
+        """Boxes of the mask targets, then the highlight ones.
+
+        A mask covers whatever of a cell shows; a highlight (and so an isolate)
+        has to show all of it, or the frame would point at less than was meant.
+        """
+        return [self._screen_box(t, window_id, clip=True) for t in mask] + [
+            self._screen_box(t, window_id, clip=False) for t in highlight
+        ]
+
+    def _screen_box(self, target, window_id: str, clip: bool = True) -> tuple:
         """Screen (left, top, width, height) of a target, or SAPGUIError.
 
         *target* is an element ID, or ``{"id": <grid id>, "column": ..., "row": ...}``
         for an ALV cell (``row`` left out: the column). A target without a size,
-        or outside its container (the user area or the grid), is an error.
+        outside its container (the user area or the grid), or in another window
+        than the captured *window_id* is an error. A cell partly scrolled out of
+        view is clipped to the grid when *clip* is set, an error otherwise.
         """
         row = None
         if isinstance(target, str):
@@ -1935,20 +1970,26 @@ class DiscoveryMixin:
             if box[2] <= 0 or box[3] <= 0:
                 raise SAPGUIError(f"{element_id!r} is not visible (no size)")
             if column is not None:
-                box = self._grid_cell_box(el, row, column, box)
-            self._require_within(box, element_id)
+                box = self._grid_cell_box(el, row, column, box, clip)
+            self._require_within(box, element_id, window_id)
         except SAPGUIError:
             raise
         except Exception as exc:
             raise SAPGUIError(f"Cannot locate {element_id!r} on screen: {exc}") from exc
         return box
 
-    def _require_within(self, box: tuple, element_id: str) -> None:
+    def _require_within(self, box: tuple, element_id: str, window_id: str) -> None:
         """Refuse a box outside the user area (or, for the rest, the window) it belongs to."""
         found = re.match(r"(.*?wnd\[\d+\])(/usr)?(?:/|$)", element_id)
         if not found:
             raise SAPGUIError(f"Cannot tell which window {element_id!r} is in")
         container_id = found.group(1) + (found.group(2) or "")
+        shown, own = (re.search(r"wnd\[\d+\]", i).group() for i in (window_id, container_id))
+        if shown != own:
+            raise SAPGUIError(
+                f"{element_id!r} is in {own}, but the capture is {shown} "
+                "(a popup is on top); close the popup or target its elements"
+            )
         # A bare window ID is not an element ID (toolbar, title and status bar sit in it).
         container = (self._find_element(container_id) if found.group(2)
                      else self._find_window(container_id))
@@ -1959,11 +2000,14 @@ class DiscoveryMixin:
             raise SAPGUIError(f"{element_id!r} lies outside its container {container_id!r}")
 
     @staticmethod
-    def _grid_cell_box(grid, row: int | None, column: str, bounds: tuple) -> tuple:
+    def _grid_cell_box(grid, row: int | None, column: str, bounds: tuple,
+                       clip: bool = True) -> tuple:
         """Screen box of an ALV cell, or the column's visible part when *row* is None.
 
-        Clipped to the grid: a cell scrolled partly out of view is masked only
-        where it shows; one fully out of view is an error, never a silent miss.
+        A cell scrolled partly out of view is clipped to the grid when *clip* is
+        set (a mask covers what shows) and an error otherwise (a highlight must
+        show all of it). One fully out of view is always an error, never a
+        silent miss.
         """
         # SAP answers an unknown column with the row-selector box, not an error.
         columns = [grid.ColumnOrder(i) for i in range(int(grid.ColumnCount))]
@@ -1995,6 +2039,10 @@ class DiscoveryMixin:
         if x1 <= x0 or y1 <= y0:
             raise SAPGUIError(
                 f"Column {column!r} is outside the visible part of the grid; scroll first"
+            )
+        if not clip and (x0, y0, x1, y1) != (left, top, left + width, top + height):
+            raise SAPGUIError(
+                f"Cell {column!r} is only partly visible in the grid; scroll first"
             )
         return x0, y0, x1 - x0, y1 - y0
 

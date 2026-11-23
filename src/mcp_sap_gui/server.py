@@ -2569,12 +2569,14 @@ async def sap_screenshot(
     Evidence options, with save_path: highlight=[targets] frames, mask=[targets]
     blacks out (nothing is saved if one is not found), isolate=True keeps only
     the highlighted areas, caption="..." adds a strip, include_context=True
-    adds system, client, user and time to it (shows the user ID). A target is
-    an element id, or {"id": <grid id>, "column": "MATNR", "row": 3} for an ALV
-    cell (row left out: the visible part of the column). It needs a size and
-    must lie inside its container and the window, or nothing is saved. mask
-    blacks out the named elements only: the same value in the title or status
-    bar stays visible."""
+    adds system, client, user and time to it (needs a caption; shows the user
+    ID). A target is an element id, or {"id": <grid id>, "column": "MATNR",
+    "row": 3} for an ALV cell (row left out: the visible part of the column).
+    It needs a size and must lie inside its container and in the captured
+    window (the popup, when one is open), or nothing is saved. A cell partly
+    scrolled out of view is masked where it shows; for highlight and isolate it
+    is refused (scroll first). mask blacks out the named elements only: the
+    same value in the title or status bar stays visible."""
     c = _ctrl(ctx)
     if not save_path.strip():
         if highlight or mask or caption.strip() or isolate:
