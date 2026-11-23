@@ -879,6 +879,10 @@ class TablesMixin:
         try:
             grid = self._find_element(grid_id)
 
+            # The grid's own functions (&SORT_ASC, &MB_SUM, ...) stay in
+            # the grid; an application function can open a session.
+            mark = (None if str(button_id).startswith("&")
+                    else self._navigation_mark())
             btn_type = self._alv_toolbar_button_type(grid, button_id)
             if btn_type in ("Menu", "ButtonAndMenu"):
                 grid.PressToolbarContextButton(button_id)
@@ -896,6 +900,8 @@ class TablesMixin:
                 except Exception:
                     grid.PressToolbarButton(button_id)
 
+            if not menu_opened:
+                self._await_new_session(mark)
             if menu_opened:
                 result = {
                     "grid_id": grid_id,
@@ -1022,6 +1028,9 @@ class TablesMixin:
                         # If menu origin is unknown, try toolbar API as fallback.
                         grid.SelectToolbarMenuItem(menu_item_id)
 
+            # As for the toolbar: only an application function navigates.
+            mark = (None if str(menu_item_id).startswith("&")
+                    else self._navigation_mark())
             if select_mode == "text":
                 grid.SelectContextMenuItemByText(menu_item_id)
             elif select_mode == "position":
@@ -1037,6 +1046,7 @@ class TablesMixin:
                     _select_by_id()
                 except Exception:
                     grid.SelectContextMenuItemByText(menu_item_id)
+            self._await_new_session(mark)
 
             return {
                 "grid_id": grid_id,
@@ -1116,9 +1126,12 @@ class TablesMixin:
                 cell.SetFocus()
                 # Send F2 to the window that owns this table
                 wnd_id = table_id.split("/usr")[0]
+                mark = self._navigation_mark()
                 self._find_window(wnd_id).sendVKey(VKey.F2)
             else:
+                mark = self._navigation_mark()
                 table.DoubleClick(row, column)
+            self._await_new_session(mark)
 
             return {
                 "table_id": table_id,

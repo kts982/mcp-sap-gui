@@ -231,6 +231,7 @@ class FieldsMixin:
         try:
             element_id = self._validate_element_id(button_id)
             element = self._session.findById(element_id)
+            mark = self._navigation_mark()
             if element_id.endswith("/sbar"):
                 # GuiStatusbar has no press(); DoubleClick opens the long text
                 # (a list popup with Diagnosis / Procedure, or the docked
@@ -238,6 +239,7 @@ class FieldsMixin:
                 element.DoubleClick()
             else:
                 element.press()
+            self._await_new_session(mark)
 
             logger.debug(f"Pressed button: {button_id}")
             return {
@@ -265,7 +267,10 @@ class FieldsMixin:
         self._require_session()
 
         try:
-            self._find_element(menu_id).Select()
+            menu = self._find_element(menu_id)
+            mark = self._navigation_mark()
+            menu.Select()
+            self._await_new_session(mark)
 
             return {
                 "menu_id": menu_id,
