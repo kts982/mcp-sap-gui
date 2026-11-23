@@ -202,7 +202,7 @@ A hotspot, a "Navigate to..." function or a menu entry can show a document in a 
 2. You are still bound to the session you were in: nothing moves on its own. Do not repeat the action, or a further session opens (SAP allows six by default)
 3. To work in the new session, call `sap_connect_existing` with those two indexes; call it again with the old ones to come back
 
-A session is reported once, in the first response after it appeared. Buttons, menu entries, double-clicks, tree links and F2 wait up to 1.5 seconds for it when they left the screen unchanged, so it is normally in the response of the action that opened it. Other actions, and a session that takes longer, report it with the next response that carries `screen`.
+A session is reported once, in the first response after it appeared. Buttons, menu entries, double-clicks, tree links and F2 wait up to 1.5 seconds for it when they left the screen unchanged. On a local system that is enough (it showed after 0.5 to 0.7 seconds); on a remote system it took 3 to 5 seconds. When none shows in the wait, the response carries `unchanged_note` instead: check `sap_get_screen_info` before repeating the action. Other actions, and a session that takes longer, report it with the next response that carries `screen`.
 
 ### Table Handling
 

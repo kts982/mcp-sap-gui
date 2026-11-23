@@ -201,6 +201,67 @@ def test_nothing_new_gives_up_after_the_wait(setup, monkeypatch):
     assert "new_sessions" not in controller.get_screen_info()
 
 
+def test_an_unchanged_screen_with_nothing_new_says_so_once(setup):
+    controller, _connection, session, _sleeps = setup
+    controller._ACTION_NEW_SESSION_WAIT_S = 0
+    session.findById.return_value = MagicMock()
+
+    result = controller.press_button("wnd[0]/usr/btnREFRESH")
+
+    note = result["screen"]["unchanged_note"]
+    assert "did not change" in note and "new_sessions" in note
+    assert "unchanged_note" not in controller.get_screen_info()
+
+
+def test_a_changed_screen_carries_no_note(setup):
+    controller, _connection, session, _sleeps = setup
+    button = MagicMock()
+
+    def navigate():
+        session.Info.Transaction = "VA03"
+    button.press.side_effect = navigate
+    session.findById.return_value = button
+
+    result = controller.press_button("wnd[0]/usr/btnDISPLAY")
+
+    assert "unchanged_note" not in result["screen"]
+
+
+def test_a_session_that_showed_carries_no_unchanged_note(setup):
+    controller, connection, session, _sleeps = setup
+    button = MagicMock()
+    button.press.side_effect = lambda: connection.sessions.append(OtherSession(1))
+    session.findById.return_value = button
+
+    screen = controller.press_button("wnd[0]/usr/btnDISPLAY")["screen"]
+
+    assert "new_sessions" in screen and "unchanged_note" not in screen
+
+
+def test_the_caller_can_wait_longer(setup, monkeypatch):
+    controller, _connection, _session, sleeps = setup
+    clock = iter(range(1000))
+    monkeypatch.setattr(controller_module.time, "monotonic", lambda: float(next(clock)))
+    mark = controller._navigation_mark()
+
+    controller._await_new_session(mark, wait_s=8)
+
+    assert 6 <= len(sleeps) <= 8  # one look a "second" here, eight seconds long
+
+
+def test_a_session_that_cannot_answer_yet_is_found_at_the_next_look(setup):
+    controller, connection, _session, _sleeps = setup
+    controller.get_screen_info()
+    connection.sessions.append(OtherSession(1))
+    describe = controller._describe_new_sessions
+    controller._describe_new_sessions = MagicMock(side_effect=RuntimeError("not yet available"))
+
+    assert "new_sessions" not in controller.get_screen_info()
+
+    controller._describe_new_sessions = describe
+    assert controller.get_screen_info()["new_sessions"][0]["session_index"] == 1
+
+
 def test_without_a_connection_there_is_nothing_to_wait_for(setup):
     controller, _connection, _session, sleeps = setup
     controller._connection = None

@@ -210,6 +210,9 @@ class SAPGUIControllerBase:
         # has reported yet. See _check_sessions().
         self._known_sessions: Optional[set] = None
         self._pending_new_sessions: List[Dict[str, Any]] = []
+        # Set when an action that can navigate left the screen as it was and
+        # no session showed in the wait; the next screen info says so once.
+        self._screen_unchanged = False
         # Read once per bind (_read_session_traits): the server's write gate
         # checks scripting_read_only on the event loop, where COM is off limits.
         self.sap_gui_version = ""
@@ -910,6 +913,13 @@ class SAPGUIControllerBase:
     # How long a session that just appeared may take to answer for its screen.
     _NEW_SESSION_READY_S = 0.5
 
+    _UNCHANGED_NOTE = (
+        "The screen did not change. If the action opens a document in a "
+        "window of its own, the new SAP session can take some seconds to "
+        "show: check sap_get_screen_info, which lists it under "
+        "new_sessions, before you repeat the action."
+    )
+
     _NEW_SESSIONS_NOTE = (
         "Another SAP session opened (new_sessions). This response and every "
         "next call still belong to the session you were in. To work in the "
@@ -921,6 +931,7 @@ class SAPGUIControllerBase:
         """The binding moved: start the list of known sessions afresh."""
         self._known_sessions = None
         self._pending_new_sessions = []
+        self._screen_unchanged = False
 
     def _check_sessions(self) -> None:
         """Note sessions that appeared on the bound connection since the last look.
@@ -941,19 +952,22 @@ class SAPGUIControllerBase:
         except Exception:
             return
         known = getattr(self, "_known_sessions", None)
+        new_ids = current - known if known is not None else set()
+        if new_ids:
+            try:
+                described = self._describe_new_sessions(connection, new_ids)
+            except Exception as e:
+                # A session that is still starting can refuse to answer (seen
+                # live: "data ... not yet available" on its Id). Leave the
+                # known Ids as they are, so the next look finds it again.
+                logger.debug("New session(s) %s not readable yet: %s",
+                             sorted(new_ids), e)
+                return
+            pending = getattr(self, "_pending_new_sessions", None)
+            if pending is None:
+                pending = self._pending_new_sessions = []
+            pending.extend(described)
         self._known_sessions = current
-        if known is None:
-            return
-        new_ids = current - known
-        if not new_ids:
-            return
-        pending = getattr(self, "_pending_new_sessions", None)
-        if pending is None:
-            pending = self._pending_new_sessions = []
-        try:
-            pending.extend(self._describe_new_sessions(connection, new_ids))
-        except Exception as e:
-            logger.debug("New session(s) %s not readable: %s", sorted(new_ids), e)
 
     def _describe_new_sessions(self, connection, new_ids: set) -> List[Dict[str, Any]]:
         """What sap_connect_existing needs to attach to each new session."""
@@ -1040,25 +1054,32 @@ class SAPGUIControllerBase:
             return None
         return self._screen_mark()
 
-    def _await_new_session(self, mark: Optional[Tuple[str, ...]]) -> None:
+    def _await_new_session(self, mark: Optional[Tuple[str, ...]],
+                           wait_s: Optional[float] = None) -> None:
         """Call after an action that can navigate, before reading the screen.
 
         If the action changed the screen it did its work in this session and
         nothing is waited for. If the screen is as before, a session the
-        action opened gets _ACTION_NEW_SESSION_WAIT_S to show, so the
-        response can say so instead of looking as if nothing had happened.
+        action opened gets *wait_s* (default _ACTION_NEW_SESSION_WAIT_S) to
+        show, so the response can say so instead of looking as if nothing
+        had happened. When none shows in that time, the next screen info
+        says that the screen did not change and why that can be (on a
+        remote system the session took 3 to 5 s).
         """
         if mark is None:
             return
         self._check_sessions()
         if self._pending_new_sessions or self._screen_mark() != mark:
             return
-        deadline = time.monotonic() + self._ACTION_NEW_SESSION_WAIT_S
+        if wait_s is None:
+            wait_s = self._ACTION_NEW_SESSION_WAIT_S
+        deadline = time.monotonic() + wait_s
         while time.monotonic() < deadline:
             time.sleep(self._ACTION_NEW_SESSION_POLL_S)
             self._check_sessions()
             if self._pending_new_sessions:
                 return
+        self._screen_unchanged = True
 
     def get_session_info(self) -> SessionInfo:
         """Get information about the current session."""
@@ -1478,9 +1499,15 @@ class SAPGUIControllerBase:
             # A session that opened beside this one: the screen above does
             # not show it, so say it here.
             new_sessions = self._take_new_sessions()
+            unchanged = getattr(self, "_screen_unchanged", False)
+            self._screen_unchanged = False
             if new_sessions:
                 result["new_sessions"] = new_sessions
                 result["new_sessions_note"] = self._NEW_SESSIONS_NOTE
+            elif unchanged:
+                # An action that can navigate left the screen as it was and
+                # no session showed in the wait.
+                result["unchanged_note"] = self._UNCHANGED_NOTE
 
             return result
         except Exception as e:
