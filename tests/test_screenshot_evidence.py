@@ -332,6 +332,14 @@ class TestScreenshotToolArguments:
             with pytest.raises(ValueError, match="need save_path"):
                 await srv.sap_screenshot(MagicMock(), isolate=True)
 
+    async def test_include_context_needs_save_path(self):
+        """Alone it was ignored without a word: the image came back with no caption."""
+        import mcp_sap_gui.server as srv
+
+        with patch.object(srv, "_ctrl", return_value=MagicMock()):
+            with pytest.raises(ValueError, match="need save_path"):
+                await srv.sap_screenshot(MagicMock(), include_context=True)
+
 
 CELL = {"id": "wnd[0]/usr/shell", "row": 3, "column": "COL_B"}
 

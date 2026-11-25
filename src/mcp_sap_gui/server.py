@@ -2586,8 +2586,10 @@ async def sap_screenshot(
     same value in the title or status bar stays visible."""
     c = _ctrl(ctx)
     if not save_path.strip():
-        if highlight or mask or caption.strip() or isolate:
-            raise ValueError("highlight, mask, caption and isolate need save_path")
+        if highlight or mask or caption.strip() or isolate or include_context:
+            raise ValueError(
+                "highlight, mask, caption, isolate and include_context need save_path"
+            )
         result = await _com(c.take_screenshot)
         if "error" in result:
             raise ValueError(result["error"])
