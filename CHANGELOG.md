@@ -14,6 +14,8 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ### Fixed
 
+- **A transaction code with `-`, `.` or another special character is checked like any other** ([#57](https://github.com/kts982/mcp-sap-gui/pull/57), [issue #56](https://github.com/kts982/mcp-sap-gui/issues/56)). SAP's own codes use most of the keyboard (`F-02`, `F.13`, `BRF+`, `FF$3`, `MC=1`), and the transaction policy knew only letters, digits, `_` and `/`. Typed into the command field without a prefix, such a code was taken for a function code and not checked at all, also with `--policy-preset strict`; on the SAP Easy Access screen that starts the transaction. `sap_execute_transaction` refused the same codes as invalid, and a policy file could not name them. A code now starts with a letter, a digit or `_` and goes on with any visible character except `*`, `/` and `;`. It is checked in the command field with and without a prefix, `sap_execute_transaction` starts it, and `block` and `allow` take entries like `F-02` and `F-*`. A value that starts with another character (`%PC`, `&ALL`) stays a function code. With `strict`, a function code such as `P+` typed into the command field needs an `allow` entry now, as `BACK` did before. A policy entry with `]` is refused at startup: a set of characters like `[AB]` was never supported and would match nothing.
+
 - **`sap_press_column_header` said it sorts** ([#53](https://github.com/kts982/mcp-sap-gui/pull/53)). It sends a click on the column header to the application, which on a standard grid neither selects the column nor sorts by it (checked live: no selected column, no sort, rows unchanged). The description now says so and points to `sap_select_alv_columns` and the grid's own functions.
 
 ## 0.6.1 — 2026-11-16

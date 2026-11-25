@@ -80,8 +80,16 @@ PRESETS: Dict[str, Dict[str, List[str]]] = {
 }
 DEFAULT_PRESET = "default"
 
+# A character of a transaction code after its first one: any visible ASCII
+# character but '*', '/' and ';'. SAP's own codes use most of the keyboard
+# (F-02, F.13, BRF+, FF$3, MC=1, MC?0, J3G(, F9C[): TSTC of an S/4HANA system
+# holds about 520 codes with a character that is no letter, digit or '_'.
+# None of them starts with one, which is what tells a code from a function
+# code such as %PC or &ALL.
+CODE_CHAR = r"(?:(?![*/;])[!-~])"
+
 _GLOB_CHARS = "*?"
-_PATTERN_RE = re.compile(r"^[A-Z0-9_/*?]+$")
+_PATTERN_RE = re.compile(rf"^(?:{CODE_CHAR}|[*/])+$")
 
 
 class PolicyError(ValueError):
@@ -98,6 +106,13 @@ def normalize_pattern(entry: Any, normalize_code: Callable[[str], str]) -> str:
     if not isinstance(entry, str) or not entry.strip():
         raise PolicyError(f"Policy entries must be non-empty strings, got {entry!r}")
     value = entry.strip().upper()
+    if "]" in value:
+        # Read as written it would match nothing the author meant, and a deny
+        # list entry that matches nothing is not noticed.
+        raise PolicyError(
+            f"Invalid policy entry {entry!r}: sets of characters like [AB] are "
+            "not supported; the wildcards are '*' and '?'."
+        )
     if not any(ch in value for ch in _GLOB_CHARS):
         try:
             return normalize_code(value)
@@ -105,10 +120,20 @@ def normalize_pattern(entry: Any, normalize_code: Callable[[str], str]) -> str:
             raise PolicyError(str(exc)) from exc
     if not _PATTERN_RE.fullmatch(value):
         raise PolicyError(
-            f"Invalid transaction pattern {entry!r}: use letters, digits, "
-            "'_', '/', and the wildcards '*' and '?'."
+            f"Invalid transaction pattern {entry!r}: use the characters of a "
+            "transaction code, '/', and the wildcards '*' and '?' (no spaces, "
+            "no ';')."
         )
     return value
+
+
+def _matches(tcode: str, pattern: str) -> bool:
+    """Match a code against a policy entry: '*' and '?' are the only wildcards.
+
+    A '[' stands for itself. Transaction codes contain it (F9C[), and fnmatch
+    would read '[...]' as a set of characters.
+    """
+    return fnmatchcase(tcode, pattern.replace("[", "[[]"))
 
 
 def _dedupe(values: List[str]) -> List[str]:
@@ -126,10 +151,10 @@ class TransactionPolicy:
     file_sha256: Optional[str] = None
 
     def is_blocked_pattern(self, tcode: str) -> bool:
-        return any(fnmatchcase(tcode, pattern) for pattern in self.block)
+        return any(_matches(tcode, pattern) for pattern in self.block)
 
     def is_allowed_exception(self, tcode: str) -> bool:
-        return any(fnmatchcase(tcode, pattern) for pattern in self.allow)
+        return any(_matches(tcode, pattern) for pattern in self.allow)
 
     def permits(self, tcode: str) -> bool:
         """Return True when *tcode* (already normalized) may be started."""

@@ -26,7 +26,7 @@ The policy decides which transactions an assistant may start. What is dangerous 
 - **`--policy-preset default`** (the default) blocks user and role administration (`SU01`, `SU10`, `SU01D`, `PFCG`, `SU53`), logs and dumps (`SM21`, `ST22`), development and program execution (`SE38`, `SA38`, `SE80`, `SE37`, `SE16N`), and system administration (`STMS`, `SCC4`, `RZ10`, `RZ11`, `SM36`, `SM49`, `SM69`, `SM59`, `STRUST`, `SICF`, `SM01`, `SM18`, `SM19`). Customizing and display work (`SM30`, `SM34`, `SPRO`, `SE16`, `SE11`) stays open.
 - **`--policy-preset abap-dev`** additionally allows `SA38`, `SE11` and `SE80`, for developers testing their own programs.
 - **`--policy-preset strict`** blocks everything the policy file does not allow: an allowlist.
-- **`--policy-file policy.json`** adds to the preset: `{"preset": "abap-dev", "block": ["ZHR*"], "allow": ["SM59"]}`. Entries are transaction codes or patterns (`SU*`, `/SCWM/*`), and `allow` always wins over `block`. Without the option the server reads `$MCP_SAP_GUI_POLICY_FILE`, else `%APPDATA%\mcp-sap-gui\policy.json` if it exists. Keep the file outside the assistant's workspace, so it cannot edit it.
+- **`--policy-file policy.json`** adds to the preset: `{"preset": "abap-dev", "block": ["ZHR*"], "allow": ["SM59"]}`. Entries are transaction codes or patterns with the wildcards `*` and `?` (`SU*`, `/SCWM/*`, `F-*`), and `allow` always wins over `block`. A code may contain the characters SAP's own codes use (`F-02`, `F.13`, `BRF+`); a set of characters like `[AB]` is not supported and the entry is refused. Without the option the server reads `$MCP_SAP_GUI_POLICY_FILE`, else `%APPDATA%\mcp-sap-gui\policy.json` if it exists. Keep the file outside the assistant's workspace, so it cannot edit it.
 - Two examples ship in the repository's [`examples/`](../examples/) folder: `policy.example.json` starts from `default`, also blocks a customer namespace (`ZHR*`) and `SE16`, and allows `ST22` for dump analysis; `policy.strict.example.json` is an allowlist for a display-only assistant. To make one your own policy:
 
   ```powershell
@@ -38,7 +38,8 @@ How the policy holds:
 
 - It is read once at startup and written to the audit log with the file's SHA-256. No tool can change it, and a policy file that cannot be read stops the server instead of falling back to something more permissive.
 - Matching ignores case and handles the `/n`, `/o` and `/*` prefixes and spaces.
-- Writing a blocked transaction into the command field, or into a field that works as one (`txtOK_CODE` and similar), is blocked as well.
+- Writing a blocked transaction into the command field, or into a field that works as one (`txtOK_CODE` and similar), is blocked as well, with a prefix (`/nF-02`) and without one (`F-02`): on the SAP Easy Access screen a code without a prefix starts the transaction.
+- In the command field a value without a prefix counts as a code when it starts with a letter, a digit or `_`. A value that starts with another character (`%PC`, `&ALL`) is a function code and is not checked. With `--policy-preset strict` a function code such as `BACK` or `P+` therefore needs an `allow` entry before it can be typed there.
 - The older `--allowed-transactions T1 T2 ...` restricts on top of the policy.
 
 It is a guardrail against an assistant's mistakes, not a security boundary: a blocked transaction can often be reached another way, through a menu path or a screen you left open. The SAP user's authorizations are the boundary.

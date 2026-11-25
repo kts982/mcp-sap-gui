@@ -63,6 +63,7 @@ from .controller import (
 )
 from .models import SAPGUINotConnectedError
 from .policy import (
+    CODE_CHAR,
     DEFAULT_PRESET,
     POLICY_FILE_ENV,
     PRESETS,
@@ -101,7 +102,13 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BLOCKED_TRANSACTIONS = list(PRESETS[DEFAULT_PRESET]["block"])
 
 _TRANSACTION_PREFIX_RE = re.compile(r"^(?:/(?:N|O|\*)\s*)+", re.IGNORECASE)
-_TRANSACTION_CODE_RE = re.compile(r"^/?[A-Z0-9_]+(?:/[A-Z0-9_]+)*$")
+# A code starts with a letter, a digit or '_' (a namespace puts /NAME/ in
+# front); after that come the characters policy.CODE_CHAR describes: F-02,
+# F.13, BRF+, MC=1. A value that starts with another character (%PC, &ALL)
+# is a function code.
+_TRANSACTION_CODE_RE = re.compile(
+    rf"^/?[A-Z0-9_]{CODE_CHAR}*(?:/{CODE_CHAR}+)*$"
+)
 # /i with an optional session number. Live (SAP GUI 8.10): /i3 closed session
 # 3 from session 4, and "/i 2" closed the current session (the number after a
 # space is ignored). No transaction code has this shape: a namespaced code
@@ -159,7 +166,7 @@ def _normalize_transaction_code(raw: str, *, strict: bool = True) -> str | None:
         if strict:
             raise ValueError(
                 f"Invalid SAP transaction code: {raw!r}. "
-                "Expected forms like 'MM03', 'VA03', or '/SCWM/MON'."
+                "Expected forms like 'MM03', 'F-02' or '/SCWM/MON'."
             )
         return None
     return value
