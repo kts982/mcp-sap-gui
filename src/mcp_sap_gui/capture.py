@@ -90,19 +90,27 @@ def cell_scale(hwnd: int) -> float | None:
 
     SAP reports them in the system DPI of its own process, which Windows fixes at
     sign-in, while the window can sit on a monitor with another scaling: 1.5 for a
-    window at 144 DPI in a process that started at 96. Read at each call, so a
-    monitor change under a running session is followed.
+    window on a 144-DPI monitor in a process that started at 96. The monitor's
+    effective DPI is used, not ``GetDpiForWindow``: a system-aware window (plain
+    SAP GUI) gets the system DPI there even on a 96-DPI monitor. Read at each
+    call, so a monitor change under a running session is followed.
     """
     with _physical_pixels():
         try:
             user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
-            user32.GetDpiForWindow.argtypes = [ctypes.c_void_p]
+            user32.MonitorFromWindow.restype = ctypes.c_void_p
+            user32.MonitorFromWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint]
             user32.GetSystemDpiForProcess.argtypes = [ctypes.c_void_p]
             user32.GetSystemDpiForProcess.restype = ctypes.c_uint
             kernel32.OpenProcess.restype = ctypes.c_void_p
             kernel32.OpenProcess.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_uint]
             kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-            window_dpi = user32.GetDpiForWindow(ctypes.c_void_p(hwnd))
+            monitor = user32.MonitorFromWindow(ctypes.c_void_p(hwnd), 2)  # NEAREST
+            dpi_x, dpi_y = ctypes.c_uint(), ctypes.c_uint()
+            if not monitor or ctypes.windll.shcore.GetDpiForMonitor(  # 0: effective DPI
+                ctypes.c_void_p(monitor), 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)
+            ):
+                return None
             pid = ctypes.c_uint()
             user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
             proc = kernel32.OpenProcess(0x1000, 0, pid.value)  # QUERY_LIMITED_INFORMATION
@@ -112,7 +120,7 @@ def cell_scale(hwnd: int) -> float | None:
                 process_dpi = user32.GetSystemDpiForProcess(proc)
             finally:
                 kernel32.CloseHandle(proc)
-            return window_dpi / process_dpi if window_dpi and process_dpi else None
+            return dpi_x.value / process_dpi if dpi_x.value and process_dpi else None
         except (AttributeError, OSError):
             return None
 

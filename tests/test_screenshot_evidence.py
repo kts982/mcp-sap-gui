@@ -553,14 +553,19 @@ class TestIsolateAndContext:
 
 
 class TestCellScale:
-    """cell_scale = window DPI / system DPI of the SAP process (seen live, see AGENTS.md)."""
+    """cell_scale = effective DPI of the window's monitor / system DPI of the SAP process."""
 
     @staticmethod
-    def _scale(window_dpi, process_dpi, proc=1):
+    def _scale(monitor_dpi, process_dpi, proc=1, monitor=5, hresult=0):
         from mcp_sap_gui import capture
 
+        def get_dpi_for_monitor(_monitor, _kind, by_x, _by_y):
+            by_x._obj.value = monitor_dpi
+            return hresult
+
         windll = MagicMock()
-        windll.user32.GetDpiForWindow.return_value = window_dpi
+        windll.user32.MonitorFromWindow.return_value = monitor
+        windll.shcore.GetDpiForMonitor.side_effect = get_dpi_for_monitor
         windll.user32.GetSystemDpiForProcess.return_value = process_dpi
         windll.kernel32.OpenProcess.return_value = proc
         with patch.object(capture.ctypes, "windll", windll, create=True), patch.object(
@@ -568,15 +573,24 @@ class TestCellScale:
         ):
             return capture.cell_scale(7)
 
-    def test_process_started_at_96_on_a_150_percent_window(self):
+    def test_process_started_at_96_on_a_150_percent_monitor(self):
         assert self._scale(144, 96) == 1.5
 
-    def test_process_signed_in_at_the_window_dpi_needs_no_scaling(self):
+    def test_process_signed_in_at_the_monitor_dpi_needs_no_scaling(self):
         assert self._scale(168, 168) == 1.0
 
-    @pytest.mark.parametrize("window_dpi,process_dpi,proc", [(0, 96, 1), (144, 0, 1), (144, 96, 0)])
-    def test_unknown_values_give_none(self, window_dpi, process_dpi, proc):
-        assert self._scale(window_dpi, process_dpi, proc) is None
+    def test_a_window_on_a_monitor_below_the_process_dpi_is_scaled_down(self):
+        # Seen live in Business Client and in plain SAP GUI (system-aware: its
+        # GetDpiForWindow says 144 on the 96-DPI monitor, the monitor says 96).
+        assert self._scale(96, 144) == pytest.approx(2 / 3)
+
+    @pytest.mark.parametrize(
+        "monitor_dpi,process_dpi,proc,monitor,hresult",
+        [(0, 96, 1, 5, 0), (144, 0, 1, 5, 0), (144, 96, 0, 5, 0), (144, 96, 1, 0, 0),
+         (144, 96, 1, 5, 1)],
+    )
+    def test_unknown_values_give_none(self, monitor_dpi, process_dpi, proc, monitor, hresult):
+        assert self._scale(monitor_dpi, process_dpi, proc, monitor, hresult) is None
 
 
 class TestCellUnit:
