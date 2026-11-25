@@ -162,6 +162,23 @@ class TestSaveScreenshotEvidence:
         assert "SAP reports the window" in result["error"]
         assert not target.exists()
 
+    def test_an_image_scaled_the_same_in_both_directions_is_drawn_on(self, tmp_path):
+        # Seen live: a window on a 100% monitor, SAP started at 150%, is reported
+        # 1.5 times the image on every length (2880x1430 for a 1920x953 image).
+        controller, window = _controller(tmp_path)
+        window.Width, window.Height = 400, 200  # the image is 200x100: k = 0.5
+        field = controller._known["wnd[0]/usr/txtF"]
+        field.ScreenLeft, field.ScreenTop, field.Width, field.Height = 20, 120, 80, 40
+        controller._known["wnd[0]/usr"].Height = 200
+        target = tmp_path / "e.png"
+
+        result = controller.save_screenshot(str(target), inline=False, mask=["wnd[0]/usr/txtF"])
+
+        assert "error" not in result, result
+        with Image.open(target) as img:  # (20,120) minus window (0,100), halved: (10,10, 40x20)
+            assert img.getpixel((15, 15)) == (0, 0, 0)
+            assert img.getpixel((60, 15)) == (255, 255, 255)
+
     def test_a_target_in_another_window_than_the_capture_saves_nothing(self, tmp_path):
         controller, window = _controller(tmp_path)
         controller._session.ActiveWindow = MagicMock(Id="wnd[1]")  # a popup is on top
@@ -506,3 +523,27 @@ class TestCellScale:
     @pytest.mark.parametrize("window_dpi,process_dpi,proc", [(0, 96, 1), (144, 0, 1), (144, 96, 0)])
     def test_unknown_values_give_1(self, window_dpi, process_dpi, proc):
         assert self._scale(window_dpi, process_dpi, proc) == 1.0
+
+
+class TestCellUnit:
+    """Cells are scaled to the units of Screen*/Width, which are physical only sometimes."""
+
+    @staticmethod
+    def _unit(cell, physical, reported):
+        window = MagicMock(Width=reported)
+        with patch("mcp_sap_gui.discovery.cell_scale", return_value=cell), patch(
+            "mcp_sap_gui.discovery.physical_width", return_value=physical
+        ):
+            return SAPGUIController._cell_unit(7, window)
+
+    def test_screen_units_are_physical(self):
+        assert self._unit(1.5, 1920, 1920) == 1.5
+
+    def test_screen_units_larger_than_the_pixels_are_followed(self):
+        assert self._unit(2 / 3, 1920, 2880) == pytest.approx(1.0)
+
+    def test_unknown_physical_width_leaves_the_cell_scale(self):
+        assert self._unit(1.5, None, 1920) == 1.5
+
+    def test_without_a_handle_there_is_no_scaling(self):
+        assert SAPGUIController._cell_unit(None, MagicMock(Width=1920)) == 1.0

@@ -117,6 +117,18 @@ def cell_scale(hwnd: int) -> float:
             return 1.0
 
 
+def physical_width(hwnd: int) -> int | None:
+    """Width of the window in physical pixels, None when it cannot be read."""
+    with _physical_pixels():
+        try:
+            import win32gui
+
+            left, _, right, _ = win32gui.GetWindowRect(hwnd)
+        except Exception:
+            return None
+    return right - left if right > left else None
+
+
 def _require_shown(win32gui, hwnd: int) -> None:
     """SAPGUIError unless this window is the one on screen and not minimized."""
     # A Business Client tab is a child window: only the NWBC main window is

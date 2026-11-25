@@ -17,6 +17,7 @@ from .capture import (
     evidence_line,
     is_embedded,
     is_maximized,
+    physical_width,
     print_window_png,
 )
 from .models import SAPGUIError, ScreenElement
@@ -1839,9 +1840,11 @@ class DiscoveryMixin:
                     "The screen changed during the capture (scrolled or moved); "
                     "nothing saved. Retry."
                 )
-            origin, size, frame = self._image_origin(window, path, origin)
+            origin, size, frame, k = self._image_origin(window, path, origin)
             boxes = [(left - origin[0], top - origin[1], width, height)
                      for left, top, width, height in before]
+            if k != 1:  # SAP reports its screen units k times the pixels in the image
+                boxes = [tuple(int(v * k + 0.5) for v in box) for box in boxes]
             if frame:  # a maximized window: its frame is not in the image
                 boxes = [cut_at_frame(box, size, frame) for box in boxes]
         else:
@@ -1857,14 +1860,19 @@ class DiscoveryMixin:
         )
 
     def _image_origin(self, window, path: str, origin) -> tuple:
-        """Where the image is on the screen: ``((left, top), (width, height), frame)``.
+        """Where the image is on the screen: ``((left, top), (width, height), frame, k)``.
 
-        The image has to be the window SAP reports, pixel for pixel; otherwise
-        nothing is drawn (SAPGUIError). One case differs by design: SAP reports
-        a maximized window with its invisible frame (3224x1940 at -12,-12 on a
-        screen 3200 wide) and ``HardCopy`` leaves the frame out (3200x1916). The
-        image then starts one frame width inside the window, on every side the
-        same; *frame* is that width, 0 in every other case.
+        The image has to be the window SAP reports, pixel for pixel, or the same
+        window with every length scaled by one factor *k* (width and height
+        agree within a pixel); otherwise nothing is drawn (SAPGUIError). Seen
+        live, a window on a 100% monitor with SAP started at 150% is reported as
+        2880x1430 for a 1920x953 image: *k* is 1 in every other case, and when it
+        is not the origin is SAP's own, in SAP's units. One more case differs by
+        design: SAP reports a maximized window with its invisible frame
+        (3224x1940 at -12,-12 on a screen 3200 wide) and ``HardCopy`` leaves the
+        frame out (3200x1916). The image then starts one frame width inside the
+        window, on every side the same; *frame* is that width, 0 in every other
+        case.
         """
         size = self._png_size(path)
         reported = (int(window.Width), int(window.Height))
@@ -1872,12 +1880,16 @@ class DiscoveryMixin:
         if hardcopy:  # SAP's own window origin
             origin = (int(window.ScreenLeft), int(window.ScreenTop))
         if size == reported:
-            return origin, size, 0
+            return origin, size, 0, 1.0
         if hardcopy and size is not None and self._window_is_maximized(window):
             extra_width, extra_height = reported[0] - size[0], reported[1] - size[1]
             if extra_width == extra_height and extra_width > 0 and extra_width % 2 == 0:
                 frame = extra_width // 2
-                return (origin[0] + frame, origin[1] + frame), size, frame
+                return (origin[0] + frame, origin[1] + frame), size, frame, 1.0
+        if size is not None and reported[0] > 0 and reported[1] > 0:
+            k = size[0] / reported[0]
+            if 0.25 <= k <= 4 and abs(size[1] - reported[1] * k) <= 1:
+                return (int(window.ScreenLeft), int(window.ScreenTop)), size, 0, k
         raise SAPGUIError(
             f"The image is {size} but SAP reports the window as "
             f"{reported} (display scaling?); not drawing on it, nothing saved."
@@ -1971,8 +1983,9 @@ class DiscoveryMixin:
             if box[2] <= 0 or box[3] <= 0:
                 raise SAPGUIError(f"{element_id!r} is not visible (no size)")
             if column is not None:
-                hwnd = self._window_handle(self._find_window(window_id))
-                scale = cell_scale(hwnd) if hwnd else 1.0
+                window = self._find_window(window_id)
+                hwnd = self._window_handle(window)
+                scale = self._cell_unit(hwnd, window)
                 box = self._grid_cell_box(el, row, column, box, clip, scale)
             self._require_within(box, element_id, window_id)
         except SAPGUIError:
@@ -1980,6 +1993,22 @@ class DiscoveryMixin:
         except Exception as exc:
             raise SAPGUIError(f"Cannot locate {element_id!r} on screen: {exc}") from exc
         return box
+
+    @staticmethod
+    def _cell_unit(hwnd, window) -> float:
+        """Factor from a grid's ``GetCell*`` units to the units of ``Screen*``/``Width``.
+
+        ``cell_scale`` gives physical pixels; ``Screen*`` are physical only when
+        SAP's window units are (they are *k* times larger on a window moved to a
+        monitor with a lower scaling), so divide by that *k*.
+        """
+        if not hwnd:
+            return 1.0
+        scale = cell_scale(hwnd)
+        physical, reported = physical_width(hwnd), int(window.Width)
+        if physical and reported > 0 and abs(physical / reported - 1) > 0.02:
+            scale /= physical / reported
+        return scale
 
     def _require_within(self, box: tuple, element_id: str, window_id: str) -> None:
         """Refuse a box outside the user area (or, for the rest, the window) it belongs to."""
