@@ -39,7 +39,7 @@ python scripts/check_docs.py
 - Never request `Selected` through `GetObjectTree`: on SAP GUI 8.00 it ends SAP Logon. Read it over COM for each element; `_OBJECT_TREE_UNSAFE_PROPS` in `controller.py` enforces this.
 - Setting a table control's `VerticalScrollbar.Position` re-renders it and invalidates COM references: find the element again with `findById` after scrolling.
 - Never guess element IDs, in code or in prompts: discover them on the screen.
-- `GetCellLeft`, `GetCellTop`, `GetCellWidth` and `GetCellHeight` of a grid are 96-DPI pixels, while `ScreenLeft` and `ScreenTop` are physical pixels. Scale the first with `dpi_scale` (`capture.py`) before adding them; at 150% an unscaled cell box misses the cell.
+- `GetCellLeft`, `GetCellTop`, `GetCellWidth` and `GetCellHeight` of a grid are in the system DPI of SAP's own process, fixed at sign-in, while `ScreenLeft` and `ScreenTop` are physical pixels. A process that started at 96 DPI, with the window now at 150%, reports 96-DPI cells; one that signed in at the window's DPI reports physical ones. Multiply them by `cell_scale` (`capture.py`, window DPI over the process's system DPI) before adding them.
 
 ### Python and FastMCP
 

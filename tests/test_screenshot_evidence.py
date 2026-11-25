@@ -363,9 +363,10 @@ class TestAlvCellTargets:
         grid.GetCellLeft.assert_called_with(3, "COL_B")
 
     def test_cell_offsets_are_scaled_to_physical_pixels(self):
-        # Seen live at 150%: GetCell* are 96-DPI pixels, ScreenLeft/Top physical.
+        # Seen live: a process that started at 96 DPI reports GetCell* in 96-DPI pixels
+        # while the window is at 150% (ScreenLeft/Top are physical).
         grid = self._grid()
-        with patch("mcp_sap_gui.discovery.dpi_scale", return_value=1.5), patch.object(
+        with patch("mcp_sap_gui.discovery.cell_scale", return_value=1.5), patch.object(
             SAPGUIController, "_window_handle", return_value=7
         ):
             box = self._controller(grid)._screen_box(CELL, "wnd[0]")
@@ -478,3 +479,30 @@ class TestIsolateAndContext:
 
         assert "isolate needs" in result["error"]
         assert not target.exists()
+
+
+class TestCellScale:
+    """cell_scale = window DPI / system DPI of the SAP process (seen live, see AGENTS.md)."""
+
+    @staticmethod
+    def _scale(window_dpi, process_dpi, proc=1):
+        from mcp_sap_gui import capture
+
+        windll = MagicMock()
+        windll.user32.GetDpiForWindow.return_value = window_dpi
+        windll.user32.GetSystemDpiForProcess.return_value = process_dpi
+        windll.kernel32.OpenProcess.return_value = proc
+        with patch.object(capture.ctypes, "windll", windll, create=True), patch.object(
+            capture, "_physical_pixels", MagicMock()
+        ):
+            return capture.cell_scale(7)
+
+    def test_process_started_at_96_on_a_150_percent_window(self):
+        assert self._scale(144, 96) == 1.5
+
+    def test_process_signed_in_at_the_window_dpi_needs_no_scaling(self):
+        assert self._scale(168, 168) == 1.0
+
+    @pytest.mark.parametrize("window_dpi,process_dpi,proc", [(0, 96, 1), (144, 0, 1), (144, 96, 0)])
+    def test_unknown_values_give_1(self, window_dpi, process_dpi, proc):
+        assert self._scale(window_dpi, process_dpi, proc) == 1.0

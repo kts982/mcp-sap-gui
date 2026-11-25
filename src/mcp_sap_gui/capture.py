@@ -85,13 +85,34 @@ def _physical_pixels():
             user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(old))
 
 
-def dpi_scale(hwnd: int) -> float:
-    """Display scaling of the window's monitor (1.5 at 150%), 1.0 when unknown."""
+def cell_scale(hwnd: int) -> float:
+    """Factor from a grid's ``GetCell*`` units to physical pixels, 1.0 when unknown.
+
+    SAP reports them in the system DPI of its own process, which Windows fixes at
+    sign-in, while the window can sit on a monitor with another scaling: 1.5 for a
+    window at 144 DPI in a process that started at 96. Read at each call, so a
+    monitor change under a running session is followed.
+    """
     with _physical_pixels():
         try:
-            user32 = ctypes.windll.user32
+            user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
             user32.GetDpiForWindow.argtypes = [ctypes.c_void_p]
-            return (user32.GetDpiForWindow(ctypes.c_void_p(hwnd)) or 96) / 96
+            user32.GetSystemDpiForProcess.argtypes = [ctypes.c_void_p]
+            user32.GetSystemDpiForProcess.restype = ctypes.c_uint
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.OpenProcess.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_uint]
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            window_dpi = user32.GetDpiForWindow(ctypes.c_void_p(hwnd))
+            pid = ctypes.c_uint()
+            user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
+            proc = kernel32.OpenProcess(0x1000, 0, pid.value)  # QUERY_LIMITED_INFORMATION
+            if not proc:
+                return 1.0
+            try:
+                process_dpi = user32.GetSystemDpiForProcess(proc)
+            finally:
+                kernel32.CloseHandle(proc)
+            return window_dpi / process_dpi if window_dpi and process_dpi else 1.0
         except (AttributeError, OSError):
             return 1.0
 

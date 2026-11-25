@@ -12,8 +12,8 @@ from typing import Any, Dict, List
 
 from .capture import (
     annotate_png,
+    cell_scale,
     cut_at_frame,
-    dpi_scale,
     evidence_line,
     is_embedded,
     is_maximized,
@@ -1972,7 +1972,7 @@ class DiscoveryMixin:
                 raise SAPGUIError(f"{element_id!r} is not visible (no size)")
             if column is not None:
                 hwnd = self._window_handle(self._find_window(window_id))
-                scale = dpi_scale(hwnd) if hwnd else 1.0
+                scale = cell_scale(hwnd) if hwnd else 1.0
                 box = self._grid_cell_box(el, row, column, box, clip, scale)
             self._require_within(box, element_id, window_id)
         except SAPGUIError:
@@ -2028,8 +2028,8 @@ class DiscoveryMixin:
         grid_left, grid_top, grid_width, grid_height = bounds
         # Offsets are relative to the grid's own origin (checked on SAP GUI 8.10);
         # GetCellX/GetCellY do not exist. A cell scrolled out of view has size 0.
-        # They come in 96-DPI pixels, ScreenLeft/ScreenTop in physical ones
-        # (seen live at 150%): scale them, rounding after the scaling.
+        # They come in the system DPI of SAP's own process, ScreenLeft/ScreenTop in
+        # physical pixels: scale them (``cell_scale``), rounding after the scaling.
         def px(getter) -> int:
             return int(getter(row, column) * scale + 0.5)
 
