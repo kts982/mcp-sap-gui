@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from .capture import is_embedded, print_window_png
 from .models import SAPGUIError, ScreenElement
 
 
@@ -1672,8 +1673,7 @@ class DiscoveryMixin:
 
             # Find the topmost window (popups are wnd[1], wnd[2], etc.)
             window_id = self._find_topmost_window()
-            window = self._find_window(window_id)
-            window.HardCopy(filepath, _HARDCOPY_PNG)
+            self._capture_window(self._find_window(window_id), filepath)
 
             # Optimize image size with Pillow if available
             self._optimize_screenshot(filepath)
@@ -1731,7 +1731,7 @@ class DiscoveryMixin:
             target = self._resolve_screenshot_path(save_path)
 
             window_id = self._find_topmost_window()
-            self._find_window(window_id).HardCopy(target, _HARDCOPY_PNG)
+            method = self._capture_window(self._find_window(window_id), target)
             if not os.path.isfile(target):
                 raise SAPGUIError("SAP GUI did not write the screenshot file")
 
@@ -1739,6 +1739,7 @@ class DiscoveryMixin:
                 "format": "png",
                 "filepath": target,
                 "window": window_id,
+                "capture": method,
                 "size_bytes": os.path.getsize(target),
             }
             size = self._png_size(target)
@@ -1766,6 +1767,49 @@ class DiscoveryMixin:
         finally:
             if temp_filepath and os.path.exists(temp_filepath):
                 os.remove(temp_filepath)
+
+    def _capture_window(self, window, path: str) -> str:
+        """Capture *window* into *path*; return how: ``printwindow`` or ``hardcopy``.
+
+        Embedded in Business Client, ``HardCopy`` copies the screen, so the
+        window is rendered by its handle (``PrintWindow``) and a minimized
+        window or a hidden tab is refused; there is no fallback. On plain SAP
+        GUI ``HardCopy`` draws the window itself; only a minimized one is refused.
+
+        The host is that of the session's main window too: a popup in Business
+        Client is a top-level dialog of its own, and with Business Client
+        minimized ``HardCopy`` returned a copy of the screen for it while SAP's
+        ``Iconic`` stayed False.
+        """
+        hwnd = self._window_handle(window)
+        if (hwnd and is_embedded(hwnd)) or self._main_window_is_embedded():
+            if not hwnd:
+                raise SAPGUIError(
+                    "The SAP window gives no handle to capture it by, and in "
+                    "Business Client there is no other way."
+                )
+            print_window_png(hwnd, path)
+            return "printwindow"
+        if window.Iconic is True:
+            raise SAPGUIError("The SAP window is minimized; restore it and retry.")
+        window.HardCopy(path, _HARDCOPY_PNG)
+        return "hardcopy"
+
+    @staticmethod
+    def _window_handle(window) -> int | None:
+        try:
+            hwnd = window.Handle
+        except Exception:
+            return None
+        return hwnd if isinstance(hwnd, int) and hwnd > 0 else None
+
+    def _main_window_is_embedded(self) -> bool:
+        """True when this session's main window sits inside Business Client."""
+        try:
+            hwnd = self._window_handle(self._find_window("wnd[0]"))
+        except Exception:
+            return False
+        return bool(hwnd and is_embedded(hwnd))
 
     def _resolve_screenshot_path(self, save_path: Any) -> str:
         """Validate a screenshot target and return it as an absolute path."""
