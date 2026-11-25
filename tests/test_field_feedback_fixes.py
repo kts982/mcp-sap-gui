@@ -225,6 +225,68 @@ class TestGetDockingContainers:
         assert controller.get_docking_containers("wnd[0]") == []
 
 
+class TestDepthLimitedHint:
+    """A tree 16 levels down was invisible at max_depth 14, with or without a
+    filter, and the answer (element_count 0) gave no sign of why (live,
+    2026-11-25)."""
+
+    _P = "/app/con[0]/ses[0]/wnd[0]/usr"
+
+    def _screen(self):
+        tree = _child(f"{self._P}/cntlA/shellcont/shell", "GuiShell", subtype="Tree")
+        shellcont = _child(f"{self._P}/cntlA/shellcont", "GuiContainerShell",
+                           children=[tree])
+        box = _child(f"{self._P}/cntlA", "GuiCustomControl", children=[shellcont])
+        return _child(self._P, "GuiUserArea", children=[box])
+
+    def _discover(self, discovery_path, max_depth, type_filter=""):
+        controller = _make_controller_with_session()
+        _serve(controller, self._screen(), discovery_path)
+        cut_off: list = []
+        found = controller.get_screen_elements(
+            "wnd[0]/usr", max_depth=max_depth, type_filter=type_filter, cut_off=cut_off)
+        return found, cut_off
+
+    def test_the_container_where_the_descent_stopped_is_reported(self, discovery_path):
+        found, cut_off = self._discover(discovery_path, max_depth=2)
+
+        assert [e.id.rsplit("/usr/", 1)[-1] for e in found] == ["cntlA", "cntlA/shellcont"]
+        assert [i.rsplit("/usr/", 1)[-1] for i in cut_off] == ["cntlA/shellcont"]
+
+    def test_an_empty_filtered_result_still_says_it_was_cut(self, discovery_path):
+        found, cut_off = self._discover(discovery_path, max_depth=2, type_filter="GuiTree")
+
+        assert found == []
+        assert len(cut_off) == 1
+
+    def test_nothing_is_reported_when_the_whole_screen_was_read(self, discovery_path):
+        found, cut_off = self._discover(discovery_path, max_depth=3, type_filter="GuiTree")
+
+        assert [e.id.rsplit("/usr/", 1)[-1] for e in found] == ["cntlA/shellcont/shell"]
+        assert cut_off == []
+
+    async def test_the_tool_reports_depth_limited(self, srv):
+        mock_ctrl = MagicMock()
+        mock_ctrl.get_screen_elements.side_effect = lambda *a, **kw: kw["cut_off"].extend(
+            [f"wnd[0]/usr/c{i}" for i in range(5)]) or []
+        mock_ctrl.get_docking_containers.return_value = []
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            result = await srv.sap_get_screen_elements(_make_mock_ctx(), max_depth=2)
+
+        limited = result["depth_limited"]
+        assert (limited["max_depth"], limited["containers_cut_off"]) == (2, 5)
+        assert limited["examples"] == [f"wnd[0]/usr/c{i}" for i in range(3)]
+
+    async def test_the_tool_says_nothing_when_nothing_was_cut(self, srv):
+        mock_ctrl = MagicMock()
+        mock_ctrl.get_screen_elements.return_value = []
+        mock_ctrl.get_docking_containers.return_value = []
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            result = await srv.sap_get_screen_elements(_make_mock_ctx())
+
+        assert "depth_limited" not in result
+
+
 class TestScreenElementsDockingHint:
     async def test_user_area_discovery_reports_docking_containers(self, srv):
         ctx = _make_mock_ctx()

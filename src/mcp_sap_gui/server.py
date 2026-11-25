@@ -2490,7 +2490,10 @@ async def sap_get_screen_elements(
 
     max_depth controls how deep to recurse into containers (default 2).
     Use max_depth=1 for a quick overview, max_depth=3+ for deeply nested
-    layouts (splitter containers, tab strips with sub-containers).
+    layouts (splitter containers, tab strips with sub-containers). When
+    max_depth stopped inside containers that still have children, the
+    response carries depth_limited (also when the result is empty): raise
+    max_depth, or pass one of its examples as container_id.
 
     Pass container_id='wnd[0]/mbar' to discover the menu bar structure.
 
@@ -2513,17 +2516,19 @@ async def sap_get_screen_elements(
 
     def _discover():
         lists: list = []
+        cut_off: list = []
         found = c.get_screen_elements(
             container_id, max_depth=max_depth,
             type_filter=type_filter,
             changeable_only=changeable_only,
             expand_tables=expand_tables,
             lists=lists,
+            cut_off=cut_off,
         )
         docking = c.get_docking_containers(usr_window.group(1)) if usr_window else []
-        return found, docking, lists
+        return found, docking, lists, cut_off
 
-    elements, docking, lists = await _com(_discover)
+    elements, docking, lists, cut_off = await _com(_discover)
     result = {
         "element_count": len(elements),
         "elements": [
@@ -2531,6 +2536,15 @@ async def sap_get_screen_elements(
             for e in elements
         ],
     }
+    if cut_off:
+        # An empty or short result may only mean max_depth stopped too early.
+        result["depth_limited"] = {
+            "max_depth": max_depth,
+            "containers_cut_off": len(cut_off),
+            "examples": cut_off[:3],
+            "note": "max_depth stopped inside these containers; raise it, or "
+                    "pass one as container_id, to see what they hold.",
+        }
     if docking:
         result["docking_containers"] = docking
     if lists:
