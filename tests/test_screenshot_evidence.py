@@ -362,6 +362,16 @@ class TestAlvCellTargets:
         assert box == (100 + 50, 200 + 40, 80, 20)
         grid.GetCellLeft.assert_called_with(3, "COL_B")
 
+    def test_cell_offsets_are_scaled_to_physical_pixels(self):
+        # Seen live at 150%: GetCell* are 96-DPI pixels, ScreenLeft/Top physical.
+        grid = self._grid()
+        with patch("mcp_sap_gui.discovery.dpi_scale", return_value=1.5), patch.object(
+            SAPGUIController, "_window_handle", return_value=7
+        ):
+            box = self._controller(grid)._screen_box(CELL, "wnd[0]")
+
+        assert box == (100 + 75, 200 + 60, 120, 30)
+
     def test_column_runs_from_first_visible_row_to_the_grid_bottom(self):
         grid = self._grid()
         target = {"id": "wnd[0]/usr/shell", "column": "COL_B"}

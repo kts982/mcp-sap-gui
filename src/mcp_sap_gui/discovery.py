@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 from .capture import (
     annotate_png,
     cut_at_frame,
+    dpi_scale,
     evidence_line,
     is_embedded,
     is_maximized,
@@ -1970,7 +1971,9 @@ class DiscoveryMixin:
             if box[2] <= 0 or box[3] <= 0:
                 raise SAPGUIError(f"{element_id!r} is not visible (no size)")
             if column is not None:
-                box = self._grid_cell_box(el, row, column, box, clip)
+                hwnd = self._window_handle(self._find_window(window_id))
+                scale = dpi_scale(hwnd) if hwnd else 1.0
+                box = self._grid_cell_box(el, row, column, box, clip, scale)
             self._require_within(box, element_id, window_id)
         except SAPGUIError:
             raise
@@ -2001,7 +2004,7 @@ class DiscoveryMixin:
 
     @staticmethod
     def _grid_cell_box(grid, row: int | None, column: str, bounds: tuple,
-                       clip: bool = True) -> tuple:
+                       clip: bool = True, scale: float = 1.0) -> tuple:
         """Screen box of an ALV cell, or the column's visible part when *row* is None.
 
         A cell scrolled partly out of view is clipped to the grid when *clip* is
@@ -2025,10 +2028,15 @@ class DiscoveryMixin:
         grid_left, grid_top, grid_width, grid_height = bounds
         # Offsets are relative to the grid's own origin (checked on SAP GUI 8.10);
         # GetCellX/GetCellY do not exist. A cell scrolled out of view has size 0.
-        left = grid_left + int(grid.GetCellLeft(row, column))
-        top = grid_top + int(grid.GetCellTop(row, column))
-        width = int(grid.GetCellWidth(row, column))
-        height = int(grid.GetCellHeight(row, column))
+        # They come in 96-DPI pixels, ScreenLeft/ScreenTop in physical ones
+        # (seen live at 150%): scale them, rounding after the scaling.
+        def px(getter) -> int:
+            return int(getter(row, column) * scale + 0.5)
+
+        left = grid_left + px(grid.GetCellLeft)
+        top = grid_top + px(grid.GetCellTop)
+        width = px(grid.GetCellWidth)
+        height = px(grid.GetCellHeight)
         if width <= 0 or height <= 0:
             raise SAPGUIError(f"Cell {column!r} row {row} is not visible (no size); scroll first")
         if whole_column:  # from the first visible row to the grid's bottom

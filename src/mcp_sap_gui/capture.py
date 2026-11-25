@@ -85,6 +85,17 @@ def _physical_pixels():
             user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(old))
 
 
+def dpi_scale(hwnd: int) -> float:
+    """Display scaling of the window's monitor (1.5 at 150%), 1.0 when unknown."""
+    with _physical_pixels():
+        try:
+            user32 = ctypes.windll.user32
+            user32.GetDpiForWindow.argtypes = [ctypes.c_void_p]
+            return (user32.GetDpiForWindow(ctypes.c_void_p(hwnd)) or 96) / 96
+        except (AttributeError, OSError):
+            return 1.0
+
+
 def _require_shown(win32gui, hwnd: int) -> None:
     """SAPGUIError unless this window is the one on screen and not minimized."""
     # A Business Client tab is a child window: only the NWBC main window is
