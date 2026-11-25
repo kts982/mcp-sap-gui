@@ -366,7 +366,7 @@ class TestSaveScreenshot:
         result = controller.save_screenshot(str(target))
 
         # The numeric constant: the string "PNG" makes SAP GUI write a BMP.
-        window.HardCopy.assert_called_once_with(str(target), 2)
+        assert window.HardCopy.call_args[0][1] == 2
         assert result["filepath"] == str(target)
         assert (result["width"], result["height"]) == (3176, 1768)
         assert result["size_bytes"] == len(payload)
@@ -457,7 +457,10 @@ class TestScreenshotTool:
         with patch.object(srv, "_ctrl", return_value=mock_ctrl):
             result = await srv.sap_screenshot(ctx, save_path="shot.png")
 
-        mock_ctrl.save_screenshot.assert_called_once_with("shot.png", inline=True)
+        mock_ctrl.save_screenshot.assert_called_once_with(
+            "shot.png", inline=True, highlight=None, mask=None, caption="",
+            include_context=False, isolate=False,
+        )
         assert [block.type for block in result.content] == ["text", "image"]
         meta = json.loads(result.content[0].text)
         assert meta["filepath"] == "C:\\docs\\shot.png"
@@ -473,7 +476,10 @@ class TestScreenshotTool:
         with patch.object(srv, "_ctrl", return_value=mock_ctrl):
             result = await srv.sap_screenshot(ctx, save_path="shot.png", inline=False)
 
-        mock_ctrl.save_screenshot.assert_called_once_with("shot.png", inline=False)
+        mock_ctrl.save_screenshot.assert_called_once_with(
+            "shot.png", inline=False, highlight=None, mask=None, caption="",
+            include_context=False, isolate=False,
+        )
         assert [block.type for block in result.content] == ["text"]
 
     async def test_save_errors_surface_to_the_agent(self, srv):

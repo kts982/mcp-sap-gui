@@ -34,6 +34,7 @@ from fastmcp.server.lifespan import lifespan
 from fastmcp.tools import ToolResult
 from mcp.types import ImageContent, TextContent
 from mcp_types import InputRequiredResult
+from pydantic import BaseModel, ConfigDict
 
 from . import __version__
 from .audit import AuditMiddleware
@@ -2538,25 +2539,55 @@ async def sap_get_screen_elements(
     return result
 
 
+class CellTarget(BaseModel):
+    """An ALV cell, or with `row` left out the visible part of a column."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    column: str
+    row: int | None = None
+
+
+def _targets(items) -> list | None:
+    """Element IDs stay strings; a CellTarget goes on as a plain dict."""
+    if not items:
+        return None
+    return [i if isinstance(i, str) else i.model_dump(exclude_none=True) for i in items]
+
+
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_screenshot(
     ctx: Context,
     save_path: str = "",
     inline: bool = True,
+    highlight: list[str | CellTarget] | None = None,
+    mask: list[str | CellTarget] | None = None,
+    caption: str = "",
+    include_context: bool = False,
+    isolate: bool = False,
 ) -> ToolResult:
-    """Take a screenshot of the current SAP window.
+    """Take a screenshot of the current SAP window: a fallback when the
+    structured tools return nothing useful (e.g. Web Dynpro screens).
 
-    Use as a fallback when structured tools (sap_get_screen_elements,
-    sap_read_field, sap_read_table) return empty or confusing results,
-    e.g., on Web Dynpro screens where the element tree is non-standard.
+    save_path (.png, a new file in an existing directory) also writes the
+    full-resolution file; inline=False skips the image. A minimized window or
+    a hidden Business Client tab is refused.
 
-    To put a screenshot into a document, pass save_path (must end in .png,
-    directory must exist, existing files are never overwritten). The file
-    keeps SAP GUI's full resolution; the inline image is capped at 1920px.
-    The response then also reports the absolute path and pixel size. Set
-    inline=False to skip the image when only the file is needed."""
+    Evidence options, with save_path: highlight=[targets] frames, mask=[targets]
+    blacks out (nothing is saved if one is not found), isolate=True keeps only
+    the highlighted areas, caption="..." adds a strip, include_context=True
+    adds system, client, user and time to it (needs a caption; shows the user
+    ID). A target is an element id, or {"id": <grid id>, "column": "MATNR",
+    "row": 3} for an ALV cell (row left out: the visible part of the column).
+    It needs a size and must lie inside its container and in the captured
+    window (the popup, when one is open), or nothing is saved. A cell partly
+    scrolled out of view is masked where it shows; for highlight and isolate it
+    is refused (scroll first). mask blacks out the named elements only: the
+    same value in the title or status bar stays visible."""
     c = _ctrl(ctx)
     if not save_path.strip():
+        if highlight or mask or caption.strip() or isolate:
+            raise ValueError("highlight, mask, caption and isolate need save_path")
         result = await _com(c.take_screenshot)
         if "error" in result:
             raise ValueError(result["error"])
@@ -2564,7 +2595,11 @@ async def sap_screenshot(
             ImageContent(type="image", data=result["data"], mimeType="image/png"),
         ])
 
-    result = await _com(lambda: c.save_screenshot(save_path, inline=inline))
+    result = await _com(lambda: c.save_screenshot(
+        save_path, inline=inline, highlight=_targets(highlight), mask=_targets(mask),
+        caption=caption,
+        include_context=include_context, isolate=isolate,
+    ))
     if "error" in result:
         raise ValueError(result["error"])
     png_b64 = result.pop("data", None)
