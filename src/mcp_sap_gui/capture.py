@@ -85,8 +85,8 @@ def _physical_pixels():
             user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(old))
 
 
-def cell_scale(hwnd: int) -> float:
-    """Factor from a grid's ``GetCell*`` units to physical pixels, 1.0 when unknown.
+def cell_scale(hwnd: int) -> float | None:
+    """Factor from a grid's ``GetCell*`` units to physical pixels, None when unknown.
 
     SAP reports them in the system DPI of its own process, which Windows fixes at
     sign-in, while the window can sit on a monitor with another scaling: 1.5 for a
@@ -107,14 +107,14 @@ def cell_scale(hwnd: int) -> float:
             user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
             proc = kernel32.OpenProcess(0x1000, 0, pid.value)  # QUERY_LIMITED_INFORMATION
             if not proc:
-                return 1.0
+                return None
             try:
                 process_dpi = user32.GetSystemDpiForProcess(proc)
             finally:
                 kernel32.CloseHandle(proc)
-            return window_dpi / process_dpi if window_dpi and process_dpi else 1.0
+            return window_dpi / process_dpi if window_dpi and process_dpi else None
         except (AttributeError, OSError):
-            return 1.0
+            return None
 
 
 def physical_width(hwnd: int) -> int | None:

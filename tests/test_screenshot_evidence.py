@@ -179,6 +179,45 @@ class TestSaveScreenshotEvidence:
             assert img.getpixel((15, 15)) == (0, 0, 0)
             assert img.getpixel((60, 15)) == (255, 255, 255)
 
+    def test_a_one_pixel_difference_is_not_a_scaling(self, tmp_path):
+        controller, window = _controller(tmp_path)
+        window.Width = 199  # the image is 200 wide
+        target = tmp_path / "e.png"
+
+        result = controller.save_screenshot(str(target), mask=["wnd[0]/usr/txtF"])
+
+        assert "SAP reports the window" in result["error"]
+        assert not target.exists()
+
+    def test_a_cell_is_drawn_where_it_is_on_a_scaled_window(self, tmp_path):
+        # State 3 end to end: units 2x the image (k 0.5), cells in the same units.
+        controller, window = _controller(tmp_path)
+        window.Width, window.Height = 400, 200
+        controller._known["wnd[0]/usr"].Height = 200
+        grid = MagicMock(ScreenLeft=20, ScreenTop=140, Width=200, Height=100,
+                         FirstVisibleRow=0, VisibleRowCount=5, ColumnCount=1)
+        grid.ColumnOrder.side_effect = lambda i: "COL_A"
+        grid.GetCellLeft.return_value, grid.GetCellTop.return_value = 10, 20
+        grid.GetCellWidth.return_value, grid.GetCellHeight.return_value = 40, 20
+        controller._known["wnd[0]/usr/shell"] = grid
+        target = tmp_path / "e.png"
+
+        real_unit = SAPGUIController._cell_unit  # the real function, with a handle
+        with patch("mcp_sap_gui.discovery.cell_scale", return_value=0.5), patch(
+            "mcp_sap_gui.discovery.physical_width", return_value=200
+        ), patch.object(
+            SAPGUIController, "_cell_unit", side_effect=lambda _hwnd, w: real_unit(7, w)
+        ):
+            result = controller.save_screenshot(
+                str(target), inline=False,
+                mask=[{"id": "wnd[0]/usr/shell", "column": "COL_A", "row": 0}],
+            )
+
+        assert "error" not in result, result
+        with Image.open(target) as img:  # (30,60) 40x20 units -> (15,30) 20x10 pixels
+            assert img.getpixel((20, 35)) == (0, 0, 0)
+            assert img.getpixel((50, 35)) == (255, 255, 255)
+
     def test_a_target_in_another_window_than_the_capture_saves_nothing(self, tmp_path):
         controller, window = _controller(tmp_path)
         controller._session.ActiveWindow = MagicMock(Id="wnd[1]")  # a popup is on top
@@ -354,6 +393,12 @@ CELL = {"id": "wnd[0]/usr/shell", "row": 3, "column": "COL_B"}
 
 
 class TestAlvCellTargets:
+    @pytest.fixture(autouse=True)
+    def _physical_cells(self):
+        # Cells in the units of Screen*; the unit itself is tested in TestCellUnit.
+        with patch.object(SAPGUIController, "_cell_unit", return_value=1.0):
+            yield
+
     @staticmethod
     def _grid(first=2, count=10):
         grid = MagicMock(ScreenLeft=100, ScreenTop=200, Width=500, Height=300,
@@ -379,16 +424,25 @@ class TestAlvCellTargets:
         assert box == (100 + 50, 200 + 40, 80, 20)
         grid.GetCellLeft.assert_called_with(3, "COL_B")
 
-    def test_cell_offsets_are_scaled_to_physical_pixels(self):
+    def test_cell_offsets_are_scaled_by_the_cell_unit(self):
         # Seen live: a process that started at 96 DPI reports GetCell* in 96-DPI pixels
         # while the window is at 150% (ScreenLeft/Top are physical).
         grid = self._grid()
-        with patch("mcp_sap_gui.discovery.cell_scale", return_value=1.5), patch.object(
-            SAPGUIController, "_window_handle", return_value=7
-        ):
+        with patch.object(SAPGUIController, "_cell_unit", return_value=1.5):
             box = self._controller(grid)._screen_box(CELL, "wnd[0]")
 
         assert box == (100 + 75, 200 + 60, 120, 30)
+
+    def test_the_scaled_bottom_edge_never_overshoots_the_grid(self):
+        # 323 + 17 = 340 -> 510 at 1.5; rounding top (485) and height (26) apart gave 511.
+        grid = self._grid()
+        grid.GetCellTop.return_value = 323
+        grid.GetCellHeight.return_value = 17
+        grid.Height = 510
+        with patch.object(SAPGUIController, "_cell_unit", return_value=1.5):
+            box = self._controller(grid)._screen_box(CELL, "wnd[0]", clip=False)
+
+        assert box[1] + box[3] == 200 + 510
 
     def test_column_runs_from_first_visible_row_to_the_grid_bottom(self):
         grid = self._grid()
@@ -521,8 +575,8 @@ class TestCellScale:
         assert self._scale(168, 168) == 1.0
 
     @pytest.mark.parametrize("window_dpi,process_dpi,proc", [(0, 96, 1), (144, 0, 1), (144, 96, 0)])
-    def test_unknown_values_give_1(self, window_dpi, process_dpi, proc):
-        assert self._scale(window_dpi, process_dpi, proc) == 1.0
+    def test_unknown_values_give_none(self, window_dpi, process_dpi, proc):
+        assert self._scale(window_dpi, process_dpi, proc) is None
 
 
 class TestCellUnit:
@@ -542,8 +596,11 @@ class TestCellUnit:
     def test_screen_units_larger_than_the_pixels_are_followed(self):
         assert self._unit(2 / 3, 1920, 2880) == pytest.approx(1.0)
 
-    def test_unknown_physical_width_leaves_the_cell_scale(self):
-        assert self._unit(1.5, None, 1920) == 1.5
+    @pytest.mark.parametrize("cell,physical", [(None, 1920), (1.5, None)])
+    def test_an_unknown_value_is_refused(self, cell, physical):
+        with pytest.raises(SAPGUIError, match="Cannot tell the unit"):
+            self._unit(cell, physical, 1920)
 
-    def test_without_a_handle_there_is_no_scaling(self):
-        assert SAPGUIController._cell_unit(None, MagicMock(Width=1920)) == 1.0
+    def test_without_a_handle_it_is_refused(self):
+        with pytest.raises(SAPGUIError, match="Cannot tell the unit"):
+            SAPGUIController._cell_unit(None, MagicMock(Width=1920))

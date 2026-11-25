@@ -6,6 +6,7 @@ screenshot capabilities for the SAP GUI controller.
 """
 
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
@@ -1844,7 +1845,7 @@ class DiscoveryMixin:
             boxes = [(left - origin[0], top - origin[1], width, height)
                      for left, top, width, height in before]
             if k != 1:  # SAP reports its screen units k times the pixels in the image
-                boxes = [tuple(int(v * k + 0.5) for v in box) for box in boxes]
+                boxes = [tuple(math.floor(v * k + 0.5) for v in box) for box in boxes]
             if frame:  # a maximized window: its frame is not in the image
                 boxes = [cut_at_frame(box, size, frame) for box in boxes]
         else:
@@ -1888,7 +1889,7 @@ class DiscoveryMixin:
                 return (origin[0] + frame, origin[1] + frame), size, frame, 1.0
         if size is not None and reported[0] > 0 and reported[1] > 0:
             k = size[0] / reported[0]
-            if 0.25 <= k <= 4 and abs(size[1] - reported[1] * k) <= 1:
+            if 0.25 <= k <= 4 and abs(k - 1) > 0.02 and abs(size[1] - reported[1] * k) <= 1:
                 return (int(window.ScreenLeft), int(window.ScreenTop)), size, 0, k
         raise SAPGUIError(
             f"The image is {size} but SAP reports the window as "
@@ -2000,13 +2001,17 @@ class DiscoveryMixin:
 
         ``cell_scale`` gives physical pixels; ``Screen*`` are physical only when
         SAP's window units are (they are *k* times larger on a window moved to a
-        monitor with a lower scaling), so divide by that *k*.
+        monitor with a lower scaling), so divide by that *k*. When either is
+        unknown the box would be drawn in the wrong place: refuse.
         """
-        if not hwnd:
-            return 1.0
-        scale = cell_scale(hwnd)
-        physical, reported = physical_width(hwnd), int(window.Width)
-        if physical and reported > 0 and abs(physical / reported - 1) > 0.02:
+        scale = cell_scale(hwnd) if hwnd else None
+        physical, reported = (physical_width(hwnd) if hwnd else None), int(window.Width)
+        if scale is None or not physical or reported <= 0:
+            raise SAPGUIError(
+                "Cannot tell the unit of the grid's cell geometry (no window handle or "
+                "no DPI from Windows); not drawing on a cell, nothing saved."
+            )
+        if abs(physical / reported - 1) > 0.02:
             scale /= physical / reported
         return scale
 
@@ -2059,13 +2064,14 @@ class DiscoveryMixin:
         # GetCellX/GetCellY do not exist. A cell scrolled out of view has size 0.
         # They come in the system DPI of SAP's own process, ScreenLeft/ScreenTop in
         # physical pixels: scale them (``cell_scale``), rounding after the scaling.
-        def px(getter) -> int:
-            return int(getter(row, column) * scale + 0.5)
+        def edge(value) -> int:  # scale the edges, then subtract: a rounded size can overshoot
+            return math.floor(value * scale + 0.5)
 
-        left = grid_left + px(grid.GetCellLeft)
-        top = grid_top + px(grid.GetCellTop)
-        width = px(grid.GetCellWidth)
-        height = px(grid.GetCellHeight)
+        raw_left, raw_top = grid.GetCellLeft(row, column), grid.GetCellTop(row, column)
+        left = grid_left + edge(raw_left)
+        top = grid_top + edge(raw_top)
+        width = edge(raw_left + grid.GetCellWidth(row, column)) - edge(raw_left)
+        height = edge(raw_top + grid.GetCellHeight(row, column)) - edge(raw_top)
         if width <= 0 or height <= 0:
             raise SAPGUIError(f"Cell {column!r} row {row} is not visible (no size); scroll first")
         if whole_column:  # from the first visible row to the grid's bottom
