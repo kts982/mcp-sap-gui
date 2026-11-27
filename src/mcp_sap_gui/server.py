@@ -2536,15 +2536,20 @@ async def sap_get_screen_elements(
             for e in elements
         ],
     }
+    if "/mbar" not in container_id:
+        # A scan from wnd[0] always stops inside the menus; they hold no
+        # tree or grid and would crowd out the examples that matter.
+        cut_off = [i for i in cut_off if "/mbar" not in i]
     if cut_off:
         # An empty or short result may only mean max_depth stopped too early.
         result["depth_limited"] = {
-            "max_depth": max_depth,
             "containers_cut_off": len(cut_off),
             "examples": cut_off[:3],
-            "note": "max_depth stopped inside these containers; raise it, or "
-                    "pass one as container_id, to see what they hold.",
         }
+        if not elements:
+            result["depth_limited"]["note"] = (
+                "max_depth stopped inside these containers; raise it, or "
+                "pass one as container_id, to see what they hold.")
     if docking:
         result["docking_containers"] = docking
     if lists:

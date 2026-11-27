@@ -20,6 +20,7 @@ import json
 import re
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -265,17 +266,43 @@ class TestDepthLimitedHint:
         assert [e.id.rsplit("/usr/", 1)[-1] for e in found] == ["cntlA/shellcont/shell"]
         assert cut_off == []
 
-    async def test_the_tool_reports_depth_limited(self, srv):
+    async def _tool(self, srv, cut_off, found=(), **kwargs):
         mock_ctrl = MagicMock()
-        mock_ctrl.get_screen_elements.side_effect = lambda *a, **kw: kw["cut_off"].extend(
-            [f"wnd[0]/usr/c{i}" for i in range(5)]) or []
+        mock_ctrl.get_screen_elements.side_effect = lambda *a, **kw: (
+            kw["cut_off"].extend(cut_off) or list(found))
         mock_ctrl.get_docking_containers.return_value = []
         with patch.object(srv, "_ctrl", return_value=mock_ctrl):
-            result = await srv.sap_get_screen_elements(_make_mock_ctx(), max_depth=2)
+            return await srv.sap_get_screen_elements(_make_mock_ctx(), **kwargs)
+
+    async def test_the_tool_reports_depth_limited(self, srv):
+        result = await self._tool(
+            srv, [f"wnd[0]/usr/c{i}" for i in range(5)], max_depth=2)
 
         limited = result["depth_limited"]
-        assert (limited["max_depth"], limited["containers_cut_off"]) == (2, 5)
+        assert limited["containers_cut_off"] == 5
         assert limited["examples"] == [f"wnd[0]/usr/c{i}" for i in range(3)]
+        assert "max_depth" not in limited
+
+    async def test_the_note_comes_only_with_an_empty_result(self, srv):
+        cut = ["wnd[0]/usr/c0"]
+        empty = await self._tool(srv, cut)
+        found = await self._tool(srv, cut, found=[SimpleNamespace(id="wnd[0]/usr/x")])
+
+        assert "note" in empty["depth_limited"]
+        assert "note" not in found["depth_limited"]
+
+    async def test_menus_are_left_out_of_a_scan_that_did_not_start_in_the_menu_bar(self, srv):
+        menus = [f"wnd[0]/mbar/menu[{i}]" for i in range(3)]
+
+        only_menus = await self._tool(srv, menus, container_id="wnd[0]")
+        mixed = await self._tool(
+            srv, menus + ["wnd[0]/shellcont"], container_id="wnd[0]")
+        in_menu_bar = await self._tool(srv, menus, container_id="wnd[0]/mbar")
+
+        assert "depth_limited" not in only_menus
+        assert mixed["depth_limited"]["containers_cut_off"] == 1
+        assert mixed["depth_limited"]["examples"] == ["wnd[0]/shellcont"]
+        assert in_menu_bar["depth_limited"]["containers_cut_off"] == 3
 
     async def test_the_tool_says_nothing_when_nothing_was_cut(self, srv):
         mock_ctrl = MagicMock()
