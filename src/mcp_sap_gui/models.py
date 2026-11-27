@@ -33,6 +33,8 @@ class VKey(IntEnum):
     SHIFT_F7 = 19
     SHIFT_F8 = 20
     SHIFT_F9 = 21
+    SHIFT_F11 = 23
+    SHIFT_F12 = 24
     CTRL_S = 11     # Save (same as F11)
     # Ctrl+letter codes per the VKey table of the scripting API guide
     # (7.60 and 8.10): 32-34 are Ctrl+F8..F10, not Ctrl+F/G/P.

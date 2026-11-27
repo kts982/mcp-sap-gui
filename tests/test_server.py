@@ -619,6 +619,8 @@ class TestParseKey:
         assert srv._parse_key("Shift+F1") == VKey.SHIFT_F1
         assert srv._parse_key("Shift+F5") == VKey.SHIFT_F5
         assert srv._parse_key("Shift+F9") == VKey.SHIFT_F9
+        assert srv._parse_key("Shift+F11") == 23
+        assert srv._parse_key("Shift+F12") == 24
         assert srv._parse_key("Ctrl+F") == VKey.CTRL_F
         assert srv._parse_key("Ctrl+G") == VKey.CTRL_G
         assert srv._parse_key("Ctrl+P") == VKey.CTRL_P
@@ -726,7 +728,9 @@ class TestToolRegistration:
         assert "enum" in key_schema
         assert "Enter" in key_schema["enum"]
         assert "F8" in key_schema["enum"]
-        assert len(key_schema["enum"]) == 30
+        assert "Shift+F11" in key_schema["enum"]
+        assert "Shift+F12" in key_schema["enum"]
+        assert len(key_schema["enum"]) == 32
 
     def test_handle_popup_has_auto_action(self, srv):
         """sap_handle_popup exposes the new auto action in its schema."""
