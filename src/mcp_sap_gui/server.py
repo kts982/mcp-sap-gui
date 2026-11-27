@@ -3225,7 +3225,10 @@ def main():
         mcp.run(transport="http", host=args.host, port=args.port,
                 **http_guard_kwargs(args.allowed_host, args.allowed_origin))
     else:
-        mcp.run()
+        # Named, not left to FastMCP: without a transport mcp.run() takes
+        # FASTMCP_TRANSPORT (environment or a .env file in the working
+        # directory), and HTTP would start without the checks above.
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
