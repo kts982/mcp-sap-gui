@@ -700,6 +700,7 @@ class TestSessionTraits:
 
 @pytest.mark.parametrize("vkey, name", [
     (0, "Enter"), (8, "F8"), (12, "F12"), (13, "Shift+F1"), (21, "Shift+F9"),
+    (23, "Shift+F11"), (24, "Shift+F12"),
     (71, "Ctrl+F"), (84, "Ctrl+G"), (86, "Ctrl+P"),
 ])
 def test_refused_key_names_are_sap_send_key_names(vkey, name):
@@ -707,6 +708,13 @@ def test_refused_key_names_are_sap_send_key_names(vkey, name):
     Ctrl codes are the guide's VKey table: 32-34 were Ctrl+F8..F10."""
     assert srv_mod._KEY_MAP[name] == vkey
     assert _make_controller_with_session()._vkey_name(vkey) == name
+
+
+def test_sendable_shift_vkeys():
+    controller = _make_controller_with_session()
+    assert 23 in controller._SENDABLE_VKEYS
+    assert 24 in controller._SENDABLE_VKEYS
+    assert 22 not in controller._SENDABLE_VKEYS
 
 
 class TestShortIdsInResponses:

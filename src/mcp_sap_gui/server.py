@@ -973,6 +973,8 @@ _KEY_MAP = {
     "Shift+F5": VKey.SHIFT_F5, "Shift+F6": VKey.SHIFT_F6,
     "Shift+F7": VKey.SHIFT_F7, "Shift+F8": VKey.SHIFT_F8,
     "Shift+F9": VKey.SHIFT_F9,
+    "Shift+F11": VKey.SHIFT_F11,
+    "Shift+F12": VKey.SHIFT_F12,
     # Ctrl combinations
     "Ctrl+F": VKey.CTRL_F, "Ctrl+G": VKey.CTRL_G, "Ctrl+P": VKey.CTRL_P,
 }
@@ -1521,6 +1523,7 @@ async def sap_send_key(
         "Execute", "Refresh",
         "Shift+F1", "Shift+F2", "Shift+F3", "Shift+F4", "Shift+F5",
         "Shift+F6", "Shift+F7", "Shift+F8", "Shift+F9",
+        "Shift+F11", "Shift+F12",
         "Ctrl+F", "Ctrl+G", "Ctrl+P",
     ],
     ctx: Context,
@@ -1529,7 +1532,7 @@ async def sap_send_key(
 
     Common keys: Enter (confirm), F1 (Help), F3 (Back), F4 (search help /
     value help), F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel/Escape).
-    Also supports Shift+F1..F9 and Ctrl+F, Ctrl+G, Ctrl+P.
+    Also supports Shift+F1..F9, Shift+F11, Shift+F12, and Ctrl+F, Ctrl+G, Ctrl+P.
 
     A key that is not active on the screen is not sent: the response has an
     error and available_keys, the keys this screen accepts.
@@ -2605,8 +2608,10 @@ async def sap_screenshot(
     same value in the title or status bar stays visible."""
     c = _ctrl(ctx)
     if not save_path.strip():
-        if highlight or mask or caption.strip() or isolate:
-            raise ValueError("highlight, mask, caption and isolate need save_path")
+        if highlight or mask or caption.strip() or isolate or include_context:
+            raise ValueError(
+                "highlight, mask, caption, isolate and include_context need save_path"
+            )
         result = await _com(c.take_screenshot)
         if "error" in result:
             raise ValueError(result["error"])

@@ -66,6 +66,8 @@ class TestVKey:
         assert VKey.F8 == 8
         assert VKey.F11 == 11
         assert VKey.F12 == 12
+        assert VKey.SHIFT_F11 == 23
+        assert VKey.SHIFT_F12 == 24
 
 
 class TestSessionInfo:

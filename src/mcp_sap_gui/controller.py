@@ -1259,8 +1259,9 @@ class SAPGUIControllerBase:
             "screen": self.get_screen_info(),
         }
 
-    # The keys sap_send_key offers: Enter, F1-F12, Shift+F1-F9, Ctrl+F/G/P.
-    _SENDABLE_VKEYS = (*range(0, 22), 71, 84, 86)
+    # The keys sap_send_key offers: Enter, F1-F12,
+    # Shift+F1-F9, Shift+F11/F12, Ctrl+F/G/P.
+    _SENDABLE_VKEYS = (*range(0, 22), 23, 24, 71, 84, 86)
 
     @staticmethod
     def _vkey_allowed(window, vkey: int) -> bool:
@@ -1277,7 +1278,7 @@ class SAPGUIControllerBase:
             return "Enter"
         if 1 <= vkey <= 12:
             return f"F{vkey}"
-        if 13 <= vkey <= 24:
+        if 13 <= vkey <= 21 or vkey in (23, 24):
             return f"Shift+F{vkey - 12}"
         return {71: "Ctrl+F", 84: "Ctrl+G", 86: "Ctrl+P"}.get(vkey, str(vkey))
 
