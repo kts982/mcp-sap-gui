@@ -4,7 +4,9 @@ Built from the same settings main() passes to mcp.run(transport="http").
 """
 
 import json
+from unittest.mock import MagicMock, patch
 
+import fastmcp
 import pytest
 from starlette.testclient import TestClient
 
@@ -48,3 +50,16 @@ def test_rebinding_host_is_refused():
 def test_allowed_host_and_origin_pass():
     assert _status(["sap-box"], Host="sap-box:8000") == 200
     assert _status([], ["https://tools.example"], Origin="https://tools.example") == 200
+
+
+def test_without_the_option_the_server_runs_on_stdio_whatever_fastmcp_is_set_to(monkeypatch):
+    """Only --transport http starts HTTP, with the checks above. Left to
+    FastMCP, FASTMCP_TRANSPORT=http (environment or .env) would start it
+    without them."""
+    monkeypatch.setattr(fastmcp.settings, "transport", "http")
+    monkeypatch.setattr(server, "config", server.config)
+    with (patch("sys.argv", ["mcp-sap-gui"]),
+          patch.object(server, "load_dotenv", MagicMock()),
+          patch.object(server.mcp, "run", MagicMock()) as run):
+        server.main()
+    run.assert_called_once_with(transport="stdio")
