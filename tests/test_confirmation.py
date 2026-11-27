@@ -966,6 +966,7 @@ class TestConfirmationAudit:
             "tool": "sap_set_field",
             "outcome": "accepted",
             "elapsed_ms": events[0]["elapsed_ms"],
+            "approved_by": "user",
         }]
         assert isinstance(events[0]["elapsed_ms"], float)
 

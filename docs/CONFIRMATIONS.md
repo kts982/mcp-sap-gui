@@ -50,7 +50,32 @@ Ask the assistant to *"show me the values first"*: `sap_preview` shows the curre
 
 ## In the audit log
 
-With `--audit-log`, every question and answer gets a `confirmation` line: the point, the tool, the outcome (`asked`, `accepted`, `declined`, `changed`, `replayed`, `unsolicited_answer`, `invalid_answer`, `unsupported_client`), and `elapsed_ms`, how long the answer took. An answer faster than a person also has `no_dialog: true`, and a refused yes `client_answer: "accept"`. The other audit lines: [Security guide](SECURITY_GUIDE.md#audit-log).
+With `--audit-log`, every question and answer gets a `confirmation` line: the point, the tool, the outcome (`asked`, `accepted`, `declined`, `changed`, `replayed`, `unsolicited_answer`, `invalid_answer`, `unsupported_client`), and `elapsed_ms`, how long the answer took. An answer faster than a person also has `no_dialog: true`, and a refused yes `client_answer: "accept"`. An accepted answer says who approved it: `approved_by: "user"` for a person, `"launch"` under `--client-approves` ([Scripted clients](#scripted-clients)). The other audit lines: [Security guide](SECURITY_GUIDE.md#audit-log).
+
+## Scripted clients
+
+This section is for programs, not for chat clients. A reviewed script that a person starts, naming the system and the change, cannot save otherwise: it answers the save question itself, at once, and such a yes is refused as no person's. Started with `--client-approves save`, the server takes every yes to a save question as the approval of the program that started it:
+
+- The question is still asked, and the script has to answer it. A no still counts.
+- Every yes to a save counts as the launcher's, a slow one too: with the option on, the server cannot tell a person's yes from the program's. The result carries `confirmed_by_launch: true` instead of `confirmed_by_user: true`, and the audit line `approved_by: "launch"`.
+- Only `save` can be named. Confirmation points, the session picker of `attach` and the question that turns a point off still need a person.
+- Over stdio only: the server refuses to start with `--transport http` or with `--code-mode`. It logs a WARNING at start-up that names the option and its points.
+- The option is set on the command line only; no tool can set or clear it.
+
+Never put it into a chat client's configuration: there the client would approve every save without you.
+
+Two things to know when writing the client with the MCP Python SDK's `mcp.ClientSession` (mcp 2.3):
+
+- `initialize()` stays on the handshake protocol (2025-11-25), where the SDK calls your `elicitation_callback` inside `call_tool`. On 2026-07-28 (`discover()`), `ClientSession` does not run the `input_required` loop for you: call the tool with `allow_input_required=True`, answer each request through `dispatch_input_request`, and call again with `input_responses` and `request_state`.
+- `stdio_client` passes only a short default environment to the server, so `MCP_SAP_GUI_*` settings go in `StdioServerParameters(env=...)`:
+
+```python
+StdioServerParameters(
+    command="uvx",
+    args=["mcp-sap-gui", "--client-approves", "save", "--audit-log", "audit.jsonl"],
+    env={"MCP_SAP_GUI_STRICT_ERRORS": "1"},
+)
+```
 
 ## Known gaps
 

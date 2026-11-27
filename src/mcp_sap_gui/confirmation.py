@@ -74,6 +74,25 @@ ATTACH_POINT = "attach"
 
 ALL_POINTS: tuple[str, ...] = (SAVE_POINT, *SETTABLE_POINTS)
 
+#: Points the launch option ``--client-approves`` may name. Only ``save``
+#: for now: it is the one point a script cannot avoid; the others are on
+#: only when someone turns them on.
+LAUNCH_APPROVABLE_POINTS: tuple[str, ...] = (SAVE_POINT,)
+
+#: Who approved an accepted question (``approved_by`` in the audit log): a
+#: person answered the dialog, or the launch option answers for its points.
+APPROVED_BY_USER = "user"
+APPROVED_BY_LAUNCH = "launch"
+
+
+def confirmed_key(approved_by: str) -> str:
+    """The result key that says an approved call was approved, and by whom:
+    ``confirmed_by_launch`` under ``--client-approves``, else
+    ``confirmed_by_user``."""
+    if approved_by == APPROVED_BY_LAUNCH:
+        return "confirmed_by_launch"
+    return "confirmed_by_user"
+
 #: Static tool -> point map.  ``all_writes`` is resolved from the tool's
 #: ``write`` tag instead, so a newly added write tool is covered automatically.
 POINT_BY_TOOL: dict[str, str] = {
@@ -338,7 +357,8 @@ def fast_yes_note(elapsed_ms: float) -> str:
 
 def log_confirmation_event(point: str, tool: str, outcome: str,
                            elapsed_ms: float | None = None,
-                           client_answer: str | None = None) -> None:
+                           client_answer: str | None = None,
+                           approved_by: str | None = None) -> None:
     """Emit a confirmation outcome to the audit log.
 
     AuditMiddleware records only whether the call failed, not which point
@@ -346,6 +366,8 @@ def log_confirmation_event(point: str, tool: str, outcome: str,
     ``elapsed_ms`` is how long the answer took; ``no_dialog`` marks one that
     came back faster than a person can answer (``NO_DIALOG_MS``), and
     ``client_answer`` what the client said when that answer was overruled.
+    ``approved_by`` says who approved an accepted question: ``user`` (a
+    person) or ``launch`` (``--client-approves``).
     """
     line: dict[str, Any] = {
         "event": "confirmation",
@@ -360,6 +382,8 @@ def log_confirmation_event(point: str, tool: str, outcome: str,
             line["no_dialog"] = True
     if client_answer is not None:
         line["client_answer"] = client_answer
+    if approved_by is not None:
+        line["approved_by"] = approved_by
     audit_logger.info(json.dumps(line, default=str))
 
 
@@ -371,7 +395,9 @@ class Answer:
     ``action`` is the client's action, ``decline`` for an overruled fast yes,
     or ``invalid`` for an accepted answer that is not one of the options.
     ``note`` is empty when a person answered; otherwise it explains why no
-    person did, for the caller to append to its error.
+    person did, for the caller to append to its error. ``approved_by`` says
+    who approved a yes (``APPROVED_BY_USER`` or ``APPROVED_BY_LAUNCH``) and
+    is empty otherwise.
     """
 
     yes: bool
@@ -379,6 +405,7 @@ class Answer:
     data: Any
     elapsed_ms: float
     note: str
+    approved_by: str = ""
 
 
 def _is_true(data: Any) -> bool:
@@ -568,6 +595,7 @@ async def ask_user(
     gate: str | None = None,
     can_ask: bool = False,
     shown: Any = None,
+    launch_points: Iterable[str] = (),
 ) -> Answer | Ask:
     """Ask the user one question; the same rules for every gate.
 
@@ -589,18 +617,29 @@ async def ask_user(
       ``shown``: what the question is about (the screen, the popup and its
       button, the options), read again in the answer round. If it differs
       from the question's, the answer does not count (``action: changed``).
+    - ``launch_points`` are the points the launch option ``--client-approves``
+      names. A caller passes them only for a question the option may answer
+      (a save, a confirmation point; never the attach picker or turning a
+      point off). When every point of the question is among them, a yes
+      counts as the launcher's, however fast or slow it came: it is accepted
+      with ``approved_by: launch`` and never reads as a person's. A no still
+      counts.
     """
     point_list = [points] if isinstance(points, str) else list(points)
+    gate_name = gate or "+".join(point_list)
+    by_launch = bool(point_list) and set(point_list) <= set(launch_points)
     elapsed: float | None = None
 
-    def log(outcome: str, client_answer: str | None = None) -> None:
+    def log(outcome: str, client_answer: str | None = None,
+            approved_by: str | None = None) -> None:
         timed = None if outcome in _UNTIMED else elapsed
         for point in point_list:
-            log_confirmation_event(point, tool, outcome, timed, client_answer)
+            log_confirmation_event(point, tool, outcome, timed, client_answer,
+                                   approved_by)
 
     if is_modern(ctx):
         found = await _modern_answer(
-            ctx, gate=gate or "+".join(point_list), can_ask=can_ask, tool=tool,
+            ctx, gate=gate_name, can_ask=can_ask, tool=tool,
             message=message, response_type=response_type,
             response_title=response_title, shown=shown, log=log,
         )
@@ -608,7 +647,10 @@ async def ask_user(
             return found
         action, data, elapsed = found
         if elapsed is None:  # approved in an earlier round of this call
-            return Answer(True, "accept", data, 0.0, "")
+            # The round state records who approved it then.
+            approver = (await _round_state(ctx)).get("approved_by", {}).get(
+                gate_name, APPROVED_BY_USER)
+            return Answer(True, "accept", data, 0.0, "", approver)
         if action == "changed":
             log("changed")
             return Answer(False, "changed", None, elapsed, CHANGED_NOTE)
@@ -624,15 +666,23 @@ async def ask_user(
         log("invalid_answer")
         return Answer(False, "invalid", data, elapsed, "")
     if accepted and is_yes(data):
-        if elapsed < NO_DIALOG_MS:
+        if by_launch:
+            # The server cannot tell a person's yes from the launching
+            # program's, so no yes to these points reads as a person's.
+            approver = APPROVED_BY_LAUNCH
+        elif elapsed < NO_DIALOG_MS:
             log("declined", client_answer="accept")
             return Answer(False, "decline", data, elapsed, fast_yes_note(elapsed))
-        log("accepted")
+        else:
+            approver = APPROVED_BY_USER
+        log("accepted", approved_by=approver)
         if is_modern(ctx):
             # Later rounds of this call (a second gate asks after this one)
-            # must not ask this question again.
-            (await _round_state(ctx))["approved"].append(gate or "+".join(point_list))
-        return Answer(True, "accept", data, elapsed, "")
+            # must not ask this question again, and keep who approved it.
+            state = await _round_state(ctx)
+            state["approved"].append(gate_name)
+            state.setdefault("approved_by", {})[gate_name] = approver
+        return Answer(True, "accept", data, elapsed, "", approver)
     log("declined")
     # A form submitted without the box ticked is a no (VS Code: "False" and
     # Submit): it must not read as "declined by user (accept)".
@@ -661,8 +711,10 @@ def log_attach_event(session: Mapping[str, Any], chosen_by: str) -> None:
 # Middleware
 # ---------------------------------------------------------------------------
 
-def _mark_confirmed(result: ToolResult) -> ToolResult:
-    """Add ``confirmed_by_user: true`` to an accepted call's result.
+def _mark_confirmed(result: ToolResult,
+                    approved_by: str = APPROVED_BY_USER) -> ToolResult:
+    """Add ``confirmed_by_user: true`` to an accepted call's result, or
+    ``confirmed_by_launch: true`` when the launch option approved it.
 
     The prompt goes to the user, not the agent: without the flag the agent
     cannot tell an approved write from an ungated one.  Only a plain dict
@@ -676,7 +728,7 @@ def _mark_confirmed(result: ToolResult) -> ToolResult:
         or not isinstance(result.content[0], mcp.types.TextContent)
     ):
         return result
-    marked = {**data, "confirmed_by_user": True}
+    marked = {**data, confirmed_key(approved_by): True}
     return ToolResult(content=marked, structured_content=marked, meta=result.meta)
 
 
@@ -701,8 +753,9 @@ class ConfirmationMiddleware(Middleware):
 
     Register AFTER ``AuditMiddleware`` so blocked calls still get an audit line.
 
-    ``active_points`` and ``precheck`` are injected by the RUNNING server
-    module at registration.  The middleware must never import the server
+    ``active_points``, ``precheck`` and ``launch_points`` (the points of
+    ``--client-approves``) are injected by the RUNNING server module at
+    registration.  The middleware must never import the server
     module by name: under ``python -m mcp_sap_gui.server`` the running module
     is ``__main__``, and a ``from . import server`` here loads a SECOND copy
     of server.py with its own empty globals (``_session_mgr = None``, default
@@ -710,9 +763,11 @@ class ConfirmationMiddleware(Middleware):
     and silently never fires.  Found live; pinned by tests/test_stdio_gate.py.
     """
 
-    def __init__(self, *, active_points, precheck) -> None:
+    def __init__(self, *, active_points, precheck,
+                 launch_points: Callable[[], Iterable[str]] = tuple) -> None:
         self._active_points = active_points
         self._precheck = precheck
+        self._launch_points = launch_points
 
     async def on_call_tool(
         self,
@@ -768,6 +823,7 @@ class ConfirmationMiddleware(Middleware):
                 response_title="Yes, run it",
                 gate=f"point:{point}",
                 can_ask=True,
+                launch_points=self._launch_points(),
             )
         except McpError as exc:
             # Fail closed, matching the existing save gate.
@@ -781,7 +837,7 @@ class ConfirmationMiddleware(Middleware):
         if isinstance(answer, Ask):
             return InputRequiredToolResult(answer.result)
         if answer.yes:
-            return _mark_confirmed(await call_next(context))
+            return _mark_confirmed(await call_next(context), answer.approved_by)
         raise ToolError(
             f"{tool_name} declined by user at confirmation point '{point}' "
             f"({answer.action}). Nothing was executed.{answer.note}"
