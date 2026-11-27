@@ -236,7 +236,7 @@ sap_press_button("<button_id>")
 
 ## Step 2 — Find the tree control
 ```
-sap_get_screen_elements(type_filter="GuiTree", max_depth=6)
+sap_get_screen_elements(container_id="wnd[0]", type_filter="GuiTree", max_depth=30)
 ```
 Note the tree ID (typically something like `wnd[0]/usr/shell/shellcont[0]/shell`).
 
@@ -362,7 +362,7 @@ sap_get_screen_elements(max_depth=4)
 ## Step 4 — Discover the tree and navigate by text
 - Find the tree control instead of guessing its ID:
 ```
-sap_get_screen_elements(type_filter="GuiTree", max_depth=6)
+sap_get_screen_elements(container_id="wnd[0]", type_filter="GuiTree", max_depth=30)
 ```
 - A tree reports type `GuiShell` with subtype `Tree`; the filter finds it either way.
 - Search by business text first:
@@ -386,7 +386,7 @@ sap_click_tree_link("<tree_id>", "<node_key>", "<column>")
 ## Step 6 — Inspect the result area as ALV first
 - After selecting a monitor node, discover whether the result area is a grid or table:
 ```
-sap_get_screen_elements(type_filter="GuiGridView,GuiTableControl", max_depth=6)
+sap_get_screen_elements(container_id="wnd[0]", type_filter="GuiGridView,GuiTableControl", max_depth=30)
 ```
 - Start by reading the schema:
 ```

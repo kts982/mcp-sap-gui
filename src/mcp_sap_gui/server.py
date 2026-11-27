@@ -2488,8 +2488,9 @@ async def sap_get_screen_elements(
     Trees, ALV grids, text editors and HTML viewers report type GuiShell
     and a subtype (Tree, GridView, TextEdit, HTMLViewer, Toolbar, ...).
     type_filter finds them by their class (GuiTree, GuiGridView, ...), by
-    the bare subtype, or all of them by GuiShell. They usually sit 3-6
-    levels deep: raise max_depth to find them.
+    the bare subtype, or all of them by GuiShell. They can sit deep (16
+    levels were seen): scan from container_id='wnd[0]' with a large
+    max_depth such as 30, together with a type_filter.
 
     max_depth controls how deep to recurse into containers (default 2).
     Use max_depth=1 for a quick overview, max_depth=3+ for deeply nested
