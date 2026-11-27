@@ -6,6 +6,8 @@ Every release and what changed for someone running the server. The [GitHub relea
 
 ### Added
 
+- **`--client-approves save`: a script that starts the server approves its own saves** ([issue #38](https://github.com/kts982/mcp-sap-gui/issues/38)). Since 0.5.3 a yes faster than a person can give one is refused, so a reviewed script could not save at all. With this launch option the save question is still asked and a no still counts, but every yes to it, fast or slow, counts as the launching program's: the result carries `confirmed_by_launch: true` instead of `confirmed_by_user: true`. Only `save` can be named; confirmation points, the attach picker and the question that turns a point off still need a person, and a question for several points passes only if the option names them all. Command line only (no tool sets or clears it), stdio only: the server refuses to start with `--transport http` or `--code-mode`, and logs a WARNING at start-up. On MCP 2026-07-28 an approval carried into a later round of the same call keeps who gave it. For programs, not chat clients: [Scripted clients](docs/CONFIRMATIONS.md#scripted-clients).
+- **Accepted answers say who approved them.** Every `accepted` line of the `confirmation` audit event has `approved_by`: `"user"` for a person, `"launch"` for `--client-approves`. `elapsed_ms` and `no_dialog` stay as they were.
 - **`sap_send_key` supports Shift+F11 and Shift+F12.**
   Both keys are also included in `available_keys` when
   accepted by the current SAP screen.

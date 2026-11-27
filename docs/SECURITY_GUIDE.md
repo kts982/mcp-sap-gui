@@ -52,7 +52,7 @@ It is a guardrail against an assistant's mistakes, not a security boundary: a bl
 |---|---|---|
 | `policy` | At startup | `preset`, `source`, `block`, `allow`, `file_sha256` (when a policy file was read) |
 | `tool_call` | Every tool call | `ts`, `tool`, `args`, `status` (`ok`, `error`, or `input_required` when the call asks you a question on MCP 2026-07-28), `duration_ms`, `error` and `error_msg` on a failure, `sap` (the system, client and user the chat is attached to), `protocol` (the MCP protocol version), `mcp_client` (the client's name and version as it reports them) |
-| `confirmation` | Every question and answer | `point`, `tool`, `outcome`, `elapsed_ms`, `no_dialog`, `client_answer`: see [Confirmations](CONFIRMATIONS.md#in-the-audit-log) |
+| `confirmation` | Every question and answer | `point`, `tool`, `outcome`, `elapsed_ms`, `no_dialog`, `client_answer`, `approved_by`: see [Confirmations](CONFIRMATIONS.md#in-the-audit-log) |
 | `attach` | The chat is attached to an SAP session | `system`, `client`, `user`, `session`, `chosen_by` (`named`, `dialog` or `index`) |
 | `object_tree` | At startup, when one-call reads are switched off somewhere | the switched-off call sites and the trace file |
 

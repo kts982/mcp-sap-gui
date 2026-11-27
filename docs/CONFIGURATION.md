@@ -23,6 +23,7 @@ Options go after the package name in the client's server configuration, for exam
 | `--read-only` | Refuses every tool that can change something: field writes, buttons, transactions, keys, table and tree actions. Reading works |
 | `--profile exploration\|operator\|full` | Which tools the assistant sees at all (default `full`). See [Profiles](#profiles) |
 | `--confirm POINT ...` | Confirmation points for every chat: `transactions`, `batch_fields`, `field_writes`, `all_writes`, `attach`. A chat can add points but never remove these. See [Confirmations](CONFIRMATIONS.md) |
+| `--client-approves save` | For a script that starts the server, never for a chat client: every yes to a save question counts as the launching program's approval (`confirmed_by_launch`). stdio only; not with `--code-mode`. See [Scripted clients](CONFIRMATIONS.md#scripted-clients) |
 | `--policy-preset default\|abap-dev\|strict` | Which transactions the assistant may start (default: the preset named in the policy file, else `default`) |
 | `--policy-file FILE` | A JSON transaction policy with your own blocks and allows |
 | `--allowed-transactions T ...` | Older allowlist; it restricts on top of the policy |
