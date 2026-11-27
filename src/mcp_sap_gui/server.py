@@ -40,6 +40,7 @@ from . import __version__
 from .audit import AuditMiddleware
 from .confirmation import (
     ATTACH_POINT,
+    LAUNCH_APPROVABLE_POINTS,
     NO_DIALOGS_NOTE,
     SAVE_POINT,
     SETTABLE_POINTS,
@@ -47,6 +48,7 @@ from .confirmation import (
     ConfirmationMiddleware,
     ask_user,
     build_relax_prompt,
+    confirmed_key,
     effective_points,
     is_modern,
     is_save_button,
@@ -224,6 +226,10 @@ class ServerConfig:
     # Server-level confirmation points (--confirm). Always active, never
     # removable by sap_set_confirmation_points.
     confirmation_floor: List[str] = field(default_factory=list)
+    # --client-approves: points whose every yes counts as the launching
+    # program's (a reviewed script), not a person's. Command line only: no
+    # tool sets or clears it.
+    client_approves: List[str] = field(default_factory=list)
     # --detach-on-exit: server shutdown never closes a session, not even one
     # this server opened with sap_connect.
     detach_on_exit: bool = False
@@ -262,6 +268,13 @@ class ServerConfig:
                 f"Valid points: {', '.join(SETTABLE_POINTS)}"
             )
         self.confirmation_floor = sorted(set(self.confirmation_floor))
+        unknown = sorted(set(self.client_approves) - set(LAUNCH_APPROVABLE_POINTS))
+        if unknown:
+            raise ValueError(
+                f"--client-approves: unknown point(s) {', '.join(unknown)}. "
+                f"Valid points: {', '.join(LAUNCH_APPROVABLE_POINTS)}"
+            )
+        self.client_approves = sorted(set(self.client_approves))
         # Validated here: an unrecognised profile must not silently degrade
         # into "no restriction at all".
         if self.profile not in _PROFILES:
@@ -829,6 +842,8 @@ def precheck_before_confirmation(tool_name: str, args,
 mcp.add_middleware(ConfirmationMiddleware(
     active_points=active_confirmation_points,
     precheck=precheck_before_confirmation,
+    # Read at call time: main() rebinds config.
+    launch_points=lambda: config.client_approves,
 ))
 
 
@@ -996,20 +1011,22 @@ _SAVE_KEYS = {"F11", "Save"}
 async def _elicit_save(ctx: Context, message: str,
                        tool: str = "sap_send_key",
                        shown: object = None,
-                       title: str = "Yes, save") -> tuple[str, str] | Ask | None:
+                       title: str = "Yes, save") -> tuple[str, str] | Ask | str:
     """Ask the user to confirm a save. *title* labels the yes box.
 
-    Returns ``None`` if a person accepted (caller should proceed), an
-    ``Ask`` to return on MCP 2026-07-28, else the action (``decline`` /
-    ``cancel`` / ``changed``) and a note that is empty unless the client
-    answered without showing a dialog (confirmation.ask_user).
+    Returns who approved (``user``, or ``launch`` under
+    ``--client-approves save``) if the save may go ahead, an ``Ask`` to
+    return on MCP 2026-07-28, else the action (``decline`` / ``cancel`` /
+    ``changed``) and a note that is empty unless the client answered
+    without showing a dialog (confirmation.ask_user).
     Raises ``ValueError`` if the client does not support elicitation.
     """
     try:
         # Shown as a checkbox (CLI): tick it and Accept to save.
         answer = await ask_user(ctx, points=SAVE_POINT, tool=tool,
                                 message=message, response_title=title,
-                                gate="save", can_ask=True, shown=shown)
+                                gate="save", can_ask=True, shown=shown,
+                                launch_points=config.client_approves)
     except McpError as exc:
         log_confirmation_event(SAVE_POINT, tool, "unsupported_client")
         raise ValueError(
@@ -1021,7 +1038,7 @@ async def _elicit_save(ctx: Context, message: str,
     if isinstance(answer, Ask):
         return answer
     if answer.yes:
-        return None  # proceed
+        return answer.approved_by  # proceed
     return answer.action, answer.note
 
 
@@ -1041,12 +1058,12 @@ def _where(target: object) -> str:
 
 async def _confirm_save(ctx: Context, what: str, target: object = None, *,
                         tool: str = "sap_send_key",
-                        subject: dict | None = None) -> dict | Ask | None:
+                        subject: dict | None = None) -> dict | Ask | str:
     """Ask the user before a save; *what* says what is about to be sent and
     *target* (``save_target``) where.
 
-    Returns ``None`` if the user accepted (caller should proceed), an
-    ``Ask`` to return on MCP 2026-07-28, or a cancellation dict that
+    Returns who approved (``user`` or ``launch``) if the save may go ahead,
+    an ``Ask`` to return on MCP 2026-07-28, or a cancellation dict that
     carries *subject* (the key or button).
     Raises ``ValueError`` if the client does not support elicitation.
     """
@@ -1057,7 +1074,7 @@ async def _confirm_save(ctx: Context, what: str, target: object = None, *,
         + (f" It goes to {where}." if where else "")
         + " Do you want to proceed?"
     ), tool, shown=target)
-    if declined is None or isinstance(declined, Ask):
+    if isinstance(declined, (str, Ask)):
         return declined
     action, note = declined
     if action == "changed":
@@ -1114,11 +1131,11 @@ async def _gated_save(ctx: Context, c, *, tool: str, what: str,
     (``ask_user``'s ``shown``).
     """
     target = await _com(c.save_target)
-    cancellation = await _confirm_save(ctx, what, target, tool=tool, subject=subject)
-    if isinstance(cancellation, Ask):
-        return cancellation.result
-    if cancellation is not None:
-        return cancellation
+    approved = await _confirm_save(ctx, what, target, tool=tool, subject=subject)
+    if isinstance(approved, Ask):
+        return approved.result
+    if isinstance(approved, dict):  # not approved: nothing sent
+        return approved
 
     def recheck_and_send():
         now = c.save_target()
@@ -1130,7 +1147,7 @@ async def _gated_save(ctx: Context, c, *, tool: str, what: str,
     if result is None:
         log_confirmation_event(SAVE_POINT, tool, "changed")
         return _save_target_changed(subject, target, now)
-    result["confirmed_by_user"] = True
+    result[confirmed_key(approved)] = True
     return result
 
 
@@ -1149,13 +1166,13 @@ def _popup_shown(plan: dict) -> dict:
 
 
 async def _confirm_popup_save(ctx: Context, plan: dict,
-                              tool: str = "sap_handle_popup") -> dict | Ask | None:
+                              tool: str = "sap_handle_popup") -> dict | Ask | str:
     """The Save key's confirmation, for a press on a save-shaped popup or
     an answer to a popup question the tool cannot read.
 
-    Returns ``None`` if the user accepted, an ``Ask`` to return on MCP
-    2026-07-28, else the popup read with ``status: cancelled`` (nothing was
-    pressed).
+    Returns who approved (``user`` or ``launch``) if the press may go
+    ahead, an ``Ask`` to return on MCP 2026-07-28, else the popup read with
+    ``status: cancelled`` (nothing was pressed).
     """
     popup = plan["popup"]
     btn = plan.get("button") or {}
@@ -1179,7 +1196,7 @@ async def _confirm_popup_save(ctx: Context, plan: dict,
     # The box names the button: "Yes, save" would be wrong for No.
     declined = await _elicit_save(ctx, message, tool, shown=_popup_shown(plan),
                                   title=f"Yes, press '{label[:40]}'")
-    if declined is None or isinstance(declined, Ask):
+    if isinstance(declined, (str, Ask)):
         return declined
     action, note = declined
     # The popup is still open and unchanged: keep its buttons for the next
@@ -1663,11 +1680,11 @@ async def sap_press_button(button_id: str, ctx: Context) -> dict | InputRequired
     plan, result = await _com(plan_or_press)
     if result is not None:
         return result
-    cancellation = await _confirm_popup_save(ctx, plan, "sap_press_button")
-    if isinstance(cancellation, Ask):
-        return cancellation.result
-    if cancellation is not None:
-        return cancellation
+    approved = await _confirm_popup_save(ctx, plan, "sap_press_button")
+    if isinstance(approved, Ask):
+        return approved.result
+    if isinstance(approved, dict):  # not approved: nothing pressed
+        return approved
 
     def recheck_and_press():
         changed = c.popup_changed(plan["popup"])
@@ -1677,7 +1694,7 @@ async def sap_press_button(button_id: str, ctx: Context) -> dict | InputRequired
 
     result = await _com(recheck_and_press)
     if "error" not in result:
-        result["confirmed_by_user"] = True
+        result[confirmed_key(approved)] = True
     return result
 
 
@@ -2229,14 +2246,14 @@ async def sap_handle_popup(
     plan, result = await _com(plan_or_handle)
     if result is not None:
         return result
-    cancellation = await _confirm_popup_save(ctx, plan)
-    if isinstance(cancellation, Ask):
-        return cancellation.result
-    if cancellation is not None:
-        return cancellation
+    approved = await _confirm_popup_save(ctx, plan)
+    if isinstance(approved, Ask):
+        return approved.result
+    if isinstance(approved, dict):  # not approved: nothing pressed
+        return approved
     result = await _com(lambda: c.apply_popup_plan(plan, recheck=True))
     if result.get("action") != "error":
-        result["confirmed_by_user"] = True
+        result[confirmed_key(approved)] = True
     return result
 
 
@@ -3082,6 +3099,17 @@ def main():
                              "operation categories in every session "
                              f"(choices: {', '.join(SETTABLE_POINTS)}). "
                              "Sessions can add points but never remove these")
+    parser.add_argument("--client-approves", nargs="+", metavar="POINT",
+                        choices=list(LAUNCH_APPROVABLE_POINTS), default=[],
+                        help="For a reviewed script that starts the server "
+                             "over stdio, never for a chat client: every yes "
+                             "the client gives to these points' questions "
+                             "counts as the launching program's approval "
+                             "(confirmed_by_launch), fast or slow. "
+                             "The question is still asked and a no still "
+                             "counts (choices: "
+                             f"{', '.join(LAUNCH_APPROVABLE_POINTS)}). Not "
+                             "with --transport http or --code-mode")
     parser.add_argument("--detach-on-exit", action="store_true",
                         help="On shutdown, detach from every SAP session and "
                              "close none, not even sessions this server "
@@ -3105,6 +3133,15 @@ def main():
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
     args = parser.parse_args()
+
+    # The launch option is for a script that starts this server as its own
+    # child process. Over HTTP the launcher is not the client; in code mode
+    # the script comes from the model.
+    if args.client_approves and args.transport == "http":
+        parser.error("--client-approves works over stdio only, not with "
+                     "--transport http")
+    if args.client_approves and args.code_mode:
+        parser.error("--client-approves cannot be used with --code-mode")
 
     if args.debug:
         logging.basicConfig(level=logging.DEBUG)
@@ -3148,6 +3185,7 @@ def main():
         policy_file_sha256=policy.file_sha256,
         profile=args.profile,
         confirmation_floor=list(args.confirm or []),
+        client_approves=list(args.client_approves or []),
         detach_on_exit=args.detach_on_exit,
         strict_errors=args.strict_errors or strict_errors_from_env(os.environ),
     )
@@ -3172,6 +3210,15 @@ def main():
     if config.confirmation_floor:
         logger.info("Confirmation floor: %s (plus always-on '%s')",
                     ", ".join(config.confirmation_floor), SAVE_POINT)
+    if config.client_approves:
+        logger.warning(
+            "--client-approves %s: the program that started this server "
+            "approves these points. Every yes to their questions counts as "
+            "its approval, not a person's (confirmed_by_launch, approved_by "
+            "'launch' in the audit log). For a reviewed script only, never "
+            "in a chat client's configuration.",
+            " ".join(config.client_approves),
+        )
 
     # Apply server-level policy profile (hides tools globally)
     if args.profile != "full":

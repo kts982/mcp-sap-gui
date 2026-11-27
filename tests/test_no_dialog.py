@@ -219,9 +219,10 @@ def test_slow_yes_to_a_save_goes_through(monkeypatch, caplog):
     accepted = asyncio.run(server._confirm_save(
         FakeCtx("accept", delay=0.05, data=True), "F11"))
 
-    assert accepted is None
+    assert accepted == "user"
     [event] = _confirmations(caplog)
     assert event["outcome"] == "accepted"
+    assert event["approved_by"] == "user"
     assert "client_answer" not in event
 
 
