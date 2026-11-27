@@ -34,6 +34,7 @@ from fastmcp.server.lifespan import lifespan
 from fastmcp.tools import ToolResult
 from mcp.types import ImageContent, TextContent
 from mcp_types import InputRequiredResult
+from pydantic import BaseModel, ConfigDict
 
 from . import __version__
 from .audit import AuditMiddleware
@@ -63,6 +64,7 @@ from .controller import (
 )
 from .models import SAPGUINotConnectedError
 from .policy import (
+    CODE_CHAR,
     DEFAULT_PRESET,
     POLICY_FILE_ENV,
     PRESETS,
@@ -101,7 +103,13 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BLOCKED_TRANSACTIONS = list(PRESETS[DEFAULT_PRESET]["block"])
 
 _TRANSACTION_PREFIX_RE = re.compile(r"^(?:/(?:N|O|\*)\s*)+", re.IGNORECASE)
-_TRANSACTION_CODE_RE = re.compile(r"^/?[A-Z0-9_]+(?:/[A-Z0-9_]+)*$")
+# A code starts with a letter, a digit or '_' (a namespace puts /NAME/ in
+# front); after that come the characters policy.CODE_CHAR describes: F-02,
+# F.13, BRF+, MC=1. A value that starts with another character (%PC, &ALL)
+# is a function code.
+_TRANSACTION_CODE_RE = re.compile(
+    rf"^/?[A-Z0-9_]{CODE_CHAR}*(?:/{CODE_CHAR}+)*$"
+)
 # /i with an optional session number. Live (SAP GUI 8.10): /i3 closed session
 # 3 from session 4, and "/i 2" closed the current session (the number after a
 # space is ignored). No transaction code has this shape: a namespaced code
@@ -159,7 +167,7 @@ def _normalize_transaction_code(raw: str, *, strict: bool = True) -> str | None:
         if strict:
             raise ValueError(
                 f"Invalid SAP transaction code: {raw!r}. "
-                "Expected forms like 'MM03', 'VA03', or '/SCWM/MON'."
+                "Expected forms like 'MM03', 'F-02' or '/SCWM/MON'."
             )
         return None
     return value
@@ -313,7 +321,11 @@ SAP GUI automation server. Controls SAP GUI for Windows via COM scripting.
 (`sap_get_screen_elements`, `sap_get_toolbar_buttons`): IDs differ between \
 systems and customizations.
 - **Check `screen.active_window` after every action.** `wnd[1]` or higher is a \
-popup: read it with `sap_get_popup_window` before you go on.
+popup: read it with `sap_get_popup_window` before you go on. \
+`screen.new_sessions` means another SAP session opened (a hotspot showing a \
+document in its own window, or the user): you stay in the old one; tell the \
+user, do not attach unasked. It shows seconds after the action: if an action \
+seems to do nothing, call `sap_get_screen_info` before repeating it.
 - **Confirmations.** F11 / Save always asks the user first; \
 `sap_set_confirmation_points` can add `transactions`, `batch_fields`, \
 `field_writes`, `all_writes` and `attach`. A "declined" error means the user \
@@ -961,6 +973,8 @@ _KEY_MAP = {
     "Shift+F5": VKey.SHIFT_F5, "Shift+F6": VKey.SHIFT_F6,
     "Shift+F7": VKey.SHIFT_F7, "Shift+F8": VKey.SHIFT_F8,
     "Shift+F9": VKey.SHIFT_F9,
+    "Shift+F11": VKey.SHIFT_F11,
+    "Shift+F12": VKey.SHIFT_F12,
     # Ctrl combinations
     "Ctrl+F": VKey.CTRL_F, "Ctrl+G": VKey.CTRL_G, "Ctrl+P": VKey.CTRL_P,
 }
@@ -1509,6 +1523,7 @@ async def sap_send_key(
         "Execute", "Refresh",
         "Shift+F1", "Shift+F2", "Shift+F3", "Shift+F4", "Shift+F5",
         "Shift+F6", "Shift+F7", "Shift+F8", "Shift+F9",
+        "Shift+F11", "Shift+F12",
         "Ctrl+F", "Ctrl+G", "Ctrl+P",
     ],
     ctx: Context,
@@ -1517,7 +1532,7 @@ async def sap_send_key(
 
     Common keys: Enter (confirm), F1 (Help), F3 (Back), F4 (search help /
     value help), F5 (Refresh), F8 (Execute), F11 (Save), F12 (Cancel/Escape).
-    Also supports Shift+F1..F9 and Ctrl+F, Ctrl+G, Ctrl+P.
+    Also supports Shift+F1..F9, Shift+F11, Shift+F12, and Ctrl+F, Ctrl+G, Ctrl+P.
 
     A key that is not active on the screen is not sent: the response has an
     error and available_keys, the keys this screen accepts.
@@ -1860,7 +1875,14 @@ async def sap_read_table(
     An ALV grid read also gives, when set: title (which list this is) and
     the selection that toolbar and menu functions act on: selected_rows in
     SAP's form ("1,2,4-8,10") with selected_row_count, selected_cells,
-    selected_columns."""
+    selected_columns.
+
+    An ALV grid whose layout has totals lines (totals, subtotals) has
+    totals_lines, and each such row carries _total_level: 1 is the
+    innermost subtotal, totals_lines.highest_level the overall total. It
+    is a sum, not a record, and total_rows counts it. _collapsed: true
+    marks a subtotal whose group is closed: its records are not in the
+    grid."""
     c = _ctrl(ctx)
     capped = min(max_rows, config.max_table_rows)
     return _note_cap(await _com(lambda: c.read_table(
@@ -2052,8 +2074,75 @@ async def sap_get_cell_info(grid_id: str, row: int, column: str, ctx: Context) -
 
 
 @mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
+async def sap_alv_cell_action(
+    grid_id: str,
+    action: Literal["click", "press_button", "set_checkbox", "f4", "enter",
+                    "context_menu", "toggle_total"],
+    ctx: Context,
+    row: Optional[int] = None,
+    column: str = "",
+    checked: Optional[bool] = None,
+) -> dict:
+    """Act on a cell of an ALV grid. Does NOT work on GuiTableControl.
+
+    Actions (row and column name the cell):
+    - click: click a hotspot, as a single mouse click on it does
+    - press_button: press the button shown in the cell
+    - set_checkbox: set a checkbox cell to `checked` (true/false)
+    - f4: open the cell's value help
+    - enter: send the grid's changes to the application for checking. The
+      cell is optional; when given, the response has its value and state
+      afterwards (state 'Error': the entry was not accepted)
+    - context_menu: open the cell's context menu. The response lists
+      menu_items; pick one with sap_select_alv_context_menu_item
+    - toggle_total: open or close the group of a subtotal row (a row that
+      sap_read_table marks with _total_level); needs only the row. On the
+      overall total it closes or opens every group. Row numbers change:
+      read the table again
+
+    A cell that is not what the action needs (no hotspot, no button, no
+    changeable checkbox, no value help) is refused before anything is
+    sent: status 'rejected' with an error. sap_get_cell_info shows what
+    kind of cell it is; sap_double_click_cell sends a double-click.
+
+    A hotspot or a button runs an application function: it can open a
+    popup (screen.active_window), post, or open a document in another SAP
+    session, which shows seconds later (screen.new_sessions of a later
+    response; sap_get_screen_info asks)."""
+    _check_write(ctx)
+    c = _ctrl(ctx)
+    return await _com(lambda: c.alv_cell_action(
+        grid_id, action, row=row, column=column, checked=checked))
+
+
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
+async def sap_select_alv_columns(
+    grid_id: str, columns: str, ctx: Context, add: bool = False,
+) -> dict:
+    """Select columns of an ALV grid, as a click on their headers does.
+    Does NOT work on GuiTableControl.
+
+    columns: comma-separated column names ("" clears the selection). The
+    grid's functions act on the selected columns: Total and Subtotals need
+    one, Sort and Filter take it as their column
+    (sap_press_alv_toolbar_button). The selection is replaced, selected
+    rows included, unless add=true. A name the grid does not have selects
+    nothing: status 'rejected' with unknown_columns."""
+    _check_write(ctx)
+    c = _ctrl(ctx)
+    names = [name.strip() for name in columns.split(",") if name.strip()]
+    return await _com(lambda: c.select_alv_columns(grid_id, names, add=add))
+
+
+@mcp.tool(annotations=_WRITE, tags=_TAGS_WRITE)
 async def sap_press_column_header(grid_id: str, column: str, ctx: Context) -> dict:
-    """Click a column header in an ALV grid (triggers sort). Does NOT work on GuiTableControl."""
+    """Send a click on a column header of an ALV grid to the application.
+    Does NOT work on GuiTableControl.
+
+    This does not select the column and does not sort by it: select it
+    with sap_select_alv_columns, then press the grid's sort, total or
+    filter function with sap_press_alv_toolbar_button. Only a grid whose
+    application reacts to header clicks does something here."""
     _check_write(ctx)
     c = _ctrl(ctx)
     return await _com(lambda: c.press_column_header(grid_id, column))
@@ -2399,12 +2488,16 @@ async def sap_get_screen_elements(
     Trees, ALV grids, text editors and HTML viewers report type GuiShell
     and a subtype (Tree, GridView, TextEdit, HTMLViewer, Toolbar, ...).
     type_filter finds them by their class (GuiTree, GuiGridView, ...), by
-    the bare subtype, or all of them by GuiShell. They usually sit 3-6
-    levels deep: raise max_depth to find them.
+    the bare subtype, or all of them by GuiShell. They can sit deep (16
+    levels were seen): scan from container_id='wnd[0]' with a large
+    max_depth such as 30, together with a type_filter.
 
     max_depth controls how deep to recurse into containers (default 2).
     Use max_depth=1 for a quick overview, max_depth=3+ for deeply nested
-    layouts (splitter containers, tab strips with sub-containers).
+    layouts (splitter containers, tab strips with sub-containers). When
+    max_depth stopped inside containers that still have children, the
+    response carries depth_limited (also when the result is empty): raise
+    max_depth, or pass one of its examples as container_id.
 
     Pass container_id='wnd[0]/mbar' to discover the menu bar structure.
 
@@ -2427,17 +2520,19 @@ async def sap_get_screen_elements(
 
     def _discover():
         lists: list = []
+        cut_off: list = []
         found = c.get_screen_elements(
             container_id, max_depth=max_depth,
             type_filter=type_filter,
             changeable_only=changeable_only,
             expand_tables=expand_tables,
             lists=lists,
+            cut_off=cut_off,
         )
         docking = c.get_docking_containers(usr_window.group(1)) if usr_window else []
-        return found, docking, lists
+        return found, docking, lists, cut_off
 
-    elements, docking, lists = await _com(_discover)
+    elements, docking, lists, cut_off = await _com(_discover)
     result = {
         "element_count": len(elements),
         "elements": [
@@ -2445,6 +2540,20 @@ async def sap_get_screen_elements(
             for e in elements
         ],
     }
+    if "/mbar" not in container_id:
+        # A scan from wnd[0] always stops inside the menus; they hold no
+        # tree or grid and would crowd out the examples that matter.
+        cut_off = [i for i in cut_off if "/mbar" not in i]
+    if cut_off:
+        # An empty or short result may only mean max_depth stopped too early.
+        result["depth_limited"] = {
+            "containers_cut_off": len(cut_off),
+            "examples": cut_off[:3],
+        }
+        if not elements:
+            result["depth_limited"]["note"] = (
+                "max_depth stopped inside these containers; raise it, or "
+                "pass one as container_id, to see what they hold.")
     if docking:
         result["docking_containers"] = docking
     if lists:
@@ -2453,25 +2562,57 @@ async def sap_get_screen_elements(
     return result
 
 
+class CellTarget(BaseModel):
+    """An ALV cell, or with `row` left out the visible part of a column."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    column: str
+    row: int | None = None
+
+
+def _targets(items) -> list | None:
+    """Element IDs stay strings; a CellTarget goes on as a plain dict."""
+    if not items:
+        return None
+    return [i if isinstance(i, str) else i.model_dump(exclude_none=True) for i in items]
+
+
 @mcp.tool(annotations=_READ_ONLY, tags=_TAGS_READ)
 async def sap_screenshot(
     ctx: Context,
     save_path: str = "",
     inline: bool = True,
+    highlight: list[str | CellTarget] | None = None,
+    mask: list[str | CellTarget] | None = None,
+    caption: str = "",
+    include_context: bool = False,
+    isolate: bool = False,
 ) -> ToolResult:
-    """Take a screenshot of the current SAP window.
+    """Take a screenshot of the current SAP window: a fallback when the
+    structured tools return nothing useful (e.g. Web Dynpro screens).
 
-    Use as a fallback when structured tools (sap_get_screen_elements,
-    sap_read_field, sap_read_table) return empty or confusing results,
-    e.g., on Web Dynpro screens where the element tree is non-standard.
+    save_path (.png, a new file in an existing directory) also writes the
+    full-resolution file; inline=False skips the image. A minimized window or
+    a hidden Business Client tab is refused.
 
-    To put a screenshot into a document, pass save_path (must end in .png,
-    directory must exist, existing files are never overwritten). The file
-    keeps SAP GUI's full resolution; the inline image is capped at 1920px.
-    The response then also reports the absolute path and pixel size. Set
-    inline=False to skip the image when only the file is needed."""
+    Evidence options, with save_path: highlight=[targets] frames, mask=[targets]
+    blacks out (nothing is saved if one is not found), isolate=True keeps only
+    the highlighted areas, caption="..." adds a strip, include_context=True
+    adds system, client, user and time to it (needs a caption; shows the user
+    ID). A target is an element id, or {"id": <grid id>, "column": "MATNR",
+    "row": 3} for an ALV cell (row left out: the visible part of the column).
+    It needs a size and must lie inside its container and in the captured
+    window (the popup, when one is open), or nothing is saved. A cell partly
+    scrolled out of view is masked where it shows; for highlight and isolate it
+    is refused (scroll first). mask blacks out the named elements only: the
+    same value in the title or status bar stays visible."""
     c = _ctrl(ctx)
     if not save_path.strip():
+        if highlight or mask or caption.strip() or isolate or include_context:
+            raise ValueError(
+                "highlight, mask, caption, isolate and include_context need save_path"
+            )
         result = await _com(c.take_screenshot)
         if "error" in result:
             raise ValueError(result["error"])
@@ -2479,7 +2620,11 @@ async def sap_screenshot(
             ImageContent(type="image", data=result["data"], mimeType="image/png"),
         ])
 
-    result = await _com(lambda: c.save_screenshot(save_path, inline=inline))
+    result = await _com(lambda: c.save_screenshot(
+        save_path, inline=inline, highlight=_targets(highlight), mask=_targets(mask),
+        caption=caption,
+        include_context=include_context, isolate=isolate,
+    ))
     if "error" in result:
         raise ValueError(result["error"])
     png_b64 = result.pop("data", None)
@@ -3080,7 +3225,10 @@ def main():
         mcp.run(transport="http", host=args.host, port=args.port,
                 **http_guard_kwargs(args.allowed_host, args.allowed_origin))
     else:
-        mcp.run()
+        # Named, not left to FastMCP: without a transport mcp.run() takes
+        # FASTMCP_TRANSPORT (environment or a .env file in the working
+        # directory), and HTTP would start without the checks above.
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

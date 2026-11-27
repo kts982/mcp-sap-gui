@@ -46,3 +46,17 @@ async def test_confirmation_gate_fires_over_stdio():
     assert "declined by user" in text
     # The old bug's signature: the tool body ran and failed on SAP instead.
     assert "Not connected" not in text
+
+
+async def test_fastmcps_transport_setting_does_not_switch_the_server_to_http():
+    """mcp.run() without a transport takes FastMCP's own setting, which reads
+    FASTMCP_TRANSPORT from the environment or a .env file in the working
+    directory. The server then started over HTTP although --transport http
+    was not given, and without the Host and Origin checks of that option
+    (found live). It has to stay on stdio."""
+    transport = StdioTransport(
+        command=sys.executable, args=["-m", "mcp_sap_gui.server"],
+        env={"FASTMCP_TRANSPORT": "http"},
+    )
+    async with Client(transport, init_timeout=30) as client:
+        assert await client.list_tools()

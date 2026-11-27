@@ -20,6 +20,7 @@ import json
 import re
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -225,6 +226,94 @@ class TestGetDockingContainers:
         assert controller.get_docking_containers("wnd[0]") == []
 
 
+class TestDepthLimitedHint:
+    """A tree 16 levels down was invisible at max_depth 14, with or without a
+    filter, and the answer (element_count 0) gave no sign of why (live,
+    2026-11-25)."""
+
+    _P = "/app/con[0]/ses[0]/wnd[0]/usr"
+
+    def _screen(self):
+        tree = _child(f"{self._P}/cntlA/shellcont/shell", "GuiShell", subtype="Tree")
+        shellcont = _child(f"{self._P}/cntlA/shellcont", "GuiContainerShell",
+                           children=[tree])
+        box = _child(f"{self._P}/cntlA", "GuiCustomControl", children=[shellcont])
+        return _child(self._P, "GuiUserArea", children=[box])
+
+    def _discover(self, discovery_path, max_depth, type_filter=""):
+        controller = _make_controller_with_session()
+        _serve(controller, self._screen(), discovery_path)
+        cut_off: list = []
+        found = controller.get_screen_elements(
+            "wnd[0]/usr", max_depth=max_depth, type_filter=type_filter, cut_off=cut_off)
+        return found, cut_off
+
+    def test_the_container_where_the_descent_stopped_is_reported(self, discovery_path):
+        found, cut_off = self._discover(discovery_path, max_depth=2)
+
+        assert [e.id.rsplit("/usr/", 1)[-1] for e in found] == ["cntlA", "cntlA/shellcont"]
+        assert [i.rsplit("/usr/", 1)[-1] for i in cut_off] == ["cntlA/shellcont"]
+
+    def test_an_empty_filtered_result_still_says_it_was_cut(self, discovery_path):
+        found, cut_off = self._discover(discovery_path, max_depth=2, type_filter="GuiTree")
+
+        assert found == []
+        assert len(cut_off) == 1
+
+    def test_nothing_is_reported_when_the_whole_screen_was_read(self, discovery_path):
+        found, cut_off = self._discover(discovery_path, max_depth=3, type_filter="GuiTree")
+
+        assert [e.id.rsplit("/usr/", 1)[-1] for e in found] == ["cntlA/shellcont/shell"]
+        assert cut_off == []
+
+    async def _tool(self, srv, cut_off, found=(), **kwargs):
+        mock_ctrl = MagicMock()
+        mock_ctrl.get_screen_elements.side_effect = lambda *a, **kw: (
+            kw["cut_off"].extend(cut_off) or list(found))
+        mock_ctrl.get_docking_containers.return_value = []
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            return await srv.sap_get_screen_elements(_make_mock_ctx(), **kwargs)
+
+    async def test_the_tool_reports_depth_limited(self, srv):
+        result = await self._tool(
+            srv, [f"wnd[0]/usr/c{i}" for i in range(5)], max_depth=2)
+
+        limited = result["depth_limited"]
+        assert limited["containers_cut_off"] == 5
+        assert limited["examples"] == [f"wnd[0]/usr/c{i}" for i in range(3)]
+        assert "max_depth" not in limited
+
+    async def test_the_note_comes_only_with_an_empty_result(self, srv):
+        cut = ["wnd[0]/usr/c0"]
+        empty = await self._tool(srv, cut)
+        found = await self._tool(srv, cut, found=[SimpleNamespace(id="wnd[0]/usr/x")])
+
+        assert "note" in empty["depth_limited"]
+        assert "note" not in found["depth_limited"]
+
+    async def test_menus_are_left_out_of_a_scan_that_did_not_start_in_the_menu_bar(self, srv):
+        menus = [f"wnd[0]/mbar/menu[{i}]" for i in range(3)]
+
+        only_menus = await self._tool(srv, menus, container_id="wnd[0]")
+        mixed = await self._tool(
+            srv, menus + ["wnd[0]/shellcont"], container_id="wnd[0]")
+        in_menu_bar = await self._tool(srv, menus, container_id="wnd[0]/mbar")
+
+        assert "depth_limited" not in only_menus
+        assert mixed["depth_limited"]["containers_cut_off"] == 1
+        assert mixed["depth_limited"]["examples"] == ["wnd[0]/shellcont"]
+        assert in_menu_bar["depth_limited"]["containers_cut_off"] == 3
+
+    async def test_the_tool_says_nothing_when_nothing_was_cut(self, srv):
+        mock_ctrl = MagicMock()
+        mock_ctrl.get_screen_elements.return_value = []
+        mock_ctrl.get_docking_containers.return_value = []
+        with patch.object(srv, "_ctrl", return_value=mock_ctrl):
+            result = await srv.sap_get_screen_elements(_make_mock_ctx())
+
+        assert "depth_limited" not in result
+
+
 class TestScreenElementsDockingHint:
     async def test_user_area_discovery_reports_docking_containers(self, srv):
         ctx = _make_mock_ctx()
@@ -366,7 +455,7 @@ class TestSaveScreenshot:
         result = controller.save_screenshot(str(target))
 
         # The numeric constant: the string "PNG" makes SAP GUI write a BMP.
-        window.HardCopy.assert_called_once_with(str(target), 2)
+        assert window.HardCopy.call_args[0][1] == 2
         assert result["filepath"] == str(target)
         assert (result["width"], result["height"]) == (3176, 1768)
         assert result["size_bytes"] == len(payload)
@@ -457,7 +546,10 @@ class TestScreenshotTool:
         with patch.object(srv, "_ctrl", return_value=mock_ctrl):
             result = await srv.sap_screenshot(ctx, save_path="shot.png")
 
-        mock_ctrl.save_screenshot.assert_called_once_with("shot.png", inline=True)
+        mock_ctrl.save_screenshot.assert_called_once_with(
+            "shot.png", inline=True, highlight=None, mask=None, caption="",
+            include_context=False, isolate=False,
+        )
         assert [block.type for block in result.content] == ["text", "image"]
         meta = json.loads(result.content[0].text)
         assert meta["filepath"] == "C:\\docs\\shot.png"
@@ -473,7 +565,10 @@ class TestScreenshotTool:
         with patch.object(srv, "_ctrl", return_value=mock_ctrl):
             result = await srv.sap_screenshot(ctx, save_path="shot.png", inline=False)
 
-        mock_ctrl.save_screenshot.assert_called_once_with("shot.png", inline=False)
+        mock_ctrl.save_screenshot.assert_called_once_with(
+            "shot.png", inline=False, highlight=None, mask=None, caption="",
+            include_context=False, isolate=False,
+        )
         assert [block.type for block in result.content] == ["text"]
 
     async def test_save_errors_surface_to_the_agent(self, srv):
@@ -605,6 +700,7 @@ class TestSessionTraits:
 
 @pytest.mark.parametrize("vkey, name", [
     (0, "Enter"), (8, "F8"), (12, "F12"), (13, "Shift+F1"), (21, "Shift+F9"),
+    (23, "Shift+F11"), (24, "Shift+F12"),
     (71, "Ctrl+F"), (84, "Ctrl+G"), (86, "Ctrl+P"),
 ])
 def test_refused_key_names_are_sap_send_key_names(vkey, name):
@@ -612,6 +708,13 @@ def test_refused_key_names_are_sap_send_key_names(vkey, name):
     Ctrl codes are the guide's VKey table: 32-34 were Ctrl+F8..F10."""
     assert srv_mod._KEY_MAP[name] == vkey
     assert _make_controller_with_session()._vkey_name(vkey) == name
+
+
+def test_sendable_shift_vkeys():
+    controller = _make_controller_with_session()
+    assert 23 in controller._SENDABLE_VKEYS
+    assert 24 in controller._SENDABLE_VKEYS
+    assert 22 not in controller._SENDABLE_VKEYS
 
 
 class TestShortIdsInResponses:

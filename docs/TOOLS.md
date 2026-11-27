@@ -1,6 +1,6 @@
 # Tool Catalog
 
-`mcp-sap-gui` currently exposes **59 MCP tools**. This page is the reference for developers and for anyone who wants to know what the assistant can call; how to use the server is in [Getting started](GETTING_STARTED.md).
+`mcp-sap-gui` currently exposes **61 MCP tools**. This page is the reference for developers and for anyone who wants to know what the assistant can call; how to use the server is in [Getting started](GETTING_STARTED.md).
 
 Two practical rules:
 
@@ -59,7 +59,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | Tool | Description |
 |------|-------------|
 | `sap_execute_transaction` | Execute a transaction code such as `MM03`, `VA01`, or `/SCWM/MON` subject to the active [transaction policy](SECURITY_GUIDE.md#transaction-policy). A bare `/n` leaves the current transaction |
-| `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, `Save`, or `Ctrl+F` / `Ctrl+G` / `Ctrl+P`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients. A key the screen does not accept is not sent: the response lists `available_keys` |
+| `sap_send_key` | Send SAP keys such as `Enter`, function keys, `Back`, `Save`, `Shift+F11`, `Shift+F12`, or `Ctrl+F` / `Ctrl+G` / `Ctrl+P`; `F11` / `Save` requires explicit confirmation via elicitation-capable clients. A key the screen does not accept is not sent: the response lists `available_keys` |
 | `sap_get_screen_info` | Read current screen info including transaction, program, screen number, title, status, and active window. `message_has_long_text` / `message_as_popup` appear when set, and so do `subscreens` (the sub-screens on the window as `program:dynnr`, outer first: an RF step, a tab page or a detail area, which `program` / `screen_number` do not show) `cursor` (the ID of the field the cursor is in; a redisplay without a message, e.g. for an empty required field, moves it) and `buttons` (the pushbuttons with a text in the main window's user area as `{ID: text}`: RF menu pages differ only in these, and an F-key button can change its meaning, "F1 Logoff" or "F1 Save"; left out above 15 buttons). Every action response carries the same screen info |
 
 ## Fields And UI Elements
@@ -91,7 +91,7 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 
 | Tool | Description |
 |------|-------------|
-| `sap_read_table` | Read rows and columns from a table or grid. With `columns_only=true` a TableControl also reports each column's `cell_type` and a `cell_id` template (`{row}` = zero-based visible row). Columns of a table without rows are flagged `name_is_title`: no cell exists yet to read the technical name from. A TableControl's `total_rows` counts its empty lines too (SM30 pads the view): the read stops at the first empty row with no data below it and reports its index as `empty_rows_from`, where the data ends. On a TableControl, `start_row` (0 included) scrolls there first; without it the read starts where the table is scrolled now, e.g. after "Position...". An ALV read that cannot scroll (read-only scripting) stops at the rows on screen and reports `unread_from_row`. An ALV read also reports, when set, the grid's `title` and its selection, which toolbar and menu functions act on: `selected_rows` in SAP's form (`"1,2,4-8,10"`) with `selected_row_count`, `selected_cells`, `selected_columns`. What could not be read is said: requested column names the table does not have in `unknown_columns` (none known: an error listing the table's names), cells that could not be read as null values listed in `unreadable_cells` (ALV) or `unreadable_rows` (a whole TableControl row), with a `warning` |
+| `sap_read_table` | Read rows and columns from a table or grid. With `columns_only=true` a TableControl also reports each column's `cell_type` and a `cell_id` template (`{row}` = zero-based visible row). Columns of a table without rows are flagged `name_is_title`: no cell exists yet to read the technical name from. A TableControl's `total_rows` counts its empty lines too (SM30 pads the view): the read stops at the first empty row with no data below it and reports its index as `empty_rows_from`, where the data ends. On a TableControl, `start_row` (0 included) scrolls there first; without it the read starts where the table is scrolled now, e.g. after "Position...". An ALV read that cannot scroll (read-only scripting) stops at the rows on screen and reports `unread_from_row`. An ALV read also reports, when set, the grid's `title` and its selection, which toolbar and menu functions act on: `selected_rows` in SAP's form (`"1,2,4-8,10"`) with `selected_row_count`, `selected_cells`, `selected_columns`. When the grid's layout has totals lines, the read reports `totals_lines` (`highest_level`, `above_entries`) and marks each total or subtotal row with `_total_level` (1 = innermost subtotal, the highest = overall total): such a row is a sum, not a record, and `total_rows` counts it; `_collapsed` marks a subtotal whose group is closed, so its records are not in the grid. What could not be read is said: requested column names the table does not have in `unknown_columns` (none known: an error listing the table's names), cells that could not be read as null values listed in `unreadable_cells` (ALV) or `unreadable_rows` (a whole TableControl row), with a `warning` |
 | `sap_select_table_row` | Select a row |
 | `sap_double_click_cell` | Double-click a cell |
 | `sap_modify_cell` | Modify an editable cell. On a TableControl it scrolls to the row first and refuses if the row is still not visible afterwards, instead of writing another row |
@@ -108,7 +108,9 @@ Preferred usage: use `sap_connect_existing` when the user is already logged in t
 | `sap_press_alv_toolbar_button` | Press an ALV toolbar button. A menu button opens its menu and the response lists `menu_items` (text and function code) |
 | `sap_select_alv_context_menu_item` | Select an ALV context menu item by function code, text or position |
 | `sap_get_cell_info` | Read detailed ALV cell metadata: editable, cell type (checkbox, dropdown, button), error/warning state, F4 help, hotspot |
-| `sap_press_column_header` | Click a column header, typically to sort |
+| `sap_alv_cell_action` | Act on one cell: `click` a hotspot, `press_button`, `set_checkbox`, `f4` (value help), `enter` (send the grid's changes to the application for checking), `context_menu` (open the cell's menu; the response lists `menu_items`) and `toggle_total` (open or close a subtotal's group). A cell that is not what the action needs is refused before anything is sent (`status: rejected`): a click on a cell that is no hotspot would fail with a bare error, and a checkbox write to a cell that is no checkbox would change nothing without saying so. The cell's row is brought on screen first, because a click on a row that is not on screen only scrolls there. `set_checkbox` falls under the `field_writes` confirmation point |
+| `sap_select_alv_columns` | Select columns by name (comma-separated; `""` clears). The grid's Total, Subtotals, Sort and Filter functions act on the selected columns. A name the grid does not have selects nothing |
+| `sap_press_column_header` | Send a click on a column header to the application. It neither selects the column nor sorts by it: use `sap_select_alv_columns` and the grid's own function |
 | `sap_select_all_rows` | Select all ALV rows |
 
 ### TableControl Tools
@@ -150,8 +152,8 @@ Every action tool also reports a popup that it opened: `screen.popup` carries th
 
 | Tool | Description |
 |------|-------------|
-| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any. A table control is one element, and a classic list is reported under `lists` without its cells (`expand_tables=true` lists the cells of both); a dropdown reports its selected `key` and the entry's text, a radio button or checkbox `selected`, a shell (type `GuiShell`) its `subtype` (`Tree`, `GridView`, `TextEdit`, ...). `type_filter` finds a shell by its class (`GuiTree`, `GuiGridView`), its bare subtype, or every shell by `GuiShell`; IDs are returned in the short `wnd[0]/...` form |
-| `sap_screenshot` | Capture a screenshot of the active SAP window. `save_path` also writes a full-resolution PNG (never overwrites an existing file) and returns its path and pixel size; `inline=false` skips the image when only the file is needed |
+| `sap_get_screen_elements` | Enumerate screen elements, optionally by container or filter. Reports `docking_containers` when the window has any, and `depth_limited` (`containers_cut_off`, up to three `examples`; a `note` when the result is empty) when `max_depth` stopped inside containers that still have children: raise `max_depth`, or pass an example as `container_id`. Menus are left out of it unless the scan started in the menu bar. A table control is one element, and a classic list is reported under `lists` without its cells (`expand_tables=true` lists the cells of both); a dropdown reports its selected `key` and the entry's text, a radio button or checkbox `selected`, a shell (type `GuiShell`) its `subtype` (`Tree`, `GridView`, `TextEdit`, ...). `type_filter` finds a shell by its class (`GuiTree`, `GuiGridView`), its bare subtype, or every shell by `GuiShell`; IDs are returned in the short `wnd[0]/...` form |
+| `sap_screenshot` | Capture a screenshot of the active SAP window. `save_path` also writes a full-resolution PNG (never overwrites an existing file) and returns its path and pixel size; `inline=false` skips the image when only the file is needed. In Business Client the window is rendered by its handle (needs the `screenshots` extra), so other windows and tabs do not show up; on plain SAP GUI `HardCopy` draws it. A minimized window or a hidden Business Client tab is refused. The result's `capture` is `printwindow` or `hardcopy`. For evidence (needs `save_path`): `highlight` frames targets in red, `mask` blacks them out (nothing is saved if one cannot be found), `caption` adds a strip with your text, `include_context=true` adds system, client, user, transaction and time to it (needs a caption; off by default: it exposes the user ID), `isolate=true` blacks out everything outside the highlighted areas. A target is an element ID, or for an ALV grid `{"id": "<grid id>", "column": "MATNR", "row": 3}` (a visible cell, row 0-based; `row` left out, the visible part of the column). A target needs a size and must lie inside its container (the user area, the grid) and the captured window (the popup, when one is open), or nothing is saved; a cell partly scrolled out of view is masked where it shows and refused for `highlight` and `isolate`; the targets are read again after the capture and the call is refused if they moved or if the image is not the size SAP reports for the window (a maximized window on plain SAP GUI comes without its invisible frame, which is accepted). `mask` blacks out the named elements only: the same value in the title or the status bar stays visible, and the agent can still read the field with the other tools |
 
 ## Preview
 
@@ -193,6 +195,16 @@ and the pending-values table (requires the optional `apps` extra; see
 2. If it is not `wnd[0]`, call `sap_get_popup_window`
 3. Use the popup `classification` before acting; `input_required` and risky `confirmation` popups should usually stay human- or agent-reviewed
 4. Use `sap_handle_popup(action="auto")` only for clearly informational popups you want dismissed safely
+
+### A Session That Opens Beside Yours
+
+A hotspot, a "Navigate to..." function or a menu entry can show a document in a SAP session of its own. The session the agent is in then looks unchanged. The user can open a session too, at any time.
+
+1. Check `new_sessions` in the `screen` of a response: each entry names a session that appeared on the connection (`session_id`, `transaction`, `title`)
+2. The agent is still bound to the session it was in: nothing moves on its own. Do not repeat the action, or a further session opens (SAP allows six by default)
+3. Tell the user. The report does not say who opened the session, and gives no index to attach with: attach to it only when the user asks, with current indexes from `sap_list_connections`
+
+A session is reported once, with the first response that carries `screen` after it appeared. It shows after the action has returned (0.5 to 0.7 seconds on a local system, 3 to 5 seconds on a remote one), so the action's own response usually does not have it yet. No action waits for it: when an action that should have opened a document seems to have done nothing, call `sap_get_screen_info` before repeating it.
 
 ### Table Handling
 

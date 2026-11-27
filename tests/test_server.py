@@ -548,6 +548,22 @@ class TestReadOnlyMode:
             await readonly_srv.sap_press_column_header("wnd[0]/usr/grid", "COL", ctx)
 
     @pytest.mark.asyncio
+    async def test_readonly_blocks_alv_cell_action(self, readonly_srv):
+        """sap_alv_cell_action raises in read-only mode, whatever the action."""
+        ctx = _make_mock_ctx()
+        for action in ("click", "set_checkbox", "context_menu"):
+            with pytest.raises(ValueError, match="read-only"):
+                await readonly_srv.sap_alv_cell_action(
+                    "wnd[0]/usr/grid", action, ctx, row=0, column="COL")
+
+    @pytest.mark.asyncio
+    async def test_readonly_blocks_select_alv_columns(self, readonly_srv):
+        """sap_select_alv_columns raises in read-only mode."""
+        ctx = _make_mock_ctx()
+        with pytest.raises(ValueError, match="read-only"):
+            await readonly_srv.sap_select_alv_columns("wnd[0]/usr/grid", "COL", ctx)
+
+    @pytest.mark.asyncio
     async def test_readonly_blocks_select_all_rows(self, readonly_srv):
         """sap_select_all_rows raises in read-only mode."""
         ctx = _make_mock_ctx()
@@ -603,6 +619,8 @@ class TestParseKey:
         assert srv._parse_key("Shift+F1") == VKey.SHIFT_F1
         assert srv._parse_key("Shift+F5") == VKey.SHIFT_F5
         assert srv._parse_key("Shift+F9") == VKey.SHIFT_F9
+        assert srv._parse_key("Shift+F11") == 23
+        assert srv._parse_key("Shift+F12") == 24
         assert srv._parse_key("Ctrl+F") == VKey.CTRL_F
         assert srv._parse_key("Ctrl+G") == VKey.CTRL_G
         assert srv._parse_key("Ctrl+P") == VKey.CTRL_P
@@ -664,6 +682,7 @@ class TestToolRegistration:
             "sap_select_alv_context_menu_item",
             "sap_get_cell_info", "sap_press_column_header",
             "sap_select_all_rows",
+            "sap_alv_cell_action", "sap_select_alv_columns",
             # Table (TableControl-specific)
             "sap_scroll_table_control", "sap_get_table_control_row_info",
             "sap_select_all_table_control_columns",
@@ -709,7 +728,9 @@ class TestToolRegistration:
         assert "enum" in key_schema
         assert "Enter" in key_schema["enum"]
         assert "F8" in key_schema["enum"]
-        assert len(key_schema["enum"]) == 30
+        assert "Shift+F11" in key_schema["enum"]
+        assert "Shift+F12" in key_schema["enum"]
+        assert len(key_schema["enum"]) == 32
 
     def test_handle_popup_has_auto_action(self, srv):
         """sap_handle_popup exposes the new auto action in its schema."""

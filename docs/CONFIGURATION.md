@@ -78,7 +78,7 @@ Most SAP failures come back as a normal result with an `error` key, so a client 
 
 ## HTTP transport
 
-stdio is the default and has no network surface: the client starts the server and talks to it directly. With `--transport http` the server listens on `127.0.0.1:8000`:
+stdio is the default and has no network surface: the client starts the server and talks to it directly. Only `--transport http` starts HTTP; FastMCP's own `FASTMCP_TRANSPORT` setting is not used. With `--transport http` the server listens on `127.0.0.1:8000`:
 
 ```powershell
 uvx "mcp-sap-gui[screenshots]" --transport http

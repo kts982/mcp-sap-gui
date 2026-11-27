@@ -201,9 +201,11 @@ A page with `unreadable_rows` or `unreadable_cells` holds null values that were 
 not read (an empty cell is `""`): read those rows again before calling the export \
 complete. `unknown_columns` lists requested names the table does not have.
 
-`total_rows` counts every row the grid shows, totals included: an ALV grid can end \
-with a totals row (highlighted, e.g. the counter row of `/SCWM/MON`, whose value \
-is the record count). Check the last rows before reporting a number of records.
+`total_rows` counts every row the grid shows, totals included. When the layout of \
+an ALV grid has totals lines, the response has `totals_lines` and each total or \
+subtotal row carries `_total_level` (the counter row of `/SCWM/MON` is one, and \
+its value is the record count): leave those rows out of a number of records. A \
+row with `_collapsed` is a closed group, whose records are not in the grid.
 
 ## Tips
 - **Start with `columns_only=true`**: Don't read data until you know the schema.
@@ -234,7 +236,7 @@ sap_press_button("<button_id>")
 
 ## Step 2 — Find the tree control
 ```
-sap_get_screen_elements(type_filter="GuiTree", max_depth=6)
+sap_get_screen_elements(container_id="wnd[0]", type_filter="GuiTree", max_depth=30)
 ```
 Note the tree ID (typically something like `wnd[0]/usr/shell/shellcont[0]/shell`).
 
@@ -360,7 +362,7 @@ sap_get_screen_elements(max_depth=4)
 ## Step 4 — Discover the tree and navigate by text
 - Find the tree control instead of guessing its ID:
 ```
-sap_get_screen_elements(type_filter="GuiTree", max_depth=6)
+sap_get_screen_elements(container_id="wnd[0]", type_filter="GuiTree", max_depth=30)
 ```
 - A tree reports type `GuiShell` with subtype `Tree`; the filter finds it either way.
 - Search by business text first:
@@ -384,7 +386,7 @@ sap_click_tree_link("<tree_id>", "<node_key>", "<column>")
 ## Step 6 — Inspect the result area as ALV first
 - After selecting a monitor node, discover whether the result area is a grid or table:
 ```
-sap_get_screen_elements(type_filter="GuiGridView,GuiTableControl", max_depth=6)
+sap_get_screen_elements(container_id="wnd[0]", type_filter="GuiGridView,GuiTableControl", max_depth=30)
 ```
 - Start by reading the schema:
 ```

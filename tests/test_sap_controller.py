@@ -66,6 +66,8 @@ class TestVKey:
         assert VKey.F8 == 8
         assert VKey.F11 == 11
         assert VKey.F12 == 12
+        assert VKey.SHIFT_F11 == 23
+        assert VKey.SHIFT_F12 == 24
 
 
 class TestSessionInfo:
@@ -1593,7 +1595,10 @@ class TestActiveWindowImproved:
 
         result = controller.take_screenshot("test.png")
 
-        controller._session.findById.assert_called_once_with("wnd[2]")
+        # The captured window, then the main window for the host it runs in.
+        assert [c.args for c in controller._session.findById.call_args_list] == [
+            ("wnd[2]",), ("wnd[0]",),
+        ]
         hardcopy_target.HardCopy.assert_called_once_with("test.png", 2)
         assert result["window"] == "wnd[2]"
 

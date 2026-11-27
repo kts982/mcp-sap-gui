@@ -205,6 +205,11 @@ class SAPGUIControllerBase:
         # connect_to_existing_session() are never in this list.
         self._owned_connection = None
         self._owned_sessions: List[Any] = []
+        # Session Ids seen on the bound connection at the last look (None =
+        # not looked yet), and the new ones found since that no response
+        # has reported yet. See _check_sessions().
+        self._known_sessions: Optional[set] = None
+        self._pending_new_sessions: List[Dict[str, Any]] = []
         # Read once per bind (_read_session_traits): the server's write gate
         # checks scripting_read_only on the event loop, where COM is off limits.
         self.sap_gui_version = ""
@@ -612,6 +617,7 @@ class SAPGUIControllerBase:
             logger.info("Bound SAP session was closed: %s", e)
             self._session = None
             self._connection = None
+            self._forget_sessions()
             raise SAPGUINotConnectedError(
                 "SAP session was closed (window or tab closed). "
                 "Reconnect with sap_connect_existing."
@@ -658,6 +664,7 @@ class SAPGUIControllerBase:
                 raise SAPGUIError(f"Failed to open connection to '{system_description}'")
 
             self._session = self._connection.Children(0)
+            self._forget_sessions()
 
             if self._session is None:
                 raise SAPGUIError("No session available on the connection")
@@ -748,6 +755,7 @@ class SAPGUIControllerBase:
             self._connection = connection
             self._application = engine
             self._session = connection.Children(session_index)
+            self._forget_sessions()
             self._owns_session = False
             self._owned_connection = None
             self._owned_sessions = []
@@ -807,6 +815,7 @@ class SAPGUIControllerBase:
         self._owns_session = False
         self._owned_connection = None
         self._owned_sessions = []
+        self._forget_sessions()
         self.sap_gui_version = ""
         self.scripting_read_only = False
         self.sap_identity = {}
@@ -882,6 +891,7 @@ class SAPGUIControllerBase:
                         if self._owns_session:
                             self._owned_sessions.append(session)
                         self._session = session
+                        self._forget_sessions()
                         return True
             except Exception:
                 pass
@@ -889,6 +899,110 @@ class SAPGUIControllerBase:
                 logger.info("No new session appeared after /o; binding unchanged")
                 return False
             time.sleep(self._NEW_SESSION_POLL_S)
+
+    # How long a session that just appeared may take to answer for its screen.
+    _NEW_SESSION_READY_S = 0.5
+
+    _NEW_SESSIONS_NOTE = (
+        "Another SAP session opened on this connection (new_sessions): by "
+        "an action of yours, or by the user. You are still in the session "
+        "you were in and nothing was bound. Do not repeat the action. Tell "
+        "the user; attach to that session only if they ask for it."
+    )
+
+    def _forget_sessions(self) -> None:
+        """The binding moved: start the list of known sessions afresh."""
+        self._known_sessions = None
+        self._pending_new_sessions = []
+
+    def _check_sessions(self) -> None:
+        """Note sessions that appeared on the bound connection since the last look.
+
+        An action can open a session of its own accord: a hotspot that shows
+        a document in a new window, a "Navigate to..." function, the System
+        menu's New GUI Window. The bound session's screen then looks as
+        before. What is found waits in _pending_new_sessions until a
+        response reports it (get_screen_info). The binding never moves here:
+        only /o and the connect tools bind.
+
+        Nothing waits for such a session. It shows after the action's call
+        has returned (0.5 to 0.7 s on a local system, 3 to 5 s on a remote
+        one), and the session the action ran in gives no sign meanwhile
+        (Busy stays False). "The screen did not change" is no sign either:
+        a sort, a page down or an RF step changes only what is inside the
+        screen. So the report comes with whichever response reads the
+        screen once the session is there.
+        """
+        connection = getattr(self, "_connection", None)
+        if connection is None:
+            return
+        try:
+            current = {sid for sid in self._session_ids(connection)
+                       if isinstance(sid, str)}
+        except Exception:
+            return
+        known = getattr(self, "_known_sessions", None)
+        new_ids = current - known if known is not None else set()
+        if new_ids:
+            try:
+                described = self._describe_new_sessions(connection, new_ids)
+            except Exception as e:
+                # A session that is still starting can refuse to answer (seen
+                # live: "data ... not yet available" on its Id). Leave the
+                # known Ids as they are, so the next look finds it again.
+                logger.debug("New session(s) %s not readable yet: %s",
+                             sorted(new_ids), e)
+                return
+            pending = getattr(self, "_pending_new_sessions", None)
+            if pending is None:
+                pending = self._pending_new_sessions = []
+            pending.extend(described)
+        self._known_sessions = current
+
+    def _describe_new_sessions(self, connection, new_ids: set) -> List[Dict[str, Any]]:
+        """Id, transaction and title of each new session.
+
+        No index to attach with: the report is information, not an
+        invitation. It cannot tell whose session this is (the user may have
+        opened it), and a position among the connection's sessions goes
+        stale as soon as another one closes. An agent that is asked to work
+        there gets current indexes from sap_list_connections.
+        """
+        found = []
+        for index in range(connection.Children.Count):
+            session = connection.Children(index)
+            session_id = getattr(session, "Id", None)
+            if session_id not in new_ids:
+                continue
+            entry: Dict[str, Any] = {"session_id": session_id}
+            entry.update(self._new_session_screen(session))
+            found.append(entry)
+        return found
+
+    def _new_session_screen(self, session) -> Dict[str, Any]:
+        """Transaction and title of a session that may still be starting."""
+        deadline = time.monotonic() + self._NEW_SESSION_READY_S
+        while True:
+            try:
+                transaction = str(session.Info.Transaction or "")
+                title = str(session.findById("wnd[0]").Text or "")
+                if transaction or title:
+                    return {"transaction": transaction, "title": title}
+            except Exception:
+                pass
+            if time.monotonic() >= deadline:
+                return {}
+            time.sleep(self._NEW_SESSION_POLL_S)
+
+    def _take_new_sessions(self) -> List[Dict[str, Any]]:
+        """The new sessions no response has reported yet, still open ones only."""
+        self._check_sessions()
+        pending = getattr(self, "_pending_new_sessions", None)
+        if not pending:
+            return []
+        self._pending_new_sessions = []
+        known = getattr(self, "_known_sessions", None) or set()
+        return [entry for entry in pending if entry.get("session_id") in known]
 
     def get_session_info(self) -> SessionInfo:
         """Get information about the current session."""
@@ -1145,8 +1259,9 @@ class SAPGUIControllerBase:
             "screen": self.get_screen_info(),
         }
 
-    # The keys sap_send_key offers: Enter, F1-F12, Shift+F1-F9, Ctrl+F/G/P.
-    _SENDABLE_VKEYS = (*range(0, 22), 71, 84, 86)
+    # The keys sap_send_key offers: Enter, F1-F12,
+    # Shift+F1-F9, Shift+F11/F12, Ctrl+F/G/P.
+    _SENDABLE_VKEYS = (*range(0, 22), 23, 24, 71, 84, 86)
 
     @staticmethod
     def _vkey_allowed(window, vkey: int) -> bool:
@@ -1163,7 +1278,7 @@ class SAPGUIControllerBase:
             return "Enter"
         if 1 <= vkey <= 12:
             return f"F{vkey}"
-        if 13 <= vkey <= 24:
+        if 13 <= vkey <= 21 or vkey in (23, 24):
             return f"Shift+F{vkey - 12}"
         return {71: "Ctrl+F", 84: "Ctrl+G", 86: "Ctrl+P"}.get(vkey, str(vkey))
 
@@ -1300,6 +1415,13 @@ class SAPGUIControllerBase:
                 digest = getattr(self, "_popup_digest", lambda: {})()
                 if digest:
                     result["popup"] = digest
+
+            # A session that opened beside this one: the screen above does
+            # not show it, so say it here.
+            new_sessions = self._take_new_sessions()
+            if new_sessions:
+                result["new_sessions"] = new_sessions
+                result["new_sessions_note"] = self._NEW_SESSIONS_NOTE
 
             return result
         except Exception as e:

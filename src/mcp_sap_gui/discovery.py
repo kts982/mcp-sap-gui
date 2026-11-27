@@ -6,10 +6,22 @@ screenshot capabilities for the SAP GUI controller.
 """
 
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from .capture import (
+    annotate_png,
+    cell_scale,
+    cut_at_frame,
+    evidence_line,
+    is_embedded,
+    is_maximized,
+    physical_width,
+    print_window_png,
+    scale_outward,
+)
 from .models import SAPGUIError, ScreenElement
 
 
@@ -1331,6 +1343,7 @@ class DiscoveryMixin:
                             changeable_only: bool = False,
                             expand_tables: bool = False,
                             lists: List[Dict[str, Any]] | None = None,
+                            cut_off: List[str] | None = None,
                             ) -> List[ScreenElement]:
         """
         Enumerate all elements on the current screen.
@@ -1352,6 +1365,8 @@ class DiscoveryMixin:
                 far more compactly.
             lists: If given, receives one summary per container whose
                 classic-list cells were left out: container, cells, rows.
+            cut_off: If given, receives the ID of every container that still
+                had children when max_depth stopped the descent.
 
         Returns:
             List of ScreenElement objects
@@ -1372,6 +1387,7 @@ class DiscoveryMixin:
                 changeable_only=changeable_only,
                 expand_tables=expand_tables,
                 list_rows=list_rows,
+                cut_off=cut_off,
             )
             tree = self._object_tree(root_id, self._DISCOVERY_PROPS, site="elements")
             if tree is not None:
@@ -1444,11 +1460,15 @@ class DiscoveryMixin:
                             changeable_only: bool = False,
                             expand_tables: bool = False,
                             list_rows: Dict[str, List[int]] | None = None,
+                            cut_off: List[str] | None = None,
                             ) -> List[ScreenElement]:
         """_enumerate_elements over a GetObjectTree node: same rules, no COM
         but the Selected of each radio button and checkbox listed."""
         elements = []
         if current_depth >= max_depth:
+            if cut_off is not None and node.get("children"):
+                cut_off.append(self._normalize_element_id(
+                    (node.get("properties") or {}).get("Id", "")))
             return elements
 
         for child in node.get("children") or []:
@@ -1481,6 +1501,7 @@ class DiscoveryMixin:
                 changeable_only=changeable_only,
                 expand_tables=expand_tables,
                 list_rows=list_rows,
+                cut_off=cut_off,
             ))
         return elements
 
@@ -1534,6 +1555,7 @@ class DiscoveryMixin:
                             changeable_only: bool = False,
                             expand_tables: bool = False,
                             list_rows: Dict[str, List[int]] | None = None,
+                            cut_off: List[str] | None = None,
                             ) -> List[ScreenElement]:
         """Recursively enumerate screen elements over COM.
 
@@ -1545,6 +1567,12 @@ class DiscoveryMixin:
         elements = []
 
         if current_depth >= max_depth:
+            if cut_off is not None:
+                try:
+                    if container.Children.Count > 0:
+                        cut_off.append(self._normalize_element_id(container.Id))
+                except Exception:
+                    pass  # a container without Children is not cut off
             return elements
 
         def prop(obj, name, default):
@@ -1604,6 +1632,7 @@ class DiscoveryMixin:
                         changeable_only=changeable_only,
                         expand_tables=expand_tables,
                         list_rows=list_rows,
+                        cut_off=cut_off,
                     )
                     elements.extend(child_elements)
 
@@ -1672,8 +1701,7 @@ class DiscoveryMixin:
 
             # Find the topmost window (popups are wnd[1], wnd[2], etc.)
             window_id = self._find_topmost_window()
-            window = self._find_window(window_id)
-            window.HardCopy(filepath, _HARDCOPY_PNG)
+            self._capture_window(self._find_window(window_id), filepath)
 
             # Optimize image size with Pillow if available
             self._optimize_screenshot(filepath)
@@ -1701,7 +1729,16 @@ class DiscoveryMixin:
                 os.remove(temp_filepath)
             return self._error_result({}, e, "Could not capture screenshot")
 
-    def save_screenshot(self, save_path: str, inline: bool = True) -> Dict[str, Any]:
+    def save_screenshot(
+        self,
+        save_path: str,
+        inline: bool = True,
+        highlight: List[Any] | None = None,
+        mask: List[Any] | None = None,
+        caption: str = "",
+        include_context: bool = False,
+        isolate: bool = False,
+    ) -> Dict[str, Any]:
         """
         Save a screenshot of the current SAP window to a PNG file.
 
@@ -1714,6 +1751,22 @@ class DiscoveryMixin:
                 exist. Relative paths resolve against the server's working
                 directory.
             inline: Also return the (downscaled) image as base64 ``data``.
+            highlight: Targets to frame in red (e.g. an interesting field).
+            mask: Targets to black out (protected data). Fails closed: if
+                one cannot be located, nothing is saved. Only the named
+                elements are blacked out; the same value elsewhere stays.
+                A target is an element ID, or for an ALV grid a dict
+                ``{"id": <grid id>, "column": "MATNR", "row": 3}`` (``row``
+                0-based and visible; left out, the visible part of the column).
+                A target needs a size and has to lie inside its container
+                (the user area, the grid) and in the captured window. A cell
+                partly scrolled out of view is masked where it shows; for
+                highlight and isolate it is an error.
+            caption: Text for a strip under the image.
+            include_context: Add system, client, user, transaction and time
+                to the caption strip (needs a caption). Off by default: it
+                exposes the user ID.
+            isolate: Black out everything outside the highlighted areas.
 
         Returns:
             Dict with the absolute filepath, pixel size, window and, when
@@ -1721,51 +1774,363 @@ class DiscoveryMixin:
         """
         self._require_session()
 
-        import base64
         import os
-        import shutil
         import tempfile
 
-        temp_filepath = None
+        highlight, mask = highlight or [], mask or []
+        capture_path = None
         try:
+            if isolate and not highlight:
+                raise SAPGUIError("isolate needs at least one highlight target")
+            if include_context and not caption.strip():
+                raise SAPGUIError("include_context adds a line to the caption; give a caption")
             target = self._resolve_screenshot_path(save_path)
 
             window_id = self._find_topmost_window()
-            self._find_window(window_id).HardCopy(target, _HARDCOPY_PNG)
-            if not os.path.isfile(target):
+            window = self._find_window(window_id)
+            # Read the targets before the capture and again after it.
+            before = self._screen_boxes(window_id, mask, highlight)
+            # Capture to a temp file: a masked screenshot must never exist
+            # unmasked at the target path, even for a moment.
+            capture_file = tempfile.NamedTemporaryFile(
+                delete=False, prefix="sap_capture_", suffix=".png",
+            )
+            capture_path = capture_file.name
+            capture_file.close()
+            origin, method = self._capture_window(window, capture_path)
+            if not os.path.isfile(capture_path) or os.path.getsize(capture_path) == 0:
                 raise SAPGUIError("SAP GUI did not write the screenshot file")
+
+            if highlight or mask or caption.strip():
+                self._annotate_capture(
+                    window, capture_path, origin, highlight, mask, before,
+                    caption.strip(), include_context, isolate, window_id,
+                )
+            self._save_new(capture_path, target)
 
             result: Dict[str, Any] = {
                 "format": "png",
                 "filepath": target,
                 "window": window_id,
+                "capture": method,
                 "size_bytes": os.path.getsize(target),
             }
+            if highlight:
+                result["highlighted"] = list(highlight)
+            if mask:
+                result["masked"] = list(mask)
             size = self._png_size(target)
             if size is not None:
                 result["width"], result["height"] = size
-
             if inline:
-                # Optimize a copy: the saved file stays at full resolution.
-                temp_file = tempfile.NamedTemporaryFile(
-                    delete=False,
-                    prefix="sap_screenshot_",
-                    suffix=".png",
-                )
-                temp_filepath = temp_file.name
-                temp_file.close()
-                shutil.copyfile(target, temp_filepath)
-                self._optimize_screenshot(temp_filepath)
-                with open(temp_filepath, "rb") as f:
-                    result["data"] = base64.b64encode(f.read()).decode()
-
+                result["data"] = self._inline_png_b64(target)
             return result
 
         except Exception as e:
             return self._error_result({}, e, "Could not save screenshot")
         finally:
-            if temp_filepath and os.path.exists(temp_filepath):
-                os.remove(temp_filepath)
+            if capture_path and os.path.exists(capture_path):
+                os.remove(capture_path)
+
+    @staticmethod
+    def _save_new(source: str, target: str) -> None:
+        """Copy the finished image to *target*; never over an existing file.
+
+        ``os.replace`` cannot cross drives (``WinError 17``) and overwrites.
+        """
+        import os
+        import shutil
+
+        with open(source, "rb") as src, open(target, "xb") as dst:
+            try:
+                shutil.copyfileobj(src, dst)
+            except BaseException:
+                dst.close()
+                os.remove(target)
+                raise
+
+    def _annotate_capture(self, window, path: str, origin, highlight, mask, before,
+                          caption: str, include_context: bool, isolate: bool,
+                          window_id: str) -> None:
+        """Draw the targets onto the capture, once the screen is known not to have moved."""
+        if before:
+            if self._screen_boxes(window_id, mask, highlight) != before:
+                raise SAPGUIError(
+                    "The screen changed during the capture (scrolled or moved); "
+                    "nothing saved. Retry."
+                )
+            origin, size, frame, k = self._image_origin(window, path, origin)
+            boxes = [(left - origin[0], top - origin[1], width, height)
+                     for left, top, width, height in before]
+            if k != 1:  # SAP's screen units are not the image's pixels: one unit is k pixels
+                boxes = [scale_outward(box, k, size) for box in boxes]
+            if frame:  # a maximized window: its frame is not in the image
+                boxes = [cut_at_frame(box, size, frame) for box in boxes]
+        else:
+            boxes = []
+        meta = self._evidence_meta() if caption and include_context else ""
+        annotate_png(
+            path,
+            mask=boxes[:len(mask)],
+            highlight=boxes[len(mask):],
+            caption=caption,
+            meta=meta,
+            isolate=isolate,
+        )
+
+    def _image_origin(self, window, path: str, origin) -> tuple:
+        """Where the image is on the screen: ``((left, top), (width, height), frame, k)``.
+
+        The image has to be the window SAP reports, pixel for pixel, or the same
+        window with every length scaled by one factor *k* (width and height
+        agree within a pixel); otherwise nothing is drawn (SAPGUIError). Seen
+        live: a window on a 100% monitor with SAP started at 150% is reported as
+        2880x1430 for a 1920x953 image, and a Business Client window started at
+        100% on a display then set to 175% as 1828x1016 for 3199x1778. *k* is 1
+        when the sizes are equal, and when it is not the origin is SAP's own, in
+        SAP's units. One more case differs by
+        design: SAP reports a maximized window with its invisible frame
+        (3224x1940 at -12,-12 on a screen 3200 wide) and ``HardCopy`` leaves the
+        frame out (3200x1916). The image then starts one frame width inside the
+        window, on every side the same; *frame* is that width, 0 in every other
+        case.
+        """
+        size = self._png_size(path)
+        reported = (int(window.Width), int(window.Height))
+        hardcopy = origin is None
+        if hardcopy:  # SAP's own window origin
+            origin = (int(window.ScreenLeft), int(window.ScreenTop))
+        if size == reported:
+            return origin, size, 0, 1.0
+        if hardcopy and size is not None and self._window_is_maximized(window):
+            extra_width, extra_height = reported[0] - size[0], reported[1] - size[1]
+            if extra_width == extra_height and extra_width > 0 and extra_width % 2 == 0:
+                frame = extra_width // 2
+                return (origin[0] + frame, origin[1] + frame), size, frame, 1.0
+        if size is not None and reported[0] > 0 and reported[1] > 0:
+            k = size[0] / reported[0]
+            if 0.25 <= k <= 4 and abs(k - 1) > 0.02 and abs(size[1] - reported[1] * k) <= 1:
+                return (int(window.ScreenLeft), int(window.ScreenTop)), size, 0, k
+        raise SAPGUIError(
+            f"The image is {size} but SAP reports the window as "
+            f"{reported} (display scaling?); not drawing on it, nothing saved."
+        )
+
+    @staticmethod
+    def _window_is_maximized(window) -> bool:
+        try:
+            hwnd = window.Handle
+        except Exception:
+            return False
+        return isinstance(hwnd, int) and hwnd > 0 and is_maximized(hwnd)
+
+    def _inline_png_b64(self, target: str) -> str:
+        """The saved file as a downscaled base64 PNG; the file itself stays full size."""
+        import base64
+        import os
+        import shutil
+        import tempfile
+
+        copy = tempfile.NamedTemporaryFile(delete=False, prefix="sap_screenshot_", suffix=".png")
+        copy.close()
+        try:
+            shutil.copyfile(target, copy.name)
+            self._optimize_screenshot(copy.name)
+            with open(copy.name, "rb") as f:
+                return base64.b64encode(f.read()).decode()
+        finally:
+            os.remove(copy.name)
+
+    def _capture_window(self, window, path: str):
+        """Capture *window* into *path*; return ``((left, top) | None, method)``.
+
+        Embedded in Business Client, ``HardCopy`` copies the screen, so the
+        window is rendered by its handle (``PrintWindow``) and a minimized
+        window or a hidden tab is refused; there is no fallback. On plain SAP
+        GUI ``HardCopy`` draws the window itself; only a minimized one is refused.
+
+        The host is that of the session's main window too: a popup in Business
+        Client is a top-level dialog of its own, and with Business Client
+        minimized ``HardCopy`` returned a copy of the screen for it while SAP's
+        ``Iconic`` stayed False.
+        """
+        hwnd = self._window_handle(window)
+        if (hwnd and is_embedded(hwnd)) or self._main_window_is_embedded():
+            if not hwnd:
+                raise SAPGUIError(
+                    "The SAP window gives no handle to capture it by, and in "
+                    "Business Client there is no other way."
+                )
+            return print_window_png(hwnd, path), "printwindow"
+        if window.Iconic is True:
+            raise SAPGUIError("The SAP window is minimized; restore it and retry.")
+        window.HardCopy(path, _HARDCOPY_PNG)
+        return None, "hardcopy"
+
+    def _screen_boxes(self, window_id: str, mask, highlight) -> list:
+        """Boxes of the mask targets, then the highlight ones.
+
+        A mask covers whatever of a cell shows; a highlight (and so an isolate)
+        has to show all of it, or the frame would point at less than was meant.
+        """
+        return [self._screen_box(t, window_id, clip=True) for t in mask] + [
+            self._screen_box(t, window_id, clip=False) for t in highlight
+        ]
+
+    def _screen_box(self, target, window_id: str, clip: bool = True) -> tuple:
+        """Screen (left, top, width, height) of a target, or SAPGUIError.
+
+        *target* is an element ID, or ``{"id": <grid id>, "column": ..., "row": ...}``
+        for an ALV cell (``row`` left out: the column). A target without a size,
+        outside its container (the user area or the grid), or in another window
+        than the captured *window_id* is an error. A cell partly scrolled out of
+        view is clipped to the grid when *clip* is set, an error otherwise.
+        """
+        row = None
+        if isinstance(target, str):
+            element_id, column = target, None
+        elif (isinstance(target, dict) and target.get("id") and target.get("column")
+              and set(target) <= {"id", "column", "row"}):
+            element_id, column, row = target["id"], target["column"], target.get("row")
+            if row is not None and (not isinstance(row, int) or isinstance(row, bool)):
+                raise SAPGUIError(f"row must be a whole number, got {row!r}")
+        else:
+            raise SAPGUIError(
+                'A target is an element ID or {"id": <grid id>, "column": ..., "row": ...}'
+            )
+        try:
+            el = self._find_element(element_id)
+            box = (int(el.ScreenLeft), int(el.ScreenTop), int(el.Width), int(el.Height))
+            if box[2] <= 0 or box[3] <= 0:
+                raise SAPGUIError(f"{element_id!r} is not visible (no size)")
+            if column is not None:
+                window = self._find_window(window_id)
+                hwnd = self._window_handle(window)
+                scale = self._cell_unit(hwnd, window)
+                box = self._grid_cell_box(el, row, column, box, clip, scale)
+            self._require_within(box, element_id, window_id)
+        except SAPGUIError:
+            raise
+        except Exception as exc:
+            raise SAPGUIError(f"Cannot locate {element_id!r} on screen: {exc}") from exc
+        return box
+
+    @staticmethod
+    def _cell_unit(hwnd, window) -> float:
+        """Factor from a grid's ``GetCell*`` units to the units of ``Screen*``/``Width``.
+
+        ``cell_scale`` gives physical pixels; ``Screen*`` are physical only when
+        SAP's window units are (they are *k* times larger on a window moved to a
+        monitor with a lower scaling), so divide by that *k*. When either is
+        unknown the box would be drawn in the wrong place: refuse.
+        """
+        scale = cell_scale(hwnd) if hwnd else None
+        physical, reported = (physical_width(hwnd) if hwnd else None), int(window.Width)
+        if scale is None or not physical or reported <= 0:
+            raise SAPGUIError(
+                "Cannot tell the unit of the grid's cell geometry (no window handle or "
+                "no DPI from Windows); not drawing on a cell, nothing saved."
+            )
+        if abs(physical / reported - 1) > 0.02:
+            scale /= physical / reported
+        return scale
+
+    def _require_within(self, box: tuple, element_id: str, window_id: str) -> None:
+        """Refuse a box outside the user area (or, for the rest, the window) it belongs to."""
+        found = re.match(r"(.*?wnd\[\d+\])(/usr)?(?:/|$)", element_id)
+        if not found:
+            raise SAPGUIError(f"Cannot tell which window {element_id!r} is in")
+        container_id = found.group(1) + (found.group(2) or "")
+        shown, own = (re.search(r"wnd\[\d+\]", i).group() for i in (window_id, container_id))
+        if shown != own:
+            raise SAPGUIError(
+                f"{element_id!r} is in {own}, but the capture is {shown} "
+                "(a popup is on top); close the popup or target its elements"
+            )
+        # A bare window ID is not an element ID (toolbar, title and status bar sit in it).
+        container = (self._find_element(container_id) if found.group(2)
+                     else self._find_window(container_id))
+        c_left, c_top = int(container.ScreenLeft), int(container.ScreenTop)
+        c_right, c_bottom = c_left + int(container.Width), c_top + int(container.Height)
+        left, top, width, height = box
+        if left < c_left or top < c_top or left + width > c_right or top + height > c_bottom:
+            raise SAPGUIError(f"{element_id!r} lies outside its container {container_id!r}")
+
+    @staticmethod
+    def _grid_cell_box(grid, row: int | None, column: str, bounds: tuple,
+                       clip: bool = True, scale: float = 1.0) -> tuple:
+        """Screen box of an ALV cell, or the column's visible part when *row* is None.
+
+        A cell scrolled partly out of view is clipped to the grid when *clip* is
+        set (a mask covers what shows) and an error otherwise (a highlight must
+        show all of it). One fully out of view is always an error, never a
+        silent miss.
+        """
+        # SAP answers an unknown column with the row-selector box, not an error.
+        columns = [grid.ColumnOrder(i) for i in range(int(grid.ColumnCount))]
+        if column not in columns:
+            shown = ", ".join(columns[:30]) + (" ..." if len(columns) > 30 else "")
+            raise SAPGUIError(f"Unknown column {column!r}; the grid has: {shown}")
+        first, count = int(grid.FirstVisibleRow), int(grid.VisibleRowCount)
+        whole_column = row is None
+        if whole_column:
+            row = first
+        elif not first <= row < first + count:
+            raise SAPGUIError(
+                f"Row {row} is not visible (rows {first}-{first + count - 1} are); scroll first"
+            )
+        grid_left, grid_top, grid_width, grid_height = bounds
+        # Offsets are relative to the grid's own origin (checked on SAP GUI 8.10);
+        # GetCellX/GetCellY do not exist. A cell scrolled out of view has size 0.
+        # They come in the system DPI of SAP's own process, ScreenLeft/ScreenTop in
+        # physical pixels: scale them (``cell_scale``), rounding after the scaling.
+        def edge(value) -> int:  # scale the edges, then subtract: a rounded size can overshoot
+            return math.floor(value * scale + 0.5)
+
+        raw_left, raw_top = grid.GetCellLeft(row, column), grid.GetCellTop(row, column)
+        left = grid_left + edge(raw_left)
+        top = grid_top + edge(raw_top)
+        width = edge(raw_left + grid.GetCellWidth(row, column)) - edge(raw_left)
+        height = edge(raw_top + grid.GetCellHeight(row, column)) - edge(raw_top)
+        if width <= 0 or height <= 0:
+            raise SAPGUIError(f"Cell {column!r} row {row} is not visible (no size); scroll first")
+        if whole_column:  # from the first visible row to the grid's bottom
+            height = grid_top + grid_height - top
+        x0, y0 = max(left, grid_left), max(top, grid_top)
+        x1 = min(left + width, grid_left + grid_width)
+        y1 = min(top + height, grid_top + grid_height)
+        if x1 <= x0 or y1 <= y0:
+            raise SAPGUIError(
+                f"Column {column!r} is outside the visible part of the grid; scroll first"
+            )
+        if not clip and (x0, y0, x1, y1) != (left, top, left + width, top + height):
+            raise SAPGUIError(
+                f"Cell {column!r} is only partly visible in the grid; scroll first"
+            )
+        return x0, y0, x1 - x0, y1 - y0
+
+    def _evidence_meta(self) -> str:
+        try:
+            info = self._session.Info
+            return evidence_line(info.SystemName, info.Client, info.User, info.Transaction)
+        except Exception:
+            return evidence_line("?", "?", "?", "?")
+
+    @staticmethod
+    def _window_handle(window) -> int | None:
+        try:
+            hwnd = window.Handle
+        except Exception:
+            return None
+        return hwnd if isinstance(hwnd, int) and hwnd > 0 else None
+
+    def _main_window_is_embedded(self) -> bool:
+        """True when this session's main window sits inside Business Client."""
+        try:
+            hwnd = self._window_handle(self._find_window("wnd[0]"))
+        except Exception:
+            return False
+        return bool(hwnd and is_embedded(hwnd))
 
     def _resolve_screenshot_path(self, save_path: Any) -> str:
         """Validate a screenshot target and return it as an absolute path."""
