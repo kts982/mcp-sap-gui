@@ -76,7 +76,7 @@ Tested on 2026-10-28: the **Claude Code CLI**, the **GitHub Copilot CLI**, **VS 
 
 ## What's new
 
-**0.6.1** sends a save only to the screen you approved it for: if the screen, the system or the SAP session changed while the question was open, nothing is saved. Reads say more: the buttons on a screen, the title and selection of an ALV grid, and the columns or cells a table read could not return. Tree double-clicks now work in SE19 and in view clusters, and an updated `opentelemetry-api` closes a slowdown that a crafted request could cause. Every change: [CHANGELOG](https://github.com/kts982/mcp-sap-gui/blob/master/CHANGELOG.md).
+**0.6.2** lets the assistant work inside ALV grids: click hotspots and cell buttons, tick checkboxes, open value help and context menus, select columns by name, and tell totals lines from records. Screenshots can frame or black out fields and cells and carry a caption, and in Business Client they no longer show other windows. Transaction codes with special characters such as `F-02` are now checked by the transaction policy when typed into the command field. Every change: [CHANGELOG](https://github.com/kts982/mcp-sap-gui/blob/master/CHANGELOG.md).
 
 ## Contributing
 
