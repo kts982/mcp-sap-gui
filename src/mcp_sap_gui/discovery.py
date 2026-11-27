@@ -1343,6 +1343,7 @@ class DiscoveryMixin:
                             changeable_only: bool = False,
                             expand_tables: bool = False,
                             lists: List[Dict[str, Any]] | None = None,
+                            cut_off: List[str] | None = None,
                             ) -> List[ScreenElement]:
         """
         Enumerate all elements on the current screen.
@@ -1364,6 +1365,8 @@ class DiscoveryMixin:
                 far more compactly.
             lists: If given, receives one summary per container whose
                 classic-list cells were left out: container, cells, rows.
+            cut_off: If given, receives the ID of every container that still
+                had children when max_depth stopped the descent.
 
         Returns:
             List of ScreenElement objects
@@ -1384,6 +1387,7 @@ class DiscoveryMixin:
                 changeable_only=changeable_only,
                 expand_tables=expand_tables,
                 list_rows=list_rows,
+                cut_off=cut_off,
             )
             tree = self._object_tree(root_id, self._DISCOVERY_PROPS, site="elements")
             if tree is not None:
@@ -1456,11 +1460,15 @@ class DiscoveryMixin:
                             changeable_only: bool = False,
                             expand_tables: bool = False,
                             list_rows: Dict[str, List[int]] | None = None,
+                            cut_off: List[str] | None = None,
                             ) -> List[ScreenElement]:
         """_enumerate_elements over a GetObjectTree node: same rules, no COM
         but the Selected of each radio button and checkbox listed."""
         elements = []
         if current_depth >= max_depth:
+            if cut_off is not None and node.get("children"):
+                cut_off.append(self._normalize_element_id(
+                    (node.get("properties") or {}).get("Id", "")))
             return elements
 
         for child in node.get("children") or []:
@@ -1493,6 +1501,7 @@ class DiscoveryMixin:
                 changeable_only=changeable_only,
                 expand_tables=expand_tables,
                 list_rows=list_rows,
+                cut_off=cut_off,
             ))
         return elements
 
@@ -1546,6 +1555,7 @@ class DiscoveryMixin:
                             changeable_only: bool = False,
                             expand_tables: bool = False,
                             list_rows: Dict[str, List[int]] | None = None,
+                            cut_off: List[str] | None = None,
                             ) -> List[ScreenElement]:
         """Recursively enumerate screen elements over COM.
 
@@ -1557,6 +1567,12 @@ class DiscoveryMixin:
         elements = []
 
         if current_depth >= max_depth:
+            if cut_off is not None:
+                try:
+                    if container.Children.Count > 0:
+                        cut_off.append(self._normalize_element_id(container.Id))
+                except Exception:
+                    pass  # a container without Children is not cut off
             return elements
 
         def prop(obj, name, default):
@@ -1616,6 +1632,7 @@ class DiscoveryMixin:
                         changeable_only=changeable_only,
                         expand_tables=expand_tables,
                         list_rows=list_rows,
+                        cut_off=cut_off,
                     )
                     elements.extend(child_elements)
 
