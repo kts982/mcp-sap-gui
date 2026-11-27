@@ -9,6 +9,7 @@ only the visible tab renders, so the caller must check visibility first.
 
 import ctypes
 import logging
+import math
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterable, List, Tuple
@@ -88,8 +89,9 @@ def _physical_pixels():
 def cell_scale(hwnd: int) -> float | None:
     """Factor from a grid's ``GetCell*`` units to physical pixels, None when unknown.
 
-    SAP reports them in the system DPI of its own process, which Windows fixes at
-    sign-in, while the window can sit on a monitor with another scaling: 1.5 for a
+    SAP reports them in the system DPI of its own process, which Windows fixes when
+    the process starts, while the window can sit on a monitor with another scaling
+    (or the display's scaling was changed since): 1.5 for a
     window on a 144-DPI monitor in a process that started at 96. The monitor's
     effective DPI is used, not ``GetDpiForWindow``: a system-aware window (plain
     SAP GUI) gets the system DPI there even on a 96-DPI monitor. Read at each
@@ -276,6 +278,26 @@ def cut_at_frame(box: Box, size: Tuple[int, int], frame: int) -> Box:
     if right <= left or bottom <= top:
         return box
     return left, top, right - left, bottom - top
+
+
+def scale_outward(box: Box, k: float, size: Tuple[int, int]) -> Box:
+    """*box* in units of 1/*k* image pixels, as image pixels, each edge rounded outward.
+
+    The edges are scaled, not the size, and each is rounded away from the box:
+    a left edge at 28.6 becomes 28, a right edge at 55.2 becomes 56. A mask then
+    never ends inside what it hides, at the cost of at most one pixel around it.
+    An edge that rounding puts one pixel past the image is set on the image's
+    edge; a box that reaches further stays as it is and is refused as outside
+    the captured window.
+    """
+    left, top, width, height = box
+    x0, y0 = math.floor(left * k), math.floor(top * k)
+    x1, y1 = math.ceil((left + width) * k), math.ceil((top + height) * k)
+    if x1 == size[0] + 1:
+        x1 = size[0]
+    if y1 == size[1] + 1:
+        y1 = size[1]
+    return x0, y0, x1 - x0, y1 - y0
 
 
 def _isolated(image, highlight: Iterable[Box]):

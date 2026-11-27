@@ -20,6 +20,7 @@ from .capture import (
     is_maximized,
     physical_width,
     print_window_png,
+    scale_outward,
 )
 from .models import SAPGUIError, ScreenElement
 
@@ -1844,8 +1845,8 @@ class DiscoveryMixin:
             origin, size, frame, k = self._image_origin(window, path, origin)
             boxes = [(left - origin[0], top - origin[1], width, height)
                      for left, top, width, height in before]
-            if k != 1:  # SAP reports its screen units k times the pixels in the image
-                boxes = [tuple(math.floor(v * k + 0.5) for v in box) for box in boxes]
+            if k != 1:  # SAP's screen units are not the image's pixels: one unit is k pixels
+                boxes = [scale_outward(box, k, size) for box in boxes]
             if frame:  # a maximized window: its frame is not in the image
                 boxes = [cut_at_frame(box, size, frame) for box in boxes]
         else:
@@ -1866,9 +1867,11 @@ class DiscoveryMixin:
         The image has to be the window SAP reports, pixel for pixel, or the same
         window with every length scaled by one factor *k* (width and height
         agree within a pixel); otherwise nothing is drawn (SAPGUIError). Seen
-        live, a window on a 100% monitor with SAP started at 150% is reported as
-        2880x1430 for a 1920x953 image: *k* is 1 in every other case, and when it
-        is not the origin is SAP's own, in SAP's units. One more case differs by
+        live: a window on a 100% monitor with SAP started at 150% is reported as
+        2880x1430 for a 1920x953 image, and a Business Client window started at
+        100% on a display then set to 175% as 1828x1016 for 3199x1778. *k* is 1
+        when the sizes are equal, and when it is not the origin is SAP's own, in
+        SAP's units. One more case differs by
         design: SAP reports a maximized window with its invisible frame
         (3224x1940 at -12,-12 on a screen 3200 wide) and ``HardCopy`` leaves the
         frame out (3200x1916). The image then starts one frame width inside the

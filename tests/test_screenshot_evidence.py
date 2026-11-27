@@ -218,6 +218,23 @@ class TestSaveScreenshotEvidence:
             assert img.getpixel((20, 35)) == (0, 0, 0)
             assert img.getpixel((50, 35)) == (255, 255, 255)
 
+    def test_a_mask_on_a_scaled_image_covers_the_pixel_its_edge_falls_in(self, tmp_path):
+        # Units of 2/3 pixel: the field starts at 14.67 px, so pixel 14 shows part of it.
+        # Rounded to the nearest pixel the mask began at 15.
+        controller, window = _controller(tmp_path)
+        window.Width, window.Height = 300, 150  # the image is 200x100
+        field = controller._known["wnd[0]/usr/txtF"]
+        field.ScreenLeft, field.ScreenTop, field.Width, field.Height = 22, 122, 80, 40
+        controller._known["wnd[0]/usr"].Height = 150
+        target = tmp_path / "e.png"
+
+        result = controller.save_screenshot(str(target), inline=False, mask=["wnd[0]/usr/txtF"])
+
+        assert "error" not in result, result
+        with Image.open(target) as img:
+            assert img.getpixel((14, 14)) == (0, 0, 0)
+            assert img.getpixel((12, 12)) == (255, 255, 255)
+
     def test_a_target_in_another_window_than_the_capture_saves_nothing(self, tmp_path):
         controller, window = _controller(tmp_path)
         controller._session.ActiveWindow = MagicMock(Id="wnd[1]")  # a popup is on top
@@ -358,6 +375,18 @@ class TestMaximizedWindow:
         from mcp_sap_gui.capture import cut_at_frame
 
         assert cut_at_frame(box, (200, 100), 12) == cut
+
+    @pytest.mark.parametrize("box, k, size, scaled", [
+        # Seen live at 1.75: a cell 49.0 to 96.25 px wide, 362.25 to 388.5 px high.
+        ((28, 207, 27, 15), 1.75, (3199, 1778), (49, 362, 48, 27)),
+        ((20, 20, 80, 40), 0.5, (200, 100), (10, 10, 40, 20)),        # whole pixels: kept
+        ((0, 0, 399, 200), 200 / 399, (200, 100), (0, 0, 200, 100)),  # 100.25 px high: the edge
+        ((0, 0, 420, 200), 0.5, (200, 100), (0, 0, 210, 100)),        # outside: for the refusal
+    ])
+    def test_a_scaled_box_is_rounded_outward(self, box, k, size, scaled):
+        from mcp_sap_gui.capture import scale_outward
+
+        assert scale_outward(box, k, size) == scaled
 
     def test_windows_is_asked_for_the_show_state(self):
         from mcp_sap_gui import capture
